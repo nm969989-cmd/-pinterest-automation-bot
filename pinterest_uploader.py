@@ -31,7 +31,7 @@ def upload_to_pinterest(image_path, title, description, link):
     """
     Uploads a pin to Pinterest using API v5.
     """
-    if not PINTEREST_ACCESS_TOKEN or not PINTEREST_BOARD_ID:
+    if not PINTEREST_ACCESS_TOKEN:
         logger.error("Pinterest credentials missing.")
         return False
         
