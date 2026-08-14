@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: anime-pinterest-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_CHANNEL
+        sync: false
+      - key: PINTEREST_ACCESS_TOKEN
+        sync: false
+      - key: PINTEREST_BOARD_ID
+        sync: false
+      - key: AMAZON_AFFILIATE_TAG
+        sync: false
+      - key: POST_DELAY_MINUTES
+        value: "10"
+      - key: MAX_POSTS_PER_DAY
+        value: "15"
