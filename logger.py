@@ -15,8 +15,11 @@ def get_logger(name):
         # Format for logs
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         
-        # Console handler
-        console_handler = logging.StreamHandler()
+        # Console handler — force UTF-8 to handle emojis on Windows
+        import sys
+        console_handler = logging.StreamHandler(
+            stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
+        )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
         

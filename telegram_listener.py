@@ -5,16 +5,16 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from logger import get_logger
-from config import TELEGRAM_CHANNEL, SCRAPE_INTERVAL_MINUTES
+from config import TELEGRAM_CHANNELS, SCRAPE_INTERVAL_MINUTES
+from database import is_post_processed, mark_post_processed
 
 logger = get_logger(__name__)
 
 # Callback function to handle new images
 _on_new_image_callback = None
 
-# Keep track of processed post IDs to avoid duplicates within a session
-# (A database is better for persistence across restarts)
-processed_post_ids = set()
+# Duplicate tracking is now handled by SQLite (see database.py)
+# Persistent across restarts — no more re-uploading after a crash.
 
 # A list of modern User-Agents to rotate through (Spoofing)
 USER_AGENTS = [
@@ -53,9 +53,9 @@ def download_image(url, filename_hint):
         logger.error(f"Failed to download image from {url}: {e}")
         return None
 
-def check_channel():
-    """Scrapes the public Telegram channel for new posts"""
-    clean_channel = TELEGRAM_CHANNEL.replace('@', '')
+def check_channel(channel: str):
+    """Scrapes a single public Telegram channel for new posts"""
+    clean_channel = channel.replace('@', '')
     url = f"https://t.me/s/{clean_channel}"
     
     # Pick a random User-Agent
@@ -82,15 +82,15 @@ def check_channel():
         for msg in messages:
             post_id = msg.get('data-post')
             
-            # Skip if we already processed this post
-            if not post_id or post_id in processed_post_ids:
+            # Skip if we already processed this post (persistent DB check)
+            if not post_id or is_post_processed(post_id):
                 continue
                 
             # Check for photo
             photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
             if not photo_wrap:
                 # Mark as processed even if it has no photo so we don't check it again
-                processed_post_ids.add(post_id)
+                mark_post_processed(post_id)
                 continue
                 
             # Extract background-image URL
@@ -114,9 +114,9 @@ def check_channel():
                     
                     if filepath and _on_new_image_callback:
                         _on_new_image_callback(filepath, caption, clean_channel)
-                        
-            # Mark as processed
-            processed_post_ids.add(post_id)
+
+            # Mark as processed in persistent DB
+            mark_post_processed(post_id)
             
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 429:
@@ -129,20 +129,26 @@ def check_channel():
         logger.error(f"Error scraping channel: {str(e)}")
 
 def start_listener():
-    """Starts the synchronous polling loop with Jitter"""
-    if not TELEGRAM_CHANNEL:
-        logger.error("TELEGRAM_CHANNEL not configured.")
+    """Starts the synchronous polling loop across all configured channels."""
+    if not TELEGRAM_CHANNELS:
+        logger.error("No channels configured. Set TELEGRAM_CHANNELS in .env")
         return
-        
-    logger.info("Starting Telegram Web Scraper listener...")
-    
+
+    logger.info(f"Starting Telegram Web Scraper — watching {len(TELEGRAM_CHANNELS)} channel(s)...")
+    for ch in TELEGRAM_CHANNELS:
+        logger.info(f"  • {ch}")
+
     while True:
-        check_channel()
-        
+        for channel in TELEGRAM_CHANNELS:
+            check_channel(channel)
+            # Small pause between channels to avoid hammering Telegram
+            if len(TELEGRAM_CHANNELS) > 1:
+                time.sleep(random.randint(3, 8))
+
         # Jitter: Calculate delay in seconds (+/- 20% of base interval)
         base_seconds = SCRAPE_INTERVAL_MINUTES * 60
         jitter_range = int(base_seconds * 0.2)
         actual_delay = base_seconds + random.randint(-jitter_range, jitter_range)
-        
-        logger.info(f"Sleeping for {actual_delay / 60:.1f} minutes before next check (Jitter applied)")
+
+        logger.info(f"All channels checked. Sleeping for {actual_delay / 60:.1f} min before next cycle (jitter applied)")
         time.sleep(actual_delay)

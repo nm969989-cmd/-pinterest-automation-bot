@@ -1,14 +1,14 @@
 import os
 import time
 import requests
-from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID
+from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, DRY_RUN
 from logger import get_logger
+from database import is_file_uploaded, mark_file_uploaded
 
 logger = get_logger(__name__)
 
-# Basic in-memory cache to prevent duplicate uploads (cleared on restart)
-# For persistence, a database like SQLite or Postgres would be needed
-uploaded_hashes = set()
+# Duplicate uploads are now tracked in SQLite (see database.py)
+# Persistent across restarts — duplicates are prevented even after a crash.
 
 def get_board_id_dynamically(headers):
     """Fetches the board ID dynamically using the API if the user didn't provide it"""
@@ -30,20 +30,34 @@ def get_board_id_dynamically(headers):
 def upload_to_pinterest(image_path, title, description, link):
     """
     Uploads a pin to Pinterest using API v5.
+    When DRY_RUN=true in .env, logs the pin data instead of uploading.
     """
+    filename = os.path.basename(image_path)
+
+    # ── Duplicate check ───────────────────────────────────────────────────────
+    if is_file_uploaded(filename):
+        logger.info(f"Duplicate detected (persistent), skipping: {filename}")
+        return False
+
+    # ── Dry Run Mode ──────────────────────────────────────────────────────────
+    if DRY_RUN:
+        logger.info("[DRY RUN] ----------------------------------------")
+        logger.info("[DRY RUN] Would upload pin:")
+        logger.info(f"[DRY RUN]   Image    : {image_path}")
+        logger.info(f"[DRY RUN]   Title    : {title}")
+        logger.info(f"[DRY RUN]   Link     : {link}")
+        logger.info(f"[DRY RUN]   Desc     : {description[:100]}...")
+        logger.info("[DRY RUN] ----------------------------------------")
+        mark_file_uploaded(filename, title)  # Still track so no duplicates
+        return True  # Return success so scheduler doesn't re-queue
+
     if not PINTEREST_ACCESS_TOKEN:
         logger.error("Pinterest credentials missing.")
         return False
-        
+
     try:
-        # Simple duplicate check by filename
-        filename = os.path.basename(image_path)
-        if filename in uploaded_hashes:
-            logger.info(f"Duplicate detected, skipping: {filename}")
-            return False
-            
         logger.info(f"Uploading pin: '{title}'")
-        
+
         # Pinterest API v5 endpoint for creating pins
         url = "https://api.pinterest.com/v5/pins"
         
@@ -126,7 +140,7 @@ def upload_to_pinterest(image_path, title, description, link):
         
         if res.status_code in (200, 201):
             logger.info(f"Successfully uploaded pin: {title}")
-            uploaded_hashes.add(filename)
+            mark_file_uploaded(filename, title)  # Persist to SQLite
             return True
         else:
             logger.error(f"Failed to create pin: {res.text}")
