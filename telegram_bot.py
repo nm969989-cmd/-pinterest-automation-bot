@@ -463,7 +463,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
 
         app = Application.builder().token(token).build()
 
-        # Register all commands
+        # Register all command handlers
         handlers = [
             ("start",         cmd_start),
             ("ping",          cmd_ping),
@@ -487,6 +487,34 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
 
+        # ── Register the / menu that shows in Telegram UI ──────────────────
+        from telegram import BotCommand
+
+        async def _set_menu(application):
+            await application.bot.set_my_commands([
+                BotCommand("ping",          "Check if bot is alive"),
+                BotCommand("status",        "Bot status, mode and uptime"),
+                BotCommand("stats",         "Pins count and queue size"),
+                BotCommand("preview",       "Last generated pin with image"),
+                BotCommand("logs",          "Show recent log output"),
+                BotCommand("queue",         "Show pending queue size"),
+                BotCommand("channels",      "List monitored channels"),
+                BotCommand("addchannel",    "Add a source channel"),
+                BotCommand("removechannel", "Remove a source channel"),
+                BotCommand("setdelay",      "Set posting delay in minutes"),
+                BotCommand("setmax",        "Set max pins per day"),
+                BotCommand("dryrun",        "Toggle dry-run on/off"),
+                BotCommand("golive",        "Enable real Pinterest posting"),
+                BotCommand("pause",         "Pause posting"),
+                BotCommand("resume",        "Resume posting"),
+                BotCommand("clearqueue",    "Clear pending queue"),
+                BotCommand("help",          "Show all commands"),
+            ])
+            logger.info("[TG BOT] Command menu registered in Telegram.")
+
+        app.post_init = _set_menu
+        # ───────────────────────────────────────────────────────────────────
+
         _app_ref = app
         logger.info("[TG BOT] @AnimanoizingBot is online! Send /start in Telegram.")
         app.run_polling(drop_pending_updates=True)
@@ -494,3 +522,4 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
     thread = threading.Thread(target=_run, daemon=True, name="TelegramBot")
     thread.start()
     logger.info("[TG BOT] Bot thread launched.")
+
