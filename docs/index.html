@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Animanoizing Bot — Anime Pinterest Automation</title>
+  <meta name="description" content="Animanoizing Bot automatically curates and posts anime artwork to Pinterest boards with AI-generated captions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --primary: #e60023;
+      --primary-dark: #ad081b;
+      --bg: #0a0a0f;
+      --surface: #13131a;
+      --surface2: #1c1c27;
+      --text: #f0f0f5;
+      --muted: #9090a8;
+      --border: rgba(255,255,255,0.08);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    /* NAV */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,10,15,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 1.15rem; }
+    .logo-dot { width: 10px; height: 10px; background: var(--primary); border-radius: 50%; }
+    nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; margin-left: 1.5rem; transition: color .2s; }
+    nav a:hover { color: var(--text); }
+
+    /* HERO */
+    .hero {
+      min-height: 90vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 4rem 2rem;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(230,0,35,0.15) 0%, transparent 70%);
+    }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: rgba(230,0,35,0.12); border: 1px solid rgba(230,0,35,0.3);
+      color: #ff6680; font-size: 0.8rem; font-weight: 600;
+      padding: 0.4rem 1rem; border-radius: 100px; margin-bottom: 2rem;
+      letter-spacing: 0.05em; text-transform: uppercase;
+    }
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800; line-height: 1.1;
+      background: linear-gradient(135deg, #fff 0%, #e0c0ff 50%, #ff6680 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 1.5rem;
+    }
+    .hero p {
+      font-size: 1.2rem; color: var(--muted);
+      max-width: 560px; margin: 0 auto 2.5rem;
+    }
+    .btn-group { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.8rem 2rem; border-radius: 10px; font-weight: 600;
+      font-size: 0.95rem; text-decoration: none; transition: all .25s;
+      cursor: pointer; border: none;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(230,0,35,0.4); }
+    .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-outline:hover { background: var(--surface); transform: translateY(-2px); }
+
+    /* FEATURES */
+    .section { padding: 5rem 2rem; max-width: 1100px; margin: 0 auto; }
+    .section-label { color: var(--primary); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.75rem; }
+    .section-title { font-size: 2.2rem; font-weight: 700; margin-bottom: 1rem; }
+    .section-sub { color: var(--muted); max-width: 500px; margin-bottom: 3rem; }
+
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+    .feature-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 2rem;
+      transition: transform .25s, border-color .25s;
+    }
+    .feature-card:hover { transform: translateY(-4px); border-color: rgba(230,0,35,0.3); }
+    .feature-icon { font-size: 2rem; margin-bottom: 1rem; }
+    .feature-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .feature-card p { color: var(--muted); font-size: 0.9rem; }
+
+    /* HOW IT WORKS */
+    .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 2rem; position: relative; }
+    .step { text-align: center; }
+    .step-num {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--primary), #ff6680);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 1.1rem; margin: 0 auto 1rem;
+    }
+    .step h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.4rem; }
+    .step p { color: var(--muted); font-size: 0.85rem; }
+
+    /* STATS */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.5rem; }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 2rem; text-align: center;
+    }
+    .stat-num { font-size: 2.5rem; font-weight: 800; color: var(--primary); }
+    .stat-label { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
+
+    /* FOOTER */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem; text-align: center;
+      color: var(--muted); font-size: 0.85rem;
+    }
+    footer a { color: var(--muted); text-decoration: none; margin: 0 0.75rem; }
+    footer a:hover { color: var(--text); }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    Animanoizing Bot
+  </div>
+  <div>
+    <a href="privacy.html">Privacy</a>
+    <a href="terms.html">Terms</a>
+    <a href="https://github.com/nm969989-cmd/-pinterest-automation-bot" target="_blank">GitHub</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="badge">🤖 Automated Anime Curation</div>
+  <h1>Anime Art,<br/>Beautifully Pinned</h1>
+  <p>Animanoizing Bot automatically discovers, captions, and pins the best anime artwork to Pinterest using AI-powered vision technology.</p>
+  <div class="btn-group">
+    <a href="https://github.com/nm969989-cmd/-pinterest-automation-bot" target="_blank" class="btn btn-primary">View on GitHub</a>
+    <a href="privacy.html" class="btn btn-outline">Privacy Policy</a>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<div class="section">
+  <div class="section-label">Features</div>
+  <h2 class="section-title">Everything Automated</h2>
+  <p class="section-sub">A complete pipeline from anime Telegram channels to your Pinterest boards.</p>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">👁️</div>
+      <h3>Vision AI Captions</h3>
+      <p>AI looks at each anime image and generates accurate character-specific titles and descriptions.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📌</div>
+      <h3>Auto Pinterest Upload</h3>
+      <p>Pins are automatically uploaded to your boards with proper titles, descriptions, and affiliate links.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📱</div>
+      <h3>Telegram Control</h3>
+      <p>Control the bot from your phone via @AnimanoizingBot. Pause, resume, add channels and more.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔗</div>
+      <h3>Affiliate Links</h3>
+      <p>Each pin automatically includes an Amazon.in affiliate link relevant to the anime series.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🛡️</div>
+      <h3>Duplicate Detection</h3>
+      <p>SQLite-based deduplication ensures the same image is never uploaded twice.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">☁️</div>
+      <h3>24/7 Cloud Hosting</h3>
+      <p>Runs continuously on Render's cloud infrastructure, always online and always posting.</p>
+    </div>
+  </div>
+</div>
+
+<hr class="divider" />
+
+<div class="section">
+  <div class="section-label">How It Works</div>
+  <h2 class="section-title">Simple 4-Step Pipeline</h2>
+  <p class="section-sub">From anime source channel to Pinterest pin in seconds.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>Scrape</h3>
+      <p>Monitors Telegram anime channels every 10 minutes for new artwork.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>Analyze</h3>
+      <p>AI vision model identifies the anime character and series from the image.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>Caption</h3>
+      <p>Generates an engaging title and description with trending hashtags.</p>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <h3>Pin</h3>
+      <p>Uploads the pin to Pinterest with the AI caption and affiliate link.</p>
+    </div>
+  </div>
+</div>
+
+<hr class="divider" />
+
+<div class="section">
+  <div class="section-label">Stats</div>
+  <h2 class="section-title">Built for Scale</h2>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-num">15</div>
+      <div class="stat-label">Max pins per day</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">10m</div>
+      <div class="stat-label">Scrape interval</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">24/7</div>
+      <div class="stat-label">Always running</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">AI</div>
+      <div class="stat-label">Vision-powered captions</div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p>© 2026 Animanoizing. Built by <a href="https://github.com/nm969989-cmd" target="_blank">nm969989-cmd</a></p>
+  <p style="margin-top:0.75rem;">
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="terms.html">Terms of Service</a>
+    <a href="https://github.com/nm969989-cmd/-pinterest-automation-bot" target="_blank">GitHub</a>
+  </p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service — Animanoizing Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --primary: #e60023; --bg: #0a0a0f; --surface: #13131a; --text: #f0f0f5; --muted: #9090a8; --border: rgba(255,255,255,0.08); }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,10,15,0.85); backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border); padding: 1rem 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 1.1rem; text-decoration: none; color: var(--text); }
+    .logo-dot { width: 10px; height: 10px; background: var(--primary); border-radius: 50%; }
+    nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; margin-left: 1.5rem; }
+    nav a:hover { color: var(--text); }
+    .container { max-width: 800px; margin: 0 auto; padding: 4rem 2rem; }
+    .page-title { font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .updated { color: var(--muted); font-size: 0.85rem; margin-bottom: 3rem; }
+    h2 { font-size: 1.3rem; font-weight: 600; margin: 2.5rem 0 1rem; }
+    p { color: #c0c0d8; margin-bottom: 1rem; }
+    ul { color: #c0c0d8; margin: 0.5rem 0 1rem 1.5rem; }
+    ul li { margin-bottom: 0.4rem; }
+    a { color: var(--primary); }
+    footer { border-top: 1px solid var(--border); padding: 2rem; text-align: center; color: var(--muted); font-size: 0.85rem; }
+    footer a { color: var(--muted); text-decoration: none; margin: 0 0.75rem; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="logo"><div class="logo-dot"></div>Animanoizing Bot</a>
+  <div>
+    <a href="index.html">Home</a>
+    <a href="privacy.html">Privacy</a>
+  </div>
+</nav>
+
+<div class="container">
+  <h1 class="page-title">Terms of Service</h1>
+  <p class="updated">Last updated: August 28, 2026</p>
+
+  <h2>1. Acceptance of Terms</h2>
+  <p>By using Animanoizing Bot ("the Bot"), you agree to these Terms of Service. This is a personal automation tool built for the owner's own Pinterest account management.</p>
+
+  <h2>2. Description of Service</h2>
+  <p>Animanoizing Bot is a personal tool that:</p>
+  <ul>
+    <li>Monitors public Telegram channels for anime artwork</li>
+    <li>Uses AI to generate captions for the discovered images</li>
+    <li>Uploads images to the owner's Pinterest boards via the official Pinterest API</li>
+    <li>Generates Amazon affiliate links relevant to the anime content</li>
+  </ul>
+
+  <h2>3. Permitted Use</h2>
+  <p>This tool is intended for personal use only — specifically for the owner to automate their own Pinterest content curation. The Bot operates strictly within Pinterest's API Terms of Service and rate limits.</p>
+
+  <h2>4. Content</h2>
+  <p>All anime artwork posted by the Bot is sourced from public Telegram channels. The Bot does not claim ownership of any artwork. All artwork belongs to their respective creators and copyright holders.</p>
+
+  <h2>5. Pinterest API Compliance</h2>
+  <p>The Bot complies fully with Pinterest's Developer Guidelines and API Terms of Service, including:</p>
+  <ul>
+    <li>Respecting all rate limits (max 15 posts/day)</li>
+    <li>Only accessing the authenticated user's own boards</li>
+    <li>Not scraping or storing Pinterest user data</li>
+    <li>Not impersonating Pinterest or misrepresenting the Bot's purpose</li>
+  </ul>
+
+  <h2>6. Limitation of Liability</h2>
+  <p>The Bot is provided "as is" without warranty of any kind. The developer is not liable for any damages arising from the use of this tool.</p>
+
+  <h2>7. Contact</h2>
+  <p>For questions, please visit our <a href="https://github.com/nm969989-cmd/-pinterest-automation-bot" target="_blank">GitHub repository</a>.</p>
+</div>
+
+<footer>
+  <p>© 2026 Animanoizing Bot</p>
+  <p style="margin-top:0.5rem;">
+    <a href="index.html">Home</a>
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="https://github.com/nm969989-cmd/-pinterest-automation-bot">GitHub</a>
+  </p>
+</footer>
+
+</body>
+</html>
