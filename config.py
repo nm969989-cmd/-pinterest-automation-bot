@@ -36,6 +36,10 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # Free key from openrouter
 TELEGRAM_BOT_TOKEN     = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_ADMIN_CHAT_ID = os.getenv('TELEGRAM_ADMIN_CHAT_ID')  # Set after first /start
 
+# JSONBin.io — cloud persistence (survives Render restarts)
+JSONBIN_API_KEY = os.getenv('JSONBIN_API_KEY', '')
+JSONBIN_BIN_ID  = os.getenv('JSONBIN_BIN_ID', '')
+
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))

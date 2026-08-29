@@ -8,6 +8,7 @@ from pinterest_uploader import upload_to_pinterest, upload_via_make_webhook
 from scheduler import scheduler
 from ai_caption import generate_pin_content
 from telegram_bot import start_bot, record_pin, send_pin_approval_request
+from jsonbin_sync import restore_db_from_cloud, start_sync_thread, save_cloud_state
 import config  # Ensure env vars are loaded and validated
 
 # Log AI status at startup
@@ -69,7 +70,10 @@ def handle_new_image(filepath, caption, channel_name):
 
 def main():
     logger.info("Initializing Anime Pinterest Bot (Web Scraper Edition)...")
-    
+
+    # 0. Restore persisted state from JSONBin cloud (survives Render restarts!)
+    restore_db_from_cloud()
+
     # 1. Start Flask web server (Keep-alive for Render)
     keep_alive()
     logger.info("Keep-alive server started on port 8080.")
@@ -85,11 +89,14 @@ def main():
     else:
         logger.info("[TG BOT] No TELEGRAM_BOT_TOKEN set, control bot disabled.")
 
-    # 3. Start Scheduler (handles rate limiting and uploading)
+    # 3. Start Scheduler (smart time-slot posting)
     scheduler.start()
     logger.info("Upload scheduler started.")
 
-    # 4. Set callback and start Telegram scraper (blocks forever)
+    # 4. Start JSONBin sync thread (saves state every 30 min)
+    start_sync_thread()
+
+    # 5. Set callback and start Telegram scraper (blocks forever)
     set_image_callback(handle_new_image)
     start_listener()
 
