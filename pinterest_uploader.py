@@ -32,8 +32,7 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
                             anime_name: str = "") -> bool:
     """
     Posts a pin via Make.com Custom Webhook → Pinterest: Create a Pin module.
-    This bypasses Pinterest's API review process — pins are 100% public immediately.
-    Requires MAKE_WEBHOOK_URL to be set in .env.
+    Retries up to 3 times with exponential backoff on failure.
     """
     if not MAKE_WEBHOOK_URL:
         logger.error("[Make.com] MAKE_WEBHOOK_URL is not set in .env")
@@ -45,24 +44,36 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         logger.error("[Make.com] Could not get public image URL, aborting.")
         return False
 
-    # Step 2: POST to Make.com webhook
+    # Step 2: POST to Make.com webhook with retry (3 attempts)
     payload = {
         "title":       title[:100],
         "description": description[:500],
         "link":        link,
         "image_url":   image_url,
     }
-    try:
-        res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=15)
-        if res.status_code in (200, 201, 204):
-            logger.info(f"[Make.com] Pin posted successfully via webhook: '{title}'")
-            return image_url  # Return URL so caller can store it
-        else:
-            logger.error(f"[Make.com] Webhook returned {res.status_code}: {res.text[:200]}")
-            return False
-    except Exception as e:
-        logger.error(f"[Make.com] Webhook request failed: {e}")
-        return False
+    delays = [0, 5, 15]  # seconds between attempts
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            time.sleep(delay)
+        try:
+            res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=20)
+            if res.status_code in (200, 201, 204):
+                logger.info(
+                    f"[Make.com] Pin posted successfully: '{title}'"
+                    + (f" (attempt {attempt})" if attempt > 1 else "")
+                )
+                return image_url  # Return URL so caller can store it
+            else:
+                logger.warning(
+                    f"[Make.com] Attempt {attempt}/3 failed: "
+                    f"HTTP {res.status_code} {res.text[:100]}"
+                )
+        except Exception as e:
+            logger.warning(f"[Make.com] Attempt {attempt}/3 exception: {e}")
+
+    logger.error(f"[Make.com] All 3 attempts failed for '{title}'. Pin will retry next slot.")
+    return False
+
 
 
 def upload_to_pinterest(image_path, title, description, link, anime_name=""):
