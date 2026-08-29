@@ -261,19 +261,19 @@ async def _send_daily_report(chat_id):
 
 def _start_daily_summary_thread(token: str, admin_chat_id: str):
     """
-    Background thread that sends a daily summary at 9:00 PM IST (15:30 UTC).
+    Background thread that sends a daily summary at 9:00 AM IST (03:30 UTC).
     Runs forever, waking up every minute to check the time.
     """
     def _loop():
-        logger.info("[TG BOT] Daily summary scheduler started (fires at 21:00 IST / 15:30 UTC).")
+        logger.info("[TG BOT] Daily summary scheduler started (fires at 09:00 AM IST / 03:30 UTC).")
         sent_today = None
         while True:
             now_utc = datetime.datetime.utcnow()
-            # 21:00 IST = 15:30 UTC
-            if now_utc.hour == 15 and now_utc.minute == 30 and now_utc.date() != sent_today:
+            # 09:00 AM IST = 03:30 UTC
+            if now_utc.hour == 3 and now_utc.minute == 30 and now_utc.date() != sent_today:
                 if _app_ref and admin_chat_id:
                     sent_today = now_utc.date()
-                    logger.info("[TG BOT] Sending scheduled daily report...")
+                    logger.info("[TG BOT] Sending scheduled daily report (9 AM IST)...")
                     asyncio.run_coroutine_threadsafe(
                         _send_daily_report(admin_chat_id), _loop_ref
                     )
