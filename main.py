@@ -61,7 +61,8 @@ def handle_new_image(filepath, caption, channel_name):
             image_path=processed_path,
             title=title,
             description=description,
-            link=amazon_link
+            link=amazon_link,
+            anime_name=anime_name,
         )
 
 

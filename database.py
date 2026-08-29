@@ -25,11 +25,22 @@ def init_db():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS uploaded_files (
-                filename TEXT PRIMARY KEY,
+                filename   TEXT PRIMARY KEY,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                title TEXT
+                title      TEXT,
+                anime_name TEXT,
+                image_url  TEXT
             )
         """)
+        # Add new columns if upgrading from older schema
+        try:
+            conn.execute("ALTER TABLE uploaded_files ADD COLUMN anime_name TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE uploaded_files ADD COLUMN image_url TEXT")
+        except Exception:
+            pass
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -73,14 +84,45 @@ def is_file_uploaded(filename: str) -> bool:
     return row is not None
 
 
-def mark_file_uploaded(filename: str, title: str = ""):
+def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "", image_url: str = ""):
     """Records that a file has been successfully uploaded to Pinterest."""
     with _get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO uploaded_files (filename, title) VALUES (?, ?)",
-            (filename, title),
+            "INSERT OR IGNORE INTO uploaded_files (filename, title, anime_name, image_url) VALUES (?, ?, ?, ?)",
+            (filename, title, anime_name, image_url),
         )
         conn.commit()
+
+
+def get_today_uploads() -> list:
+    """Returns all pins uploaded today as list of dicts."""
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT title, anime_name, image_url, uploaded_at
+            FROM uploaded_files
+            WHERE date(uploaded_at) = date('now')
+            ORDER BY uploaded_at DESC
+        """).fetchall()
+    return [
+        {"title": r[0], "anime": r[1], "image_url": r[2], "uploaded_at": r[3]}
+        for r in rows
+    ]
+
+
+def get_all_time_stats() -> dict:
+    """Returns all-time upload statistics."""
+    with _get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM uploaded_files").fetchone()[0]
+        today = conn.execute(
+            "SELECT COUNT(*) FROM uploaded_files WHERE date(uploaded_at) = date('now')"
+        ).fetchone()[0]
+        # Most posted anime
+        top = conn.execute("""
+            SELECT anime_name, COUNT(*) as cnt FROM uploaded_files
+            WHERE anime_name IS NOT NULL AND anime_name != ''
+            GROUP BY anime_name ORDER BY cnt DESC LIMIT 5
+        """).fetchall()
+    return {"total": total, "today": today, "top_anime": top}
 
 
 def get_uploaded_count() -> int:

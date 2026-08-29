@@ -28,7 +28,8 @@ def get_board_id_dynamically(headers):
         logger.error(f"Failed to fetch board ID: {e}")
     return PINTEREST_BOARD_ID
 
-def upload_via_make_webhook(image_path: str, title: str, description: str, link: str) -> bool:
+def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
+                            anime_name: str = "") -> bool:
     """
     Posts a pin via Make.com Custom Webhook → Pinterest: Create a Pin module.
     This bypasses Pinterest's API review process — pins are 100% public immediately.
@@ -55,7 +56,7 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=15)
         if res.status_code in (200, 201, 204):
             logger.info(f"[Make.com] Pin posted successfully via webhook: '{title}'")
-            return True
+            return image_url  # Return URL so caller can store it
         else:
             logger.error(f"[Make.com] Webhook returned {res.status_code}: {res.text[:200]}")
             return False
@@ -64,7 +65,7 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         return False
 
 
-def upload_to_pinterest(image_path, title, description, link):
+def upload_to_pinterest(image_path, title, description, link, anime_name=""):
     """
     Master upload function.
     Routes to Make.com webhook (instant public pins) if MAKE_WEBHOOK_URL is set,
@@ -91,15 +92,16 @@ def upload_to_pinterest(image_path, title, description, link):
         else:
             logger.info("[DRY RUN]   Method   : Pinterest API v5")
         logger.info("[DRY RUN] ----------------------------------------")
-        mark_file_uploaded(filename, title)  # Still track so no duplicates
+        mark_file_uploaded(filename, title, anime_name)  # Still track so no duplicates
         return True  # Return success so scheduler doesn't re-queue
 
     # ── Route: Make.com Webhook (preferred — no API approval needed) ──────────
     if MAKE_WEBHOOK_URL:
-        success = upload_via_make_webhook(image_path, title, description, link)
-        if success:
-            mark_file_uploaded(filename, title)
-        return success
+        image_url = upload_via_make_webhook(image_path, title, description, link, anime_name)
+        if image_url:
+            mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
+            return True
+        return False
 
     # ── Route: Official Pinterest API v5 (fallback) ───────────────────────────
     if not PINTEREST_ACCESS_TOKEN:

@@ -29,6 +29,7 @@ import json
 import threading
 import datetime
 import asyncio
+import time
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -174,17 +175,112 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     if not _is_admin(update): return
+    try:
+        from database import get_all_time_stats
+        db_stats = get_all_time_stats()
+        total_db  = db_stats["total"]
+        today_db  = db_stats["today"]
+        top_anime = db_stats["top_anime"]
+        top_str = ""
+        for name, cnt in top_anime:
+            top_str += f"  • {name or 'Unknown'}: {cnt} pins\n"
+    except Exception:
+        total_db = today_db = 0
+        top_str = "  (not available)"
+
     pin = _state.get("last_pin")
     last_time = pin["time"] if pin else "None yet"
     await update.message.reply_text(
         f"Pin Statistics\n"
         f"{'='*25}\n"
-        f"Today    : {_state['posts_today']} pins\n"
-        f"Total    : {_state['posts_total']} pins\n"
+        f"Today    : {today_db} pins\n"
+        f"Total    : {total_db} pins\n"
         f"Queue    : {_state['queue_size']} pending\n"
         f"Last pin : {last_time}\n"
-        f"Mode     : {'DRY RUN' if _state['dry_run'] else 'LIVE'}"
+        f"Mode     : {'DRY RUN' if _state['dry_run'] else 'LIVE'}\n\n"
+        f"Top Anime:\n{top_str or '  (none yet)'}"
     )
+
+
+async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Send today's detailed pin report on demand."""
+    if not _is_admin(update): return
+    await _send_daily_report(update.effective_chat.id)
+
+
+async def _send_daily_report(chat_id):
+    """Build and send the daily summary to the given chat_id."""
+    if not _app_ref:
+        return
+    try:
+        from database import get_today_uploads, get_all_time_stats
+        pins   = get_today_uploads()
+        stats  = get_all_time_stats()
+        today  = datetime.date.today().strftime("%d %b %Y")
+        count  = len(pins)
+
+        if count == 0:
+            msg = (
+                f"Daily Pinterest Report — {today}\n"
+                f"{'='*30}\n"
+                f"No pins were posted today.\n\n"
+                f"Total all-time: {stats['total']} pins"
+            )
+        else:
+            lines = []
+            for i, p in enumerate(pins, 1):
+                anime = p.get('anime') or 'Unknown'
+                title = p.get('title') or 'Untitled'
+                lines.append(f"{i}. [{anime}] {title}")
+
+            # Top anime today
+            from collections import Counter
+            anime_counts = Counter(p.get('anime') or 'Unknown' for p in pins)
+            top_today = "\n".join(
+                f"  • {a}: {c} pins" for a, c in anime_counts.most_common(5)
+            )
+
+            msg = (
+                f"Daily Pinterest Report — {today}\n"
+                f"{'='*30}\n"
+                f"Pins posted today : {count}\n"
+                f"All-time total    : {stats['total']} pins\n\n"
+                f"Today's Anime Breakdown:\n{top_today}\n\n"
+                f"Today's Pins:\n"
+                + "\n".join(lines)
+            )
+
+        # Send (split if too long)
+        for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
+            await _app_ref.bot.send_message(chat_id=chat_id, text=chunk)
+        logger.info(f"[TG BOT] Daily report sent to {chat_id}")
+
+    except Exception as e:
+        logger.error(f"[TG BOT] Daily report error: {e}")
+
+
+def _start_daily_summary_thread(token: str, admin_chat_id: str):
+    """
+    Background thread that sends a daily summary at 9:00 PM IST (15:30 UTC).
+    Runs forever, waking up every minute to check the time.
+    """
+    def _loop():
+        logger.info("[TG BOT] Daily summary scheduler started (fires at 21:00 IST / 15:30 UTC).")
+        sent_today = None
+        while True:
+            now_utc = datetime.datetime.utcnow()
+            # 21:00 IST = 15:30 UTC
+            if now_utc.hour == 15 and now_utc.minute == 30 and now_utc.date() != sent_today:
+                if _app_ref and admin_chat_id:
+                    sent_today = now_utc.date()
+                    logger.info("[TG BOT] Sending scheduled daily report...")
+                    asyncio.run_coroutine_threadsafe(
+                        _send_daily_report(admin_chat_id), _loop_ref
+                    )
+            time.sleep(55)  # Check every ~1 min
+
+    t = threading.Thread(target=_loop, daemon=True, name="DailySummary")
+    t.start()
 
 
 async def cmd_preview(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -694,6 +790,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("help",          cmd_help),
             ("status",        cmd_status),
             ("stats",         cmd_stats),
+            ("dailyreport",   cmd_dailyreport),
             ("preview",       cmd_preview),
             ("logs",          cmd_logs),
             ("channels",      cmd_channels),
@@ -724,6 +821,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("stats",         "Pins count and queue size"),
+                BotCommand("dailyreport",   "Today's detailed Pinterest report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),
                 BotCommand("queue",         "Show pending queue size"),
@@ -776,4 +874,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
     thread = threading.Thread(target=_run, daemon=True, name="TelegramBot")
     thread.start()
     logger.info("[TG BOT] Bot thread launched.")
+
+    # Start daily summary scheduler (sends report at 9 PM IST every day)
+    _start_daily_summary_thread(token, admin_chat_id or "")
 
