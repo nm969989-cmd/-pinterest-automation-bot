@@ -748,7 +748,30 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
 
         _app_ref = app
         logger.info("[TG BOT] @AnimanoizingBot is online! Send /start in Telegram.")
-        app.run_polling(drop_pending_updates=True)
+
+        # ── Thread-safe polling (avoids signal-handler crash on Linux) ──────
+        # run_polling() crashes in a background thread on Linux/Render because
+        # it tries to install Unix signal handlers (set_wakeup_fd) which only
+        # work in the main thread. We use the low-level async API instead.
+        async def _async_polling():
+            try:
+                async with app:
+                    # Register the command menu
+                    await _set_menu(app)
+                    # Start polling — no signal handlers
+                    await app.updater.start_polling(drop_pending_updates=True)
+                    await app.start()
+                    logger.info("[TG BOT] Polling started successfully (thread-safe mode).")
+                    # Keep running until the loop is stopped
+                    while True:
+                        await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"[TG BOT] Polling error: {e}")
+
+        loop.run_until_complete(_async_polling())
+        # ────────────────────────────────────────────────────────────────────
 
     thread = threading.Thread(target=_run, daemon=True, name="TelegramBot")
     thread.start()
