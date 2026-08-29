@@ -49,15 +49,16 @@ def handle_new_image(filepath, caption, channel_name):
     # 5. Record pin for Telegram /preview and /stats
     record_pin(anime_name, title, description, amazon_link, processed_path)
 
-    # 6. Decide posting method
+    # 6. Queue with priority scheduling (new images always before backlog)
     if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
         # Approval Mode: send photo + buttons to admin Telegram chat
         logger.info("[Main] Sending pin to Telegram for approval...")
         send_pin_approval_request(processed_path, title, description, amazon_link)
     else:
-        # Auto-pilot or DRY_RUN: queue through scheduler
-        scheduler.add_to_queue(
-            upload_to_pinterest,
+        # Auto-pilot: use smart scheduler (3/day, time-slots, priority queue)
+        safe_post_id = filepath.replace("/", "_").replace("\\", "_")
+        scheduler.enqueue_new_image(
+            post_id=safe_post_id,
             image_path=processed_path,
             title=title,
             description=description,

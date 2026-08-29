@@ -37,8 +37,8 @@ TELEGRAM_BOT_TOKEN     = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_ADMIN_CHAT_ID = os.getenv('TELEGRAM_ADMIN_CHAT_ID')  # Set after first /start
 
 # Scheduler Config
-POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 10))
-MAX_POSTS_PER_DAY = int(os.getenv('MAX_POSTS_PER_DAY', 15))
+POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
+MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))
 
 # Dry Run Mode — set DRY_RUN=false in .env to go live
 # When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)
