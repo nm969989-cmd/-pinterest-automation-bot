@@ -34,11 +34,12 @@ def _upload_to_cloudinary(image_path: str) -> str | None:
         return None  # Not configured — skip silently
 
     try:
-        import hashlib, time, hmac
+        import hashlib, time
         timestamp = str(int(time.time()))
+        params    = {"folder": "pinterest-bot", "timestamp": timestamp}
 
-        # Build signature
-        sig_str = f"timestamp={timestamp}{api_secret}"
+        # Cloudinary requires all params sorted alphabetically + api_secret appended
+        sig_str   = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + api_secret
         signature = hashlib.sha1(sig_str.encode()).hexdigest()
 
         upload_url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
