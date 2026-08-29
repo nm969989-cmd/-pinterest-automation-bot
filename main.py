@@ -14,9 +14,7 @@ import config  # Ensure env vars are loaded and validated
 
 # Log AI status at startup
 if config.OPENROUTER_API_KEY:
-    print(f"[config] Vision AI captions: ENABLED (OpenRouter - sees actual images!)")
-elif config.GEMINI_API_KEY:
-    print("[config] AI captions: ENABLED (Gemini text-only)")
+    print("[config] Vision AI captions: ENABLED (OpenRouter - sees actual images!)")
 else:
     print("[config] AI captions: DISABLED (regex fallback) - set OPENROUTER_API_KEY to enable")
 
@@ -25,48 +23,56 @@ logger = get_logger(__name__)
 def handle_new_image(filepath, caption, channel_name):
     """
     Callback fired when a new image is downloaded from Telegram.
-    This runs synchronously within the async Telegram loop, so we delegate
-    heavy work to the scheduler thread.
+    Wrapped in try/except so one bad image never crashes the whole bot.
     """
-    logger.info(f"Main handler received new image: {filepath}")
+    try:
+        logger.info(f"Main handler received new image: {filepath}")
 
-    # 1. Process Image
-    processed_path = process_image(filepath, channel_name)
+        # 1. Process Image
+        processed_path = process_image(filepath, channel_name)
 
-    # 2. Generate Content (Vision AI via OpenRouter sees the image, falls back to regex)
-    anime_name, title, desc_template = generate_pin_content(
-        caption,
-        channel_name,
-        image_path=processed_path,
-        api_key=config.GEMINI_API_KEY,
-        openrouter_key=config.OPENROUTER_API_KEY
-    )
-
-    # 3. Generate Amazon Link (amazon.in with affiliate tag)
-    amazon_link = generate_amazon_link(anime_name)
-
-    # 4. Insert affiliate link into description
-    description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
-
-    # 5. Record pin for Telegram /preview and /stats
-    record_pin(anime_name, title, description, amazon_link, processed_path)
-
-    # 6. Queue with priority scheduling (new images always before backlog)
-    if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
-        # Approval Mode: send photo + buttons to admin Telegram chat
-        logger.info("[Main] Sending pin to Telegram for approval...")
-        send_pin_approval_request(processed_path, title, description, amazon_link)
-    else:
-        # Auto-pilot: use smart scheduler (3/day, time-slots, priority queue)
-        safe_post_id = filepath.replace("/", "_").replace("\\", "_")
-        scheduler.enqueue_new_image(
-            post_id=safe_post_id,
+        # 2. Generate Content (Vision AI via OpenRouter)
+        anime_name, title, desc_template = generate_pin_content(
+            caption,
+            channel_name,
             image_path=processed_path,
-            title=title,
-            description=description,
-            link=amazon_link,
-            anime_name=anime_name,
+            api_key=None,  # Gemini removed — OpenRouter only
+            openrouter_key=config.OPENROUTER_API_KEY
         )
+
+        # 3. Generate Amazon affiliate link
+        amazon_link = generate_amazon_link(anime_name)
+
+        # 4. Insert affiliate link into description
+        description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
+
+        # 5. Record pin for Telegram /preview and /stats
+        record_pin(anime_name, title, description, amazon_link, processed_path)
+
+        # 6. Queue with priority scheduling (new images always before backlog)
+        if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
+            logger.info("[Main] Sending pin to Telegram for approval...")
+            send_pin_approval_request(processed_path, title, description, amazon_link)
+        else:
+            safe_post_id = filepath.replace("/", "_").replace("\\", "_")
+            scheduler.enqueue_new_image(
+                post_id=safe_post_id,
+                image_path=processed_path,
+                title=title,
+                description=description,
+                link=amazon_link,
+                anime_name=anime_name,
+            )
+
+        # 7. Clean up original download to save disk space (keep processed copy)
+        try:
+            if filepath != processed_path and os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(f"[Main] handle_new_image failed for {filepath}: {e}", exc_info=True)
 
 
 def main():
@@ -105,15 +111,21 @@ def main():
     start_listener()
 
 if __name__ == "__main__":
+    # Ensure required directories exist
+    for d in ['downloads', 'processed', 'logs']:
+        os.makedirs(d, exist_ok=True)
     try:
-        # Check if directories exist
-        for d in ['downloads', 'processed', 'logs']:
-            if not os.path.exists(d):
-                os.makedirs(d)
-                
-        # Run synchronous loop
         main()
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user.")
+        logger.info("Bot stopped by user — saving state...")
+        try:
+            save_cloud_state()
+        except Exception:
+            pass
     except Exception as e:
-        logger.critical(f"Bot crashed: {str(e)}")
+        logger.critical(f"Bot crashed: {e}", exc_info=True)
+        try:
+            save_cloud_state()  # Save to JSONBin before dying
+        except Exception:
+            pass
+        raise  # Re-raise so Render sees the crash and restarts
