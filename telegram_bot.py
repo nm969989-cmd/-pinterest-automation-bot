@@ -656,15 +656,29 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         import time, requests as _req
 
         # ── Self-heal: Force Telegram to release any stuck polling session ──
-        # This prevents "Conflict: terminated by other getUpdates" on restart.
-        try:
-            _req.get(
-                f"https://api.telegram.org/bot{token}/close",
-                timeout=5
-            )
-            time.sleep(2)   # give Telegram a moment to release the connection
-        except Exception:
-            pass
+        # Retries with backoff if rate-limited (429). Prevents Conflict errors.
+        for attempt in range(5):
+            try:
+                r = _req.get(
+                    f"https://api.telegram.org/bot{token}/close",
+                    timeout=8
+                )
+                data = r.json()
+                if data.get("ok"):
+                    logger.info("[TG BOT] Session closed cleanly.")
+                    time.sleep(3)
+                    break
+                elif r.status_code == 429:
+                    wait = data.get("parameters", {}).get("retry_after", 30)
+                    logger.warning(f"[TG BOT] Rate-limited on /close. Waiting {wait}s...")
+                    time.sleep(wait + 2)
+                else:
+                    # Already closed or not running — fine to proceed
+                    time.sleep(2)
+                    break
+            except Exception as e:
+                logger.warning(f"[TG BOT] /close attempt {attempt+1} failed: {e}")
+                time.sleep(3)
         # ────────────────────────────────────────────────────────────────────
 
         loop = asyncio.new_event_loop()
