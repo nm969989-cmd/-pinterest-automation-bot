@@ -9,6 +9,7 @@ from scheduler import scheduler
 from ai_caption import generate_pin_content
 from telegram_bot import start_bot, record_pin, send_pin_approval_request
 from jsonbin_sync import restore_db_from_cloud, start_sync_thread, save_cloud_state
+from crash_protection import init_crash_protection, cleanup_old_files
 import config  # Ensure env vars are loaded and validated
 
 # Log AI status at startup
@@ -70,6 +71,9 @@ def handle_new_image(filepath, caption, channel_name):
 
 def main():
     logger.info("Initializing Anime Pinterest Bot (Web Scraper Edition)...")
+
+    # -1. Crash protection FIRST — catches everything from here onwards
+    init_crash_protection()
 
     # 0. Restore persisted state from JSONBin cloud (survives Render restarts!)
     restore_db_from_cloud()
