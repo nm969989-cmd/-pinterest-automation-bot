@@ -79,17 +79,22 @@ def check_channel(channel: str):
             logger.warning("No messages found on the channel page. Check the channel name or if it's private.")
             return
             
-        # ── First-run guard: if DB is empty (fresh Render restart), only ──
-        # process the LATEST 3 posts to avoid re-uploading old content.
+        # ── First-run guard: if DB is empty (fresh Render restart), skip ALL ──
+        # existing posts so we never re-upload already-posted images.
+        # New posts will be picked up in the next scrape cycle.
         is_fresh_db = get_processed_count() == 0
         if is_fresh_db:
-            logger.info("Fresh DB detected — only processing latest 3 posts to avoid duplicates.")
-            # Mark all older posts as processed immediately
-            for msg in messages[:-3]:
+            skipped = 0
+            for msg in messages:
                 old_id = msg.get('data-post')
                 if old_id:
                     mark_post_processed(old_id)
-            messages = messages[-3:]  # only process last 3
+                    skipped += 1
+            logger.info(
+                f"Fresh DB detected — marked {skipped} existing posts as seen. "
+                f"Only NEW posts after this point will be uploaded."
+            )
+            return  # nothing to upload this cycle
 
         for msg in messages:
             post_id = msg.get('data-post')
