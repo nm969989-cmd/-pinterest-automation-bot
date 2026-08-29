@@ -15,6 +15,8 @@ Commands:
   /setmax        - Change max pins per day
   /dryrun        - Toggle dry-run on/off
   /golive        - Switch to live Pinterest posting
+  /autopilot     - Toggle auto-post vs Telegram approval mode
+  /testpost      - Send a test pin via Make.com webhook
   /pause         - Pause posting
   /resume        - Resume posting
   /queue         - Show pending pin queue size
@@ -23,6 +25,7 @@ Commands:
 """
 
 import os
+import json
 import threading
 import datetime
 import asyncio
@@ -31,8 +34,8 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 try:
-    from telegram import Update
-    from telegram.ext import Application, CommandHandler, ContextTypes
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
     _TG_AVAILABLE = True
 except ImportError:
     _TG_AVAILABLE = False
@@ -47,11 +50,15 @@ _state = {
     "last_pin":      None,
     "is_paused":     False,
     "dry_run":       True,
+    "auto_post":     True,   # True = fully automatic, False = require Telegram button approval
     "channels":      [],
     "admin_chat_id": None,
     "post_delay":    10,
     "max_per_day":   15,
 }
+
+# Pending approval queue: maps callback_data key -> upload args dict
+_pending_approvals: dict = {}
 
 # Reference to scheduler (set by main.py)
 _scheduler_ref = None
@@ -111,6 +118,7 @@ async def cmd_ping(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     if not _is_admin(update): return
+    make_status = "CONFIGURED" if os.getenv("MAKE_WEBHOOK_URL") else "NOT SET"
     await update.message.reply_text(
         "Animanoizing Bot - All Commands\n\n"
         "--- INFO ---\n"
@@ -121,6 +129,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/queue          - Pending queue size\n"
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
+        "--- MAKE.COM WEBHOOK ---\n"
+        f"/autopilot      - Toggle auto-post vs approval mode (Webhook: {make_status})\n"
+        "/testpost       - Send a test pin right now via webhook\n\n"
         "--- CONTROL ---\n"
         "/pause          - Pause posting\n"
         "/resume         - Resume posting\n"
@@ -142,11 +153,16 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     m = rem // 60
     mode   = "DRY RUN" if _state["dry_run"] else "LIVE (posting to Pinterest!)"
     paused = "PAUSED" if _state["is_paused"] else "RUNNING"
+    make_url = os.getenv("MAKE_WEBHOOK_URL", "")
+    post_method = "Make.com Webhook" if make_url else "Pinterest API"
+    auto_label  = "AUTO-PILOT" if _state.get("auto_post", True) else "APPROVAL MODE (tap button)"
     await update.message.reply_text(
         f"Bot Status\n"
         f"{'='*25}\n"
         f"Status   : {paused}\n"
         f"Mode     : {mode}\n"
+        f"Method   : {post_method}\n"
+        f"Posting  : {auto_label}\n"
         f"Uptime   : {h}h {m}m\n"
         f"Channels : {len(_state['channels'])} monitored\n"
         f"Delay    : {_state['post_delay']} min between pins\n"
@@ -418,6 +434,128 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
     logger.info("[TG BOT] Queue cleared by admin.")
 
 
+# -- Make.com Webhook Commands ------------------------------------------------
+
+async def cmd_autopilot(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Toggle between fully automatic posting and Telegram approval mode."""
+    if not _is_admin(update): return
+    make_url = os.getenv("MAKE_WEBHOOK_URL", "")
+    if not make_url:
+        await update.message.reply_text(
+            "Make.com Webhook is not configured yet.\n\n"
+            "Steps to set it up:\n"
+            "1. Sign up free at make.com\n"
+            "2. Create scenario: Webhook trigger → Pinterest: Create a Pin\n"
+            "3. Copy the webhook URL\n"
+            "4. Add MAKE_WEBHOOK_URL=<url> to your .env file\n"
+            "5. Set DRY_RUN=false"
+        )
+        return
+    _state["auto_post"] = not _state.get("auto_post", True)
+    is_auto = _state["auto_post"]
+    os.environ["AUTO_POST_MODE"] = "true" if is_auto else "false"
+    if is_auto:
+        await update.message.reply_text(
+            "AUTO-PILOT ON\n"
+            "Pins will be posted automatically to Pinterest via Make.com webhook.\n"
+            "No approval needed — just sit back!"
+        )
+    else:
+        await update.message.reply_text(
+            "APPROVAL MODE ON\n"
+            "Each new pin will be sent to you with [Post to Pinterest] and [Discard] buttons.\n"
+            "You control what gets posted, right from Telegram!"
+        )
+    logger.info(f"[TG BOT] auto_post toggled to {is_auto}")
+
+
+async def cmd_testpost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Immediately send a test pin via Make.com webhook using the last processed image."""
+    if not _is_admin(update): return
+    make_url = os.getenv("MAKE_WEBHOOK_URL", "")
+    if not make_url:
+        await update.message.reply_text(
+            "Make.com webhook URL is not set.\n"
+            "Add MAKE_WEBHOOK_URL to your .env first."
+        )
+        return
+    pin = _state.get("last_pin")
+    if not pin:
+        await update.message.reply_text(
+            "No pin ready yet. Wait for the scraper to pick up an image first."
+        )
+        return
+    await update.message.reply_text("Sending test pin to Pinterest via Make.com...")
+    try:
+        from pinterest_uploader import upload_via_make_webhook
+        image_path = pin.get("image_path", "")
+        success = upload_via_make_webhook(
+            image_path, pin["title"], pin["description"], pin["link"]
+        )
+        if success:
+            await update.message.reply_text(
+                "Test pin posted successfully!\n"
+                "Check your Pinterest board — the pin should be live now."
+            )
+            _state["posts_today"] += 1
+            _state["posts_total"] += 1
+        else:
+            await update.message.reply_text(
+                "Test post failed. Check /logs for details."
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Error during test post: {e}")
+        logger.error(f"[TG BOT] testpost error: {e}")
+
+
+async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Handle inline button taps: [Post to Pinterest] or [Discard]."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data or ""
+    if data.startswith("post:"):
+        key = data[5:]
+        pin = _pending_approvals.pop(key, None)
+        if not pin:
+            await query.edit_message_caption(caption="This pin has already been handled.")
+            return
+        await query.edit_message_caption(
+            caption=f"Posting to Pinterest...\n\n{pin['title']}"
+        )
+        try:
+            from pinterest_uploader import upload_via_make_webhook
+            from database import mark_file_uploaded
+            import os as _os
+            success = upload_via_make_webhook(
+                pin["image_path"], pin["title"], pin["description"], pin["link"]
+            )
+            if success:
+                mark_file_uploaded(_os.path.basename(pin["image_path"]), pin["title"])
+                _state["posts_today"] += 1
+                _state["posts_total"] += 1
+                await query.edit_message_caption(
+                    caption=(
+                        f"Posted to Pinterest!\n\n"
+                        f"Title: {pin['title']}\n"
+                        f"Link: {pin['link']}"
+                    )
+                )
+            else:
+                await query.edit_message_caption(
+                    caption=f"Failed to post. Check /logs for details."
+                )
+        except Exception as e:
+            logger.error(f"[TG BOT] Approval post error: {e}")
+            await query.edit_message_caption(caption=f"Error: {e}")
+
+    elif data.startswith("discard:"):
+        key = data[8:]
+        _pending_approvals.pop(key, None)
+        await query.edit_message_caption(caption="Pin discarded.")
+        logger.info("[TG BOT] Pin discarded by admin.")
+
+
 # -- Notify admin helper ------------------------------------------------------
 _app_ref  = None
 _loop_ref = None
@@ -436,6 +574,64 @@ def notify_admin(message: str):
         )
     except Exception as e:
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
+
+
+def send_pin_approval_request(image_path: str, title: str, description: str, link: str):
+    """
+    Sends a photo message to the admin with [Post to Pinterest] and [Discard] buttons.
+    Called from the main pipeline when AUTO_POST_MODE=false.
+    """
+    global _app_ref, _loop_ref
+    admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    if not _app_ref or not admin_id or not _loop_ref:
+        logger.warning("[TG BOT] Cannot send approval request: bot not ready.")
+        return
+
+    # Create a unique key for this pending pin
+    import hashlib
+    key = hashlib.md5(f"{image_path}{title}".encode()).hexdigest()[:8]
+    _pending_approvals[key] = {
+        "image_path": image_path,
+        "title":      title,
+        "description": description,
+        "link":        link,
+    }
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Post to Pinterest", callback_data=f"post:{key}"),
+            InlineKeyboardButton("❌ Discard",           callback_data=f"discard:{key}"),
+        ]
+    ])
+
+    caption = (
+        f"New Pin Ready!\n\n"
+        f"Title: {title}\n"
+        f"Link: {link}\n\n"
+        f"{description[:200]}{'...' if len(description) > 200 else ''}"
+    )
+
+    async def _send():
+        try:
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as f:
+                    await _app_ref.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=f,
+                        caption=caption[:1024],
+                        reply_markup=keyboard,
+                    )
+            else:
+                await _app_ref.bot.send_message(
+                    chat_id=admin_id,
+                    text=caption,
+                    reply_markup=keyboard,
+                )
+        except Exception as e:
+            logger.warning(f"[TG BOT] Could not send approval request: {e}")
+
+    asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
+    logger.info(f"[TG BOT] Approval request sent for: {title}")
 
 
 # -- Start bot in background thread -------------------------------------------
@@ -457,6 +653,20 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
 
     def _run():
         global _app_ref, _loop_ref
+        import time, requests as _req
+
+        # ── Self-heal: Force Telegram to release any stuck polling session ──
+        # This prevents "Conflict: terminated by other getUpdates" on restart.
+        try:
+            _req.get(
+                f"https://api.telegram.org/bot{token}/close",
+                timeout=5
+            )
+            time.sleep(2)   # give Telegram a moment to release the connection
+        except Exception:
+            pass
+        # ────────────────────────────────────────────────────────────────────
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         _loop_ref = loop
@@ -479,6 +689,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("setmax",        cmd_setmax),
             ("dryrun",        cmd_dryrun),
             ("golive",        cmd_golive),
+            ("autopilot",     cmd_autopilot),
+            ("testpost",      cmd_testpost),
             ("pause",         cmd_pause),
             ("resume",        cmd_resume),
             ("queue",         cmd_queue),
@@ -486,6 +698,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
+
+        # Register inline button callback handler
+        app.add_handler(CallbackQueryHandler(handle_approval_callback))
 
         # ── Register the / menu that shows in Telegram UI ──────────────────
         from telegram import BotCommand
@@ -505,6 +720,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("setmax",        "Set max pins per day"),
                 BotCommand("dryrun",        "Toggle dry-run on/off"),
                 BotCommand("golive",        "Enable real Pinterest posting"),
+                BotCommand("autopilot",     "Toggle auto-post vs approval mode"),
+                BotCommand("testpost",      "Send a test pin via Make.com webhook"),
                 BotCommand("pause",         "Pause posting"),
                 BotCommand("resume",        "Resume posting"),
                 BotCommand("clearqueue",    "Clear pending queue"),

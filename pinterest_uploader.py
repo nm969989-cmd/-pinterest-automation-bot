@@ -1,7 +1,8 @@
 import os
 import time
 import requests
-from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, DRY_RUN
+from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, DRY_RUN, MAKE_WEBHOOK_URL
+from image_host import upload_image_to_host
 from logger import get_logger
 from database import is_file_uploaded, mark_file_uploaded
 
@@ -27,9 +28,47 @@ def get_board_id_dynamically(headers):
         logger.error(f"Failed to fetch board ID: {e}")
     return PINTEREST_BOARD_ID
 
+def upload_via_make_webhook(image_path: str, title: str, description: str, link: str) -> bool:
+    """
+    Posts a pin via Make.com Custom Webhook → Pinterest: Create a Pin module.
+    This bypasses Pinterest's API review process — pins are 100% public immediately.
+    Requires MAKE_WEBHOOK_URL to be set in .env.
+    """
+    if not MAKE_WEBHOOK_URL:
+        logger.error("[Make.com] MAKE_WEBHOOK_URL is not set in .env")
+        return False
+
+    # Step 1: Upload image to a public host to get a URL
+    image_url = upload_image_to_host(image_path)
+    if not image_url:
+        logger.error("[Make.com] Could not get public image URL, aborting.")
+        return False
+
+    # Step 2: POST to Make.com webhook
+    payload = {
+        "title":       title[:100],
+        "description": description[:500],
+        "link":        link,
+        "image_url":   image_url,
+    }
+    try:
+        res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=15)
+        if res.status_code in (200, 201, 204):
+            logger.info(f"[Make.com] Pin posted successfully via webhook: '{title}'")
+            return True
+        else:
+            logger.error(f"[Make.com] Webhook returned {res.status_code}: {res.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"[Make.com] Webhook request failed: {e}")
+        return False
+
+
 def upload_to_pinterest(image_path, title, description, link):
     """
-    Uploads a pin to Pinterest using API v5.
+    Master upload function.
+    Routes to Make.com webhook (instant public pins) if MAKE_WEBHOOK_URL is set,
+    otherwise falls back to the official Pinterest API v5.
     When DRY_RUN=true in .env, logs the pin data instead of uploading.
     """
     filename = os.path.basename(image_path)
@@ -47,12 +86,24 @@ def upload_to_pinterest(image_path, title, description, link):
         logger.info(f"[DRY RUN]   Title    : {title}")
         logger.info(f"[DRY RUN]   Link     : {link}")
         logger.info(f"[DRY RUN]   Desc     : {description[:100]}...")
+        if MAKE_WEBHOOK_URL:
+            logger.info("[DRY RUN]   Method   : Make.com Webhook (instant public pins)")
+        else:
+            logger.info("[DRY RUN]   Method   : Pinterest API v5")
         logger.info("[DRY RUN] ----------------------------------------")
         mark_file_uploaded(filename, title)  # Still track so no duplicates
         return True  # Return success so scheduler doesn't re-queue
 
+    # ── Route: Make.com Webhook (preferred — no API approval needed) ──────────
+    if MAKE_WEBHOOK_URL:
+        success = upload_via_make_webhook(image_path, title, description, link)
+        if success:
+            mark_file_uploaded(filename, title)
+        return success
+
+    # ── Route: Official Pinterest API v5 (fallback) ───────────────────────────
     if not PINTEREST_ACCESS_TOKEN:
-        logger.error("Pinterest credentials missing.")
+        logger.error("Pinterest credentials missing. Set PINTEREST_ACCESS_TOKEN or MAKE_WEBHOOK_URL.")
         return False
 
     try:

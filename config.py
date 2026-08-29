@@ -16,6 +16,13 @@ SCRAPE_INTERVAL_MINUTES = int(os.getenv('SCRAPE_INTERVAL_MINUTES', 10))
 PINTEREST_ACCESS_TOKEN = os.getenv('PINTEREST_ACCESS_TOKEN')
 PINTEREST_BOARD_ID = os.getenv('PINTEREST_BOARD_ID')
 
+# Make.com Webhook Config (bypass Pinterest API review — instant public pins!)
+# Get this URL from Make.com after creating your scenario with a Custom Webhook trigger.
+MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL', '')
+
+# Auto-post mode: true = fully automatic, false = Telegram approval button required
+AUTO_POST_MODE = os.getenv('AUTO_POST_MODE', 'true').lower() in ('true', '1', 'yes')
+
 # Amazon Config
 AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG')
 
@@ -33,20 +40,36 @@ TELEGRAM_ADMIN_CHAT_ID = os.getenv('TELEGRAM_ADMIN_CHAT_ID')  # Set after first 
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 10))
 MAX_POSTS_PER_DAY = int(os.getenv('MAX_POSTS_PER_DAY', 15))
 
-# Dry Run Mode — set DRY_RUN=false in .env to go live once API access is approved
+# Dry Run Mode — set DRY_RUN=false in .env to go live
+# When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() in ('true', '1', 'yes')
 
 # Validation
 def validate_config():
-    required_vars = [
-        ('TELEGRAM_CHANNELS', TELEGRAM_CHANNELS),
-        ('PINTEREST_ACCESS_TOKEN', PINTEREST_ACCESS_TOKEN),
-        ('AMAZON_AFFILIATE_TAG', AMAZON_AFFILIATE_TAG)
-    ]
+    # Pinterest token is optional when Make.com webhook is configured
+    if not MAKE_WEBHOOK_URL and not PINTEREST_ACCESS_TOKEN:
+        raise ValueError(
+            "Missing required config: set either MAKE_WEBHOOK_URL (recommended, instant) "
+            "or PINTEREST_ACCESS_TOKEN in your .env file."
+        )
 
-    missing = [name for name, val in required_vars if not val]
-    if missing:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+    if not TELEGRAM_CHANNELS:
+        raise ValueError("Missing required environment variable: TELEGRAM_CHANNELS")
+
+    if not AMAZON_AFFILIATE_TAG:
+        raise ValueError("Missing required environment variable: AMAZON_AFFILIATE_TAG")
+
+    # Print active posting method
+    if MAKE_WEBHOOK_URL:
+        mode_label = "AUTO-PILOT" if AUTO_POST_MODE else "TELEGRAM APPROVAL (tap button to post)"
+        print(f"[config] Posting method : Make.com Webhook ({mode_label})")
+    elif PINTEREST_ACCESS_TOKEN:
+        print(f"[config] Posting method : Pinterest API (Official)")
+
+    if DRY_RUN:
+        print("[config] Mode           : DRY RUN (pins logged, not posted)")
+    else:
+        print("[config] Mode           : LIVE (pins will be posted!)")
 
     if GEMINI_API_KEY:
         print(f"[config] Gemini AI captions: ENABLED")

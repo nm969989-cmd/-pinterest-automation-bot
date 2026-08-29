@@ -4,10 +4,10 @@ from keep_alive import keep_alive
 from telegram_listener import start_listener, set_image_callback
 from image_processor import process_image
 from amazon_search import generate_amazon_link
-from pinterest_uploader import upload_to_pinterest
+from pinterest_uploader import upload_to_pinterest, upload_via_make_webhook
 from scheduler import scheduler
 from ai_caption import generate_pin_content
-from telegram_bot import start_bot, record_pin
+from telegram_bot import start_bot, record_pin, send_pin_approval_request
 import config  # Ensure env vars are loaded and validated
 
 # Log AI status at startup
@@ -46,17 +46,23 @@ def handle_new_image(filepath, caption, channel_name):
     # 4. Insert affiliate link into description
     description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
 
-    # 5. Queue the upload
-    scheduler.add_to_queue(
-        upload_to_pinterest,
-        image_path=processed_path,
-        title=title,
-        description=description,
-        link=amazon_link
-    )
-
-    # 6. Record pin for Telegram /preview and /stats
+    # 5. Record pin for Telegram /preview and /stats
     record_pin(anime_name, title, description, amazon_link, processed_path)
+
+    # 6. Decide posting method
+    if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
+        # Approval Mode: send photo + buttons to admin Telegram chat
+        logger.info("[Main] Sending pin to Telegram for approval...")
+        send_pin_approval_request(processed_path, title, description, amazon_link)
+    else:
+        # Auto-pilot or DRY_RUN: queue through scheduler
+        scheduler.add_to_queue(
+            upload_to_pinterest,
+            image_path=processed_path,
+            title=title,
+            description=description,
+            link=amazon_link
+        )
 
 
 def main():
