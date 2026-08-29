@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from logger import get_logger
 from config import TELEGRAM_CHANNELS, SCRAPE_INTERVAL_MINUTES
-from database import is_post_processed, mark_post_processed
+from database import is_post_processed, mark_post_processed, get_processed_count
 
 logger = get_logger(__name__)
 
@@ -79,6 +79,18 @@ def check_channel(channel: str):
             logger.warning("No messages found on the channel page. Check the channel name or if it's private.")
             return
             
+        # ── First-run guard: if DB is empty (fresh Render restart), only ──
+        # process the LATEST 3 posts to avoid re-uploading old content.
+        is_fresh_db = get_processed_count() == 0
+        if is_fresh_db:
+            logger.info("Fresh DB detected — only processing latest 3 posts to avoid duplicates.")
+            # Mark all older posts as processed immediately
+            for msg in messages[:-3]:
+                old_id = msg.get('data-post')
+                if old_id:
+                    mark_post_processed(old_id)
+            messages = messages[-3:]  # only process last 3
+
         for msg in messages:
             post_id = msg.get('data-post')
             

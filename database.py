@@ -58,6 +58,9 @@ def get_processed_post_count() -> int:
     with _get_conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM processed_posts").fetchone()[0]
 
+# Alias used by telegram_listener
+get_processed_count = get_processed_post_count
+
 
 # ── Uploaded Files (Pinterest) ───────────────────────────────────────────────
 
