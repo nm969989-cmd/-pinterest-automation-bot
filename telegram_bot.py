@@ -262,8 +262,16 @@ async def _send_daily_report(chat_id):
 def _start_daily_summary_thread(token: str, admin_chat_id: str):
     """
     Background thread that sends a daily summary at 9:00 AM IST (03:30 UTC).
-    Runs forever, waking up every minute to check the time.
+    Dynamically reads admin_chat_id from _state so it always finds the correct chat.
     """
+    def _get_chat_id():
+        """Resolve the admin chat ID at send time — never uses a stale value."""
+        return (
+            _state.get("admin_chat_id")          # set when user sends /start
+            or admin_chat_id                      # passed at startup from config
+            or os.getenv("TELEGRAM_ADMIN_CHAT_ID")  # final env var fallback
+        )
+
     def _loop():
         logger.info("[TG BOT] Daily summary scheduler started (fires at 09:00 AM IST / 03:30 UTC).")
         sent_today = None
@@ -271,12 +279,15 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
             now_utc = datetime.datetime.utcnow()
             # 09:00 AM IST = 03:30 UTC
             if now_utc.hour == 3 and now_utc.minute == 30 and now_utc.date() != sent_today:
-                if _app_ref and admin_chat_id:
+                chat_id = _get_chat_id()
+                if _app_ref and chat_id:
                     sent_today = now_utc.date()
-                    logger.info("[TG BOT] Sending scheduled daily report (9 AM IST)...")
+                    logger.info(f"[TG BOT] Sending daily report to {chat_id} (9 AM IST)...")
                     asyncio.run_coroutine_threadsafe(
-                        _send_daily_report(admin_chat_id), _loop_ref
+                        _send_daily_report(chat_id), _loop_ref
                     )
+                else:
+                    logger.warning("[TG BOT] Daily report skipped — admin chat ID not set yet.")
             time.sleep(55)  # Check every ~1 min
 
     t = threading.Thread(target=_loop, daemon=True, name="DailySummary")
