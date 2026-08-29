@@ -669,7 +669,7 @@ _loop_ref = None
 
 
 def notify_admin(message: str):
-    """Send a notification to the admin from any thread."""
+    """Send a plain text notification to the admin from any thread."""
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
@@ -681,6 +681,56 @@ def notify_admin(message: str):
         )
     except Exception as e:
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
+
+
+def notify_admin_pin_posted(title: str, anime_name: str, link: str,
+                             image_path: str, pin_type: str,
+                             posted_today: int, max_today: int,
+                             time_ist: str):
+    """
+    Send a rich Telegram notification after every successful Pinterest post.
+    Sends the actual image + details. FREE — no limits at 3 messages/day.
+    """
+    global _app_ref, _loop_ref
+    admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    if not _app_ref or not admin_id or not _loop_ref:
+        return
+
+    type_emoji = "NEW" if pin_type == "NEW" else "BACKLOG"
+    progress   = "".join(["✅" if i <= posted_today else "⬜" for i in range(1, max_today + 1)])
+
+    caption = (
+        f"📌 Pin Posted to Pinterest!\n"
+        f"{'─' * 28}\n"
+        f"🕐 Time       : {time_ist} IST\n"
+        f"📊 Today      : {progress} ({posted_today}/{max_today})\n"
+        f"🏷  Type       : {type_emoji}\n"
+        f"🎌 Anime      : {anime_name}\n"
+        f"📝 Title      : {title}\n"
+        f"🔗 Affiliate  : {link}"
+    )
+
+    async def _send():
+        try:
+            if image_path and os.path.exists(image_path):
+                with open(image_path, "rb") as img:
+                    await _app_ref.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=img,
+                        caption=caption,
+                    )
+            else:
+                await _app_ref.bot.send_message(
+                    chat_id=admin_id,
+                    text=caption,
+                )
+        except Exception as e:
+            logger.warning(f"[TG BOT] Pin notification failed: {e}")
+
+    try:
+        asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
+    except Exception as e:
+        logger.warning(f"[TG BOT] Could not schedule pin notification: {e}")
 
 
 def send_pin_approval_request(image_path: str, title: str, description: str, link: str):

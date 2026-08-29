@@ -172,6 +172,30 @@ class PinScheduler:
         next_slot = min(candidates)
         return max(1, int((next_slot - now).total_seconds() / 60))
 
+    # ── Post notification ─────────────────────────────────────────────────────
+
+    def _notify_pin_posted(self, title: str, anime_name: str, link: str,
+                            image_path: str, pin_type: str,
+                            posted_today: int, time_ist: str):
+        """
+        Send a Telegram notification to admin immediately after a pin is posted.
+        Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
+        """
+        try:
+            from telegram_bot import notify_admin_pin_posted
+            notify_admin_pin_posted(
+                title=title,
+                anime_name=anime_name,
+                link=link,
+                image_path=image_path,
+                pin_type=pin_type,
+                posted_today=posted_today,
+                max_today=MAX_POSTS_PER_DAY,
+                time_ist=time_ist,
+            )
+        except Exception as e:
+            logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
+
     def _worker_loop(self):
         from database import (get_next_queued_pin, remove_queued_pin,
                                count_posts_today, mark_file_uploaded,
@@ -236,13 +260,26 @@ class PinScheduler:
                             )
                             if success:
                                 remove_queued_pin(pin["id"])
+                                now_ist = _ist_now().strftime("%I:%M %p")
+                                pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+                                counts_after = count_posts_today(today_ist) + 1
                                 logger.info(
-                                    f"[Scheduler] ✅ Pin posted. Today: "
-                                    f"{today_posted+1}/{MAX_POSTS_PER_DAY}"
+                                    f"[Scheduler] Pin posted. Today: "
+                                    f"{counts_after}/{MAX_POSTS_PER_DAY}"
+                                )
+                                # ── Telegram notification ──────────────────
+                                self._notify_pin_posted(
+                                    title=pin["title"],
+                                    anime_name=pin["anime_name"],
+                                    link=pin["link"],
+                                    image_path=pin["image_path"],
+                                    pin_type=pin_type,
+                                    posted_today=counts_after,
+                                    time_ist=now_ist,
                                 )
                             else:
                                 logger.error(
-                                    "[Scheduler] ❌ Upload failed. Will retry next slot."
+                                    "[Scheduler] Upload failed. Will retry next slot."
                                 )
                     elif self._mem_queue:
                         # Fallback: in-memory queue (approval mode)
