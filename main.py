@@ -40,16 +40,33 @@ def handle_new_image(filepath, caption, channel_name):
             openrouter_key=config.OPENROUTER_API_KEY
         )
 
-        # 3. Generate Amazon affiliate link
-        amazon_link = generate_amazon_link(anime_name)
+        # 3. Extract character name from AI title for more precise Amazon product match
+        #    Title format is usually: "CharacterName - AnimeName Poster 🔥" or "CharacterName AnimeName merch"
+        character_name = ""
+        if title:
+            if " - " in title:
+                # e.g. "Tanjiro - Demon Slayer Poster" → first word before dash = character
+                character_name = title.split(" - ")[0].strip().split()[0]
+            else:
+                # No dash: just take first word as a best-effort character guess
+                character_name = title.strip().split()[0]
+            logger.info(f"[Main] Character extracted from title: '{character_name}'")
 
-        # 4. Insert affiliate link into description
+        # 4. Generate Amazon affiliate deep link (with character for specific product match)
+        amazon_link = generate_amazon_link(anime_name, character_name=character_name)
+
+        # 5. Insert affiliate link into description
         description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
 
-        # 5. Record pin for Telegram /preview and /stats
+        # Guarantee FTC & Pinterest required disclosure tags are ALWAYS present
+        # (AI may or may not include them — this ensures 100% coverage)
+        if "#ad" not in description.lower():
+            description = description.rstrip() + "\n#ad #affiliate"
+
+        # 6. Record pin for Telegram /preview and /stats
         record_pin(anime_name, title, description, amazon_link, processed_path)
 
-        # 6. Queue with priority scheduling (new images always before backlog)
+        # 7. Queue with priority scheduling (new images always before backlog)
         if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
             logger.info("[Main] Sending pin to Telegram for approval...")
             send_pin_approval_request(processed_path, title, description, amazon_link)
