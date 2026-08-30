@@ -51,6 +51,16 @@ def init_db():
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # ── Bot Metadata / State Store ──────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_metadata (
+                key         TEXT PRIMARY KEY,
+                value       TEXT,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Add new columns if upgrading from older schema
         for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''",
                     "retry_count INTEGER DEFAULT 0"]:
@@ -559,5 +569,65 @@ def get_click_stats() -> dict:
     }
 
 
+# ── Metadata & 3-Day Health Check Helpers ─────────────────────────────────────
+
+def get_metadata(key: str, default: str = "") -> str:
+    """Retrieve a persistent setting or state string by key."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT value FROM bot_metadata WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+
+def set_metadata(key: str, value: str):
+    """Store or update a persistent setting or state string."""
+    with _get_conn() as conn:
+        conn.execute("""
+            INSERT INTO bot_metadata (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        """, (key, str(value)))
+        conn.commit()
+
+
+def get_3day_stats() -> dict:
+    """Returns analytics for the 3-day health diagnostic report."""
+    with _get_conn() as conn:
+        pins_3d = conn.execute("""
+            SELECT COUNT(*) FROM uploaded_files
+            WHERE uploaded_at >= datetime('now', '-3 days')
+        """).fetchone()[0]
+
+        clicks_3d = conn.execute("""
+            SELECT COUNT(*) FROM link_clicks
+            WHERE clicked_at >= datetime('now', '-3 days')
+        """).fetchone()[0]
+
+        total_pins = conn.execute("SELECT COUNT(*) FROM uploaded_files").fetchone()[0]
+        total_clicks = conn.execute("SELECT COUNT(*) FROM link_clicks").fetchone()[0]
+
+        failed_retries = conn.execute(
+            "SELECT COUNT(*) FROM pin_queue WHERE retry_count > 0"
+        ).fetchone()[0]
+
+    q = get_queue_counts()
+
+    est_orders = max(0, int(clicks_3d * 0.03))
+    est_rev_min = est_orders * 40
+    est_rev_max = max(est_orders * 110, 0 if clicks_3d == 0 else 60)
+
+    return {
+        "pins_3d": pins_3d,
+        "clicks_3d": clicks_3d,
+        "total_pins": total_pins,
+        "total_clicks": total_clicks,
+        "queue": q,
+        "failed_retries": failed_retries,
+        "est_orders": est_orders,
+        "est_rev_min": est_rev_min,
+        "est_rev_max": est_rev_max,
+    }
+
+
 # Initialize on import
 init_db()
+

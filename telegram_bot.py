@@ -128,6 +128,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "Animanoizing Bot - All Commands\n\n"
         "--- INFO ---\n"
         "/status         - Bot status and uptime\n"
+        "/doctor         - System health report (Auto: runs every 3 days)\n"
         "/stats          - Pins count and queue\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
         "/analytics      - 7-day pins & revenue report\n"
@@ -217,6 +218,19 @@ async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     """Send today's detailed pin report on demand."""
     if not _is_admin(update): return
     await _send_daily_report(update.effective_chat.id)
+
+
+async def cmd_doctor(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Run full system diagnostics and reply with health report."""
+    if not _is_admin(update): return
+    try:
+        from doctor import run_full_system_diagnostic, format_health_report
+        diag = run_full_system_diagnostic()
+        report = format_health_report(diag, is_scheduled=False)
+        await update.message.reply_text(report)
+        logger.info("[TG BOT] /doctor diagnostic report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"Doctor diagnostic error: {e}")
 
 
 async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -373,11 +387,11 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
         )
 
     def _loop():
-        logger.info("[TG BOT] Daily summary scheduler started (fires at 09:00 AM IST / 03:30 UTC).")
+        logger.info("[TG BOT] Daily summary & 3-Day Health Check scheduler started.")
         sent_today = None
         while True:
             now_utc = datetime.datetime.utcnow()
-            # 09:00 AM IST = 03:30 UTC
+            # 09:00 AM IST = 03:30 UTC -> Daily Summary Report
             if now_utc.hour == 3 and now_utc.minute == 30 and now_utc.date() != sent_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id:
@@ -388,10 +402,34 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                     )
                 else:
                     logger.warning("[TG BOT] Daily report skipped — admin chat ID not set yet.")
+
+            # 10:00 AM IST = 04:30 UTC -> Automated 3-Day Health Check
+            if now_utc.hour == 4 and now_utc.minute == 30:
+                chat_id = _get_chat_id()
+                if _app_ref and chat_id and _loop_ref:
+                    try:
+                        from doctor import check_and_run_scheduled_health_check
+                        check_and_run_scheduled_health_check(_app_ref, _loop_ref, chat_id)
+                    except Exception as e:
+                        logger.error(f"[TG BOT] Scheduled health check error: {e}")
+
             time.sleep(55)  # Check every ~1 min
 
     t = threading.Thread(target=_loop, daemon=True, name="DailySummary")
     t.start()
+
+    # Startup health check (runs 45s after bot boots up if 3 days have passed)
+    def _startup_health_check():
+        time.sleep(45)
+        chat_id = _get_chat_id()
+        if _app_ref and chat_id and _loop_ref:
+            try:
+                from doctor import check_and_run_scheduled_health_check
+                check_and_run_scheduled_health_check(_app_ref, _loop_ref, chat_id)
+            except Exception as e:
+                logger.debug(f"[TG BOT] Startup health check note: {e}")
+
+    threading.Thread(target=_startup_health_check, daemon=True, name="StartupHealth").start()
 
 
 async def cmd_preview(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -1174,6 +1212,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("clicks",        cmd_clicks),
             ("earnings",      cmd_clicks),
             ("analytics",     cmd_analytics),
+            ("doctor",        cmd_doctor),
+            ("healthcheck",   cmd_doctor),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -1197,6 +1237,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             await application.bot.set_my_commands([
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
+                BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
                 BotCommand("analytics",     "7-day pins & revenue report"),
