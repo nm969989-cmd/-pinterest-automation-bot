@@ -37,7 +37,10 @@ logger = get_logger(__name__)
 
 try:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+    from telegram.ext import (
+        Application, CommandHandler, CallbackQueryHandler,
+        MessageHandler, ContextTypes, filters
+    )
     _TG_AVAILABLE = True
 except ImportError:
     _TG_AVAILABLE = False
@@ -148,7 +151,10 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/addchannel @ch - Add source channel\n"
         "/removechannel @ch - Remove channel\n"
         "/setdelay [min] - Set posting delay\n"
-        "/setmax [num]   - Set max pins/day\n"
+        "/setmax [num]   - Set max pins/day\n\n"
+        "--- MOBILE UPLOAD ---\n"
+        "Send any photo/image directly to this bot to queue it as a Pinterest pin! \U0001f4f2\n"
+        "The bot will auto-detect the anime, generate captions, find Amazon link, and queue it.\n"
     )
 
 
@@ -925,6 +931,61 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int):
         pass
 
 
+async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    Handler for when admin sends/forwards any photo or image directly to the bot.
+    Runs the full processing pipeline and queues the pin for Pinterest.
+    """
+    if not _is_admin(update): return
+    await update.message.reply_text("📥 Received your image! Processing now...")
+    try:
+        import time as _time
+        os.makedirs("downloads", exist_ok=True)
+        ts = int(_time.time())
+        save_path = os.path.join("downloads", f"manual_{ts}.jpg")
+
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+        elif update.message.document:
+            file_id = update.message.document.file_id
+        else:
+            return
+
+        tg_file = await context.bot.get_file(file_id)
+        await tg_file.download_to_drive(save_path)
+
+        from image_processor import process_image
+        from ai_caption import generate_pin_content
+        from amazon_search import generate_amazon_link
+        from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
+        from board_router import get_board_for_anime
+        from database import enqueue_pin
+        import config
+
+        processed_path = process_image(save_path, "manual_upload")
+        caption_hint = update.message.caption or ""
+        anime_name, title, desc_template = generate_pin_content(
+            caption_hint, "manual_upload", image_path=processed_path,
+            api_key=None, openrouter_key=config.OPENROUTER_API_KEY
+        )
+        character_name = title.split(" - ")[0].split()[0] if title else ""
+        genre, board_id = get_board_for_anime(anime_name)
+        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
+        description = replace_hashtags_in_description(
+            desc_template.replace("##LINK_PLACEHOLDER##", amazon_link),
+            optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
+        )
+        
+        enqueue_pin(
+            post_id=f"manual_{ts}", image_path=processed_path, title=title,
+            description=description, link=amazon_link, anime_name=anime_name,
+            image_url="", board_id=board_id, priority=1, scheduled_date="today"
+        )
+        await update.message.reply_text(f"✅ Queued: {title}\nUse /post_now to publish.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              image_path: str, pin_type: str,
                              posted_today: int, max_today: int,
@@ -1119,6 +1180,15 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
 
         # Register inline button callback handler
         app.add_handler(CallbackQueryHandler(handle_approval_callback))
+
+        # Register admin photo/document upload handler (Forward-to-Post feature)
+        if _TG_AVAILABLE:
+            app.add_handler(
+                MessageHandler(
+                    filters.PHOTO | filters.Document.IMAGE,
+                    handle_admin_photo_upload
+                )
+            )
 
         # ── Register the / menu that shows in Telegram UI ──────────────────
         from telegram import BotCommand

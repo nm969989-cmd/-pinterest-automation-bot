@@ -162,8 +162,10 @@ def search_items(keywords: str, search_index: str = "All",
         "Resources": [
             "ItemInfo.Title",
             "Offers.Listings.Price",
+            "Offers.Listings.Availability.Type",   # In-Stock Safety Filter
+            "Offers.Listings.Availability.Message",
             "Images.Primary.Medium",
-            "ItemInfo.ExternalIds",   # Contains ASINs
+            "ItemInfo.ExternalIds",
         ],
     }
 
@@ -184,13 +186,32 @@ def search_items(keywords: str, search_index: str = "All",
         for item in items:
             asin  = item.get("ASIN", "")
             title = item.get("ItemInfo", {}).get("Title", {}).get("DisplayValue", "")
-            price_info = (
+            listing = (
                 item.get("Offers", {})
-                    .get("Listings", [{}])[0]
-                    .get("Price", {})
+                    .get("Listings", [{}])
             )
-            price = price_info.get("DisplayAmount", "")
-            img   = (
+            first_listing = listing[0] if listing else {}
+            price_info   = first_listing.get("Price", {})
+            avail_info   = first_listing.get("Availability", {})
+            price        = price_info.get("DisplayAmount", "")
+            avail_type   = avail_info.get("Type", "UNKNOWN")
+
+            # ── In-Stock Safety Filter ─────────────────────────────────────────
+            # Accept items that are available NOW or TOMORROW.
+            # Reject: OUT_OF_STOCK, UNDELIVERABLE, or items with no price.
+            IN_STOCK_TYPES = {"NOW", "TOMORROW", "DAYS_2_3", "WEEK", "AVAILABLE"}
+            is_in_stock = (
+                bool(price) and
+                (avail_type in IN_STOCK_TYPES or avail_type == "UNKNOWN")
+            )
+            if not is_in_stock:
+                logger.info(
+                    f"[PA-API] Skipping out-of-stock item: ASIN={asin} "
+                    f"({avail_type}, price='{price}')"
+                )
+                continue
+
+            img = (
                 item.get("Images", {})
                     .get("Primary", {})
                     .get("Medium", {})
@@ -202,9 +223,13 @@ def search_items(keywords: str, search_index: str = "All",
                     "title":     title,
                     "price":     price,
                     "image_url": img,
+                    "in_stock":  True,
                     "url":       f"https://www.amazon.in/dp/{asin}?tag={_PARTNER_TAG}&linkCode=ogi&th=1&psc=1",
                 })
-        logger.info(f"[PA-API] SearchItems '{keywords}': found {len(results)} results")
+        logger.info(
+            f"[PA-API] SearchItems '{keywords}': "
+            f"{len(results)} in-stock (of {len(items)} total results)"
+        )
         return results
 
     except Exception as e:
