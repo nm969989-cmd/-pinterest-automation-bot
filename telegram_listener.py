@@ -230,7 +230,7 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
                 api_key=config.GEMINI_API_KEY,
                 openrouter_key=config.OPENROUTER_API_KEY
             )
-            amazon_link = generate_amazon_link(anime_name)
+            amazon_link = generate_amazon_link(anime_name, title=title)
             description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
 
             # Add to BACKLOG queue (priority=0)

@@ -126,7 +126,8 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "--- INFO ---\n"
         "/status         - Bot status and uptime\n"
         "/stats          - Pins count and queue\n"
-        "/analytics      - 7-day performance report\n"
+        "/clicks         - Affiliate clicks & estimated earnings\n"
+        "/analytics      - 7-day pins & revenue report\n"
         "/dailyreport    - Today's detailed pin report\n"
         "/preview        - Last pin with image\n"
         "/logs           - Recent log output\n"
@@ -212,12 +213,53 @@ async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     await _send_daily_report(update.effective_chat.id)
 
 
-async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-    """Show 7-day performance analytics: daily counts, top anime, retry failures."""
+async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show detailed affiliate link clicks and estimated revenue metrics."""
     if not _is_admin(update): return
     try:
-        from database import get_weekly_stats
+        from database import get_click_stats
+        cstats = get_click_stats()
+    except Exception as e:
+        await update.message.reply_text(f"Could not load click analytics: {e}")
+        return
+
+    top_anime_lines = []
+    for i, (name, cnt) in enumerate(cstats["top_anime"], 1):
+        top_anime_lines.append(f"  {i}. {name or 'Unknown'}: {cnt} click(s)")
+    top_anime_str = "\n".join(top_anime_lines) if top_anime_lines else "  No link clicks recorded yet."
+
+    top_pins_lines = []
+    for i, (title, anime, cnt) in enumerate(cstats["top_pins"], 1):
+        top_pins_lines.append(f"  • [{anime}] {title[:40]} ({cnt} clicks)")
+    top_pins_str = "\n".join(top_pins_lines) if top_pins_lines else "  No pin click data yet."
+
+    est_rev = f"₹{cstats['est_revenue_min']} - ₹{cstats['est_revenue_max']}"
+    est_orders = f"{cstats['est_orders_min']} - {cstats['est_orders_max']} items"
+
+    msg = (
+        f"📊 Affiliate Clicks & Earnings Report\n"
+        f"{'═' * 30}\n"
+        f"🖱️ Clicks Today    : {cstats['today']}\n"
+        f"📈 Clicks This Week : {cstats['week']}\n"
+        f"🌐 All-Time Clicks  : {cstats['total']}\n\n"
+        f"💰 Estimated Performance (7 Days):\n"
+        f"  • Estimated Orders  : {est_orders}\n"
+        f"  • Estimated Revenue : {est_rev}\n\n"
+        f"🎌 Top Clicked Anime:\n{top_anime_str}\n\n"
+        f"🔥 Top Clicked Pins:\n{top_pins_str}\n\n"
+        f"💡 Note: Actual confirmed purchases and payout balance are finalized on affiliate-program.amazon.in"
+    )
+    await update.message.reply_text(msg)
+    logger.info("[TG BOT] /clicks report sent.")
+
+
+async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show 7-day performance analytics: daily counts, affiliate clicks, revenue, top anime."""
+    if not _is_admin(update): return
+    try:
+        from database import get_weekly_stats, get_click_stats
         stats = get_weekly_stats()
+        cstats = get_click_stats()
     except Exception as e:
         await update.message.reply_text(f"Could not load analytics: {e}")
         return
@@ -241,16 +283,21 @@ async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     # Failed retries warning
     retry_warning = ""
     if stats["failed_retries"] > 0:
-        retry_warning = f"\n[!] {stats['failed_retries']} pin(s) have failed uploads in queue."
+        retry_warning = f"\n[!] {stats['failed_retries']} pin(s) have failed uploads in queue.\n"
+
+    est_rev = f"₹{cstats['est_revenue_min']} - ₹{cstats['est_revenue_max']}"
 
     await update.message.reply_text(
-        f"7-Day Analytics Report\n"
-        f"{'=' * 30}\n"
-        f"This Week : {stats['total_week']} pins\n"
-        f"All-Time  : {stats['total_all_time']} pins\n\n"
-        f"Daily Breakdown:\n{chart}\n\n"
-        f"Top Anime This Week:\n{top_str}"
-        f"{retry_warning}"
+        f"7-Day Analytics & Revenue Report\n"
+        f"{'=' * 32}\n"
+        f"📌 Pins Posted (Week) : {stats['total_week']}\n"
+        f"📌 All-Time Pins      : {stats['total_all_time']}\n\n"
+        f"🖱️ Affiliate Clicks (Week): {cstats['week']} (Today: {cstats['today']})\n"
+        f"💰 Est. Commission (Week) : {est_rev}\n\n"
+        f"Daily Pin Activity:\n{chart}\n\n"
+        f"Top Anime Posted This Week:\n{top_str}"
+        f"{retry_warning}\n"
+        f"Use /clicks for full affiliate link breakdown."
     )
     logger.info("[TG BOT] /analytics report sent.")
 
@@ -848,6 +895,36 @@ def notify_admin(message: str):
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
 
 
+def notify_link_clicked(anime_name: str, title: str, today_count: int):
+    """
+    Sends a real-time notification to Telegram whenever a Pinterest user clicks your link.
+    """
+    global _app_ref, _loop_ref
+    admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    if not _app_ref or not admin_id or not _loop_ref:
+        return
+
+    text = (
+        f"🔔 Affiliate Link Clicked on Pinterest!\n"
+        f"{'─' * 28}\n"
+        f"🎌 Anime : {anime_name or 'Anime'}\n"
+        f"📝 Pin   : {title[:60]}\n"
+        f"🖱️ Clicks Today : {today_count}\n"
+        f"Use /clicks to see all stats."
+    )
+
+    async def _send():
+        try:
+            await _app_ref.bot.send_message(chat_id=admin_id, text=text)
+        except Exception as e:
+            logger.warning(f"[TG BOT] Link click notification failed: {e}")
+
+    try:
+        asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
+    except Exception:
+        pass
+
+
 def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              image_path: str, pin_type: str,
                              posted_today: int, max_today: int,
@@ -1033,6 +1110,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("queue",         cmd_queue),
             ("clearqueue",    cmd_clearqueue),
             ("post_now",      cmd_postnow),
+            ("clicks",        cmd_clicks),
+            ("earnings",      cmd_clicks),
             ("analytics",     cmd_analytics),
         ]
         for cmd, handler in handlers:
@@ -1049,7 +1128,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("stats",         "Pins count and queue size"),
-                BotCommand("analytics",     "7-day performance report"),
+                BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
+                BotCommand("analytics",     "7-day pins & revenue report"),
                 BotCommand("dailyreport",   "Today's detailed Pinterest report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),

@@ -65,6 +65,29 @@ def init_db():
             except Exception:
                 pass
 
+        # ── Affiliate Link Tracking Tables ──────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_links (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code        TEXT UNIQUE,
+                target_url  TEXT,
+                anime_name  TEXT,
+                title       TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS link_clicks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code        TEXT,
+                anime_name  TEXT,
+                title       TEXT,
+                user_agent  TEXT,
+                referrer    TEXT,
+                clicked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # ── Performance indexes (makes scheduler 100x faster) ───────────────
         # Scheduler queries pin_queue every 30s — 2,880 times/day — needs an index
         conn.execute("""
@@ -75,6 +98,14 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_uploads_date
             ON uploaded_files (uploaded_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tracked_code
+            ON tracked_links (code)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_clicks_time
+            ON link_clicks (clicked_at)
         """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
@@ -410,6 +441,121 @@ def pop_next_pin_for_immediate_post() -> dict | None:
         "title": row[3], "description": row[4], "link": row[5],
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
+    }
+
+
+# ── Click Tracking & Affiliate Analytics ──────────────────────────────────────
+
+def create_tracked_link(target_url: str, anime_name: str = "", title: str = "") -> str:
+    """
+    Stores a destination URL and returns a unique 6-character short code.
+    E.g. target_url='https://amazon.in/dp/B08...?tag=...' -> code='a7f9b2'
+    """
+    import hashlib, time, random
+    # Generate unique 6-char hash code
+    seed = f"{target_url}_{anime_name}_{time.time()}_{random.random()}"
+    code = hashlib.md5(seed.encode()).hexdigest()[:6]
+
+    with _get_conn() as conn:
+        try:
+            conn.execute("""
+                INSERT INTO tracked_links (code, target_url, anime_name, title)
+                VALUES (?, ?, ?, ?)
+            """, (code, target_url, anime_name, title))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"[DB] Error creating tracked link: {e}")
+    return code
+
+
+def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tuple[str, str, str]:
+    """
+    Records a click for the given link code and returns (target_url, anime_name, title).
+    If code not found, returns fallback default Amazon URL.
+    """
+    from config import AMAZON_AFFILIATE_TAG
+    fallback_url = f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG or 'aniflexindia-21'}"
+
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT target_url, anime_name, title FROM tracked_links WHERE code = ?
+        """, (code,)).fetchone()
+
+        if row:
+            target_url, anime_name, title = row[0], row[1] or "Anime", row[2] or "Anime Merch"
+            conn.execute("""
+                INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer)
+                VALUES (?, ?, ?, ?, ?)
+            """, (code, anime_name, title, user_agent[:255], referrer[:255]))
+            conn.commit()
+            return target_url, anime_name, title
+        else:
+            return fallback_url, "Anime", "Anime Merch"
+
+
+def count_clicks_today() -> int:
+    """Returns number of affiliate link clicks received today (IST)."""
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) FROM link_clicks
+            WHERE date(clicked_at, '+5 hours', '+30 minutes') = date('now', '+5 hours', '+30 minutes')
+        """).fetchone()
+        return row[0] if row else 0
+
+
+def get_click_stats() -> dict:
+    """
+    Returns full click analytics and conversion estimates for Telegram commands.
+    """
+    with _get_conn() as conn:
+        today_clicks = conn.execute("""
+            SELECT COUNT(*) FROM link_clicks
+            WHERE date(clicked_at, '+5 hours', '+30 minutes') = date('now', '+5 hours', '+30 minutes')
+        """).fetchone()[0]
+
+        week_clicks = conn.execute("""
+            SELECT COUNT(*) FROM link_clicks
+            WHERE clicked_at >= date('now', '-6 days')
+        """).fetchone()[0]
+
+        total_clicks = conn.execute("""
+            SELECT COUNT(*) FROM link_clicks
+        """).fetchone()[0]
+
+        top_anime = conn.execute("""
+            SELECT anime_name, COUNT(*) as cnt
+            FROM link_clicks
+            WHERE anime_name IS NOT NULL AND anime_name != ''
+            GROUP BY anime_name
+            ORDER BY cnt DESC
+            LIMIT 5
+        """).fetchall()
+
+        top_pins = conn.execute("""
+            SELECT title, anime_name, COUNT(*) as cnt
+            FROM link_clicks
+            WHERE title IS NOT NULL AND title != ''
+            GROUP BY title
+            ORDER BY cnt DESC
+            LIMIT 3
+        """).fetchall()
+
+    # Calculate estimated conversions based on standard e-commerce metrics (2-4% CR, ₹35-80 avg commission)
+    est_orders_min = max(0, int(week_clicks * 0.02))
+    est_orders_max = max(1 if week_clicks >= 5 else 0, int(week_clicks * 0.05))
+    est_revenue_min = est_orders_min * 35
+    est_revenue_max = est_orders_max * 95
+
+    return {
+        "today": today_clicks,
+        "week": week_clicks,
+        "total": total_clicks,
+        "top_anime": [(r[0], r[1]) for r in top_anime],
+        "top_pins": [(r[0], r[1], r[2]) for r in top_pins],
+        "est_orders_min": est_orders_min,
+        "est_orders_max": est_orders_max,
+        "est_revenue_min": est_revenue_min,
+        "est_revenue_max": est_revenue_max,
     }
 
 

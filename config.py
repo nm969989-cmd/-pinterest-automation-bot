@@ -38,6 +38,11 @@ AUTO_POST_MODE = os.getenv('AUTO_POST_MODE', 'true').lower() in ('true', '1', 'y
 # Amazon Config
 AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG')
 
+# Click Tracking & Redirect Config (optional — set your Render URL to track Pinterest clicks in Telegram)
+# e.g. APP_BASE_URL=https://pinterest-bot.onrender.com
+APP_BASE_URL = (os.getenv('APP_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL', '')).rstrip('/')
+CLICK_NOTIFICATION = os.getenv('CLICK_NOTIFICATION', 'true').lower() in ('true', '1', 'yes')
+
 # Gemini AI Config (optional — enables AI-powered captions)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Free key from aistudio.google.com
 

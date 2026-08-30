@@ -109,20 +109,43 @@ def _build_search_link(search_query: str) -> str:
     )
 
 
-def generate_amazon_link(anime_name: str, character_name: str = "") -> str:
+def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = "") -> str:
+    """
+    If APP_BASE_URL is configured (e.g. https://your-bot.onrender.com),
+    wraps the direct Amazon URL into a short tracking redirect link:
+    f"{APP_BASE_URL}/r/{code}"
+    This logs real-time click metrics to SQLite whenever a Pinterest user clicks.
+    Otherwise returns direct Amazon URL.
+    """
+    from config import APP_BASE_URL
+    if not APP_BASE_URL:
+        return raw_amazon_url
+    try:
+        from database import create_tracked_link
+        code = create_tracked_link(target_url=raw_amazon_url, anime_name=anime_name, title=title)
+        tracked_url = f"{APP_BASE_URL}/r/{code}"
+        logger.info(f"[Tracker] Created tracked link: {tracked_url} -> {raw_amazon_url}")
+        return tracked_url
+    except Exception as e:
+        logger.error(f"[Tracker] Failed to wrap link: {e}")
+        return raw_amazon_url
+
+
+def generate_amazon_link(anime_name: str, character_name: str = "", title: str = "") -> str:
     """
     Generates a DEEP product link for an exact Amazon.in product page.
+    Automatically wraps with click tracking if APP_BASE_URL is configured.
 
     Strategy:
       1. Build a targeted search query (anime name + product type + character).
-      2. Fetch the first search result ASIN from Amazon's search page.
-      3. Return a direct /dp/ASIN link (deep link) so users land on
-         the exact product with 'Buy Now' ready — not a search results page.
+      2. Fetch the first search result ASIN from PA-API or search page.
+      3. Return a direct /dp/ASIN link (or /r/<code> tracked redirect link).
       4. Falls back to a generic search link if ASIN lookup fails.
 
     Args:
         anime_name:      The anime series name (e.g. "Demon Slayer: Kimetsu no Yaiba")
         character_name:  Optional character name for more specific results (e.g. "Zenitsu")
+        title:           Optional pin title for tracking metadata
     """
     try:
         if not anime_name or not anime_name.strip():
@@ -150,13 +173,15 @@ def generate_amazon_link(anime_name: str, character_name: str = "") -> str:
             # [OK] Deep product link — lands directly on the "Buy Now" product page
             deep_link = _build_deep_link(asin)
             logger.info(f"[Amazon] Deep link generated: {deep_link}")
-            return deep_link
+            return wrap_with_tracker(deep_link, anime_name=name, title=title)
         else:
             # [FALLBACK] Search link — ASIN lookup failed
             fallback_link = _build_search_link(search_query)
             logger.warning(f"[Amazon] Using fallback search link: {fallback_link}")
-            return fallback_link
+            return wrap_with_tracker(fallback_link, anime_name=name, title=title)
 
     except Exception as e:
         logger.error(f"[Amazon] Unexpected error generating link: {e}")
-        return f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG}"
+        fallback_default = f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG}"
+        return wrap_with_tracker(fallback_default, anime_name=anime_name, title=title)
+

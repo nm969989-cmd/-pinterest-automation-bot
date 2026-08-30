@@ -43,6 +43,37 @@ def health():
     except Exception as e:
         return jsonify({"status": "ok", "error": str(e)}), 200
 
+@app.route('/r/<code>')
+def redirect_link(code):
+    """
+    Affiliate link click tracker and redirector.
+    Intercepts clicks from Pinterest, records analytics, and redirects to Amazon.
+    """
+    from flask import redirect, request
+    try:
+        from database import record_link_click, count_clicks_today
+        user_agent = request.headers.get('User-Agent', '')
+        referrer   = request.referrer or ''
+
+        target_url, anime_name, title = record_link_click(code, user_agent, referrer)
+        today_total = count_clicks_today()
+
+        # Notify admin via Telegram if enabled
+        from config import CLICK_NOTIFICATION
+        if CLICK_NOTIFICATION:
+            try:
+                from telegram_bot import notify_link_clicked
+                notify_link_clicked(anime_name=anime_name, title=title, today_count=today_total)
+            except Exception:
+                pass
+
+        return redirect(target_url, code=302)
+    except Exception as e:
+        logging.error(f"[Redirect] Error handling /r/{code}: {e}")
+        from config import AMAZON_AFFILIATE_TAG
+        return redirect(f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG or 'aniflexindia-21'}", code=302)
+
+
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, threaded=True)

@@ -58,7 +58,7 @@ def handle_new_image(filepath, caption, channel_name):
         genre, board_id = get_board_for_anime(anime_name)
 
         # 5. Generate Amazon affiliate deep link (with character for specific product match)
-        amazon_link = generate_amazon_link(anime_name, character_name=character_name)
+        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
 
         # 6. Insert affiliate link into description
         description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
