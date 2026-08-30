@@ -4,6 +4,7 @@ import re
 import requests
 from config import AMAZON_AFFILIATE_TAG
 from logger import get_logger
+import pa_api  # Official PA-API (used when credentials set)
 
 logger = get_logger(__name__)
 
@@ -47,12 +48,23 @@ def _build_deep_link(asin: str) -> str:
 
 def _fetch_first_asin(search_query: str) -> str | None:
     """
-    Scrapes the first product ASIN from an Amazon India search results page
-    for the given query.
+    Gets the first relevant ASIN for a search query.
 
-    Returns the ASIN string (e.g. 'B08XYZ1234') or None if not found.
-    Note: Amazon may block this in production; use PA-API for reliability.
+    Priority:
+      1. Amazon PA-API (official, reliable — used when credentials set in .env)
+      2. HTML scraper fallback (no credentials needed, but may be blocked)
+
+    Returns ASIN string (e.g. 'B08XYZ1234') or None if not found.
     """
+    # ── Priority 1: PA-API (official, never gets blocked by Amazon) ──────────
+    if pa_api.is_available():
+        asin = pa_api.get_best_asin(search_query)
+        if asin:
+            return asin
+        logger.warning(f"[Amazon] PA-API returned no results for: '{search_query}'")
+        # Fall through to HTML scraper as backup even with PA-API
+
+    # ── Priority 2: HTML scraper (fragile but works without credentials) ─────
     encoded_query = urllib.parse.quote(search_query)
     search_url = f"https://www.amazon.in/s?k={encoded_query}"
 
@@ -69,21 +81,19 @@ def _fetch_first_asin(search_query: str) -> str | None:
         response.raise_for_status()
 
         # Amazon embeds ASIN in data attributes: data-asin="B08XYZ1234"
-        # Pick first non-empty ASIN from the search results
         asins = re.findall(r'data-asin="([A-Z0-9]{10})"', response.text)
-        # Filter out empty strings or junk values
         valid_asins = [a for a in asins if len(a) == 10 and a != "0000000000"]
 
         if valid_asins:
             asin = valid_asins[0]
-            logger.info(f"[Amazon] Found ASIN: {asin} for query: '{search_query}'")
+            logger.info(f"[Amazon Scraper] Found ASIN: {asin} for: '{search_query}'")
             return asin
         else:
-            logger.warning(f"[Amazon] No ASIN found in search results for: '{search_query}'")
+            logger.warning(f"[Amazon Scraper] No ASIN found for: '{search_query}'")
             return None
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"[Amazon] HTTP error fetching ASIN: {e}")
+        logger.error(f"[Amazon Scraper] HTTP error: {e}")
         return None
 
 
