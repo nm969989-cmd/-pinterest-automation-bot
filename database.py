@@ -628,6 +628,48 @@ def get_3day_stats() -> dict:
     }
 
 
+# ── Self-Healing Link Helpers ─────────────────────────────────────────────────
+
+def get_all_tracked_links(limit: int = 100) -> list[dict]:
+    """
+    Returns list of all tracked affiliate links for health auditing.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, code, target_url, anime_name, title, created_at
+            FROM tracked_links
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [
+            {
+                "id": r[0],
+                "code": r[1],
+                "target_url": r[2],
+                "anime_name": r[3] or "Anime",
+                "title": r[4] or "Anime Merch",
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
+
+
+def update_tracked_link_target(code: str, new_target_url: str) -> bool:
+    """
+    Updates the target destination URL for a given tracked short link code.
+    Used by the Self-Healing Link Engine to repair dead 404 links.
+    """
+    with _get_conn() as conn:
+        cursor = conn.execute("""
+            UPDATE tracked_links
+            SET target_url = ?
+            WHERE code = ?
+        """, (new_target_url, code))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 # Initialize on import
 init_db()
+
 

@@ -129,6 +129,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "--- INFO ---\n"
         "/status         - Bot status and uptime\n"
         "/doctor         - System health report (Auto: runs every 3 days)\n"
+        "/repairlinks    - Audit & repair dead Amazon links (Auto: 1st of month)\n"
         "/stats          - Pins count and queue\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
         "/analytics      - 7-day pins & revenue report\n"
@@ -231,6 +232,24 @@ async def cmd_doctor(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         logger.info("[TG BOT] /doctor diagnostic report sent.")
     except Exception as e:
         await update.message.reply_text(f"Doctor diagnostic error: {e}")
+
+
+async def cmd_repairlinks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Audit all tracked Amazon affiliate links and repair dead ones."""
+    if not _is_admin(update): return
+    await update.message.reply_text(
+        "🔍 Scanning all tracked affiliate links for dead pages...\n"
+        "Testing Amazon URLs & checking for 404s. Please wait..."
+    )
+    try:
+        from link_healer import run_link_healing_audit, format_repair_report
+        audit = run_link_healing_audit(max_links=50)
+        report = format_repair_report(audit, is_monthly=False)
+        await update.message.reply_text(report)
+        logger.info("[TG BOT] /repairlinks audit completed and report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error during link repair audit: {e}")
+
 
 
 async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -412,6 +431,16 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                         check_and_run_scheduled_health_check(_app_ref, _loop_ref, chat_id)
                     except Exception as e:
                         logger.error(f"[TG BOT] Scheduled health check error: {e}")
+
+            # 10:30 AM IST = 05:00 UTC -> Automated Monthly Self-Healing Link Audit (1st of month)
+            if now_utc.hour == 5 and now_utc.minute == 0:
+                chat_id = _get_chat_id()
+                if _app_ref and chat_id and _loop_ref:
+                    try:
+                        from link_healer import check_and_run_monthly_repair
+                        check_and_run_monthly_repair(_app_ref, _loop_ref, chat_id)
+                    except Exception as e:
+                        logger.error(f"[TG BOT] Scheduled monthly link repair error: {e}")
 
             time.sleep(55)  # Check every ~1 min
 
@@ -1214,6 +1243,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("analytics",     cmd_analytics),
             ("doctor",        cmd_doctor),
             ("healthcheck",   cmd_doctor),
+            ("repairlinks",   cmd_repairlinks),
+            ("checklinks",    cmd_repairlinks),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -1238,6 +1269,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
+                BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
                 BotCommand("analytics",     "7-day pins & revenue report"),
