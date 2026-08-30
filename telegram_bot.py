@@ -781,13 +781,18 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             remaining = get_queue_counts()["total"]
+            from database import get_tracked_target_url
+            target_url = get_tracked_target_url(pin['link'])
+            amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != pin['link'] else ""
             # Send text confirmation
             confirm_text = (
-                f"Pin posted to Pinterest!\n"
-                f"Title : {pin['title']}\n"
-                f"Anime : {pin['anime_name']}\n"
-                f"Link  : {pin['link']}\n\n"
-                f"Remaining in queue: {remaining} pin(s)."
+                f"📌 Pin posted to Pinterest!\n"
+                f"{'─' * 28}\n"
+                f"📝 Title     : {pin['title']}\n"
+                f"🎌 Anime     : {pin['anime_name']}\n"
+                f"🔗 Pin Link  : {pin['link']}"
+                f"{amazon_line}\n\n"
+                f"📥 Remaining in queue: {remaining} pin(s)."
             )
             # Send image preview if file still exists on disk
             image_path = pin.get("image_path", "")
@@ -1043,12 +1048,27 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
         )
         
+        from database import get_tracked_target_url
+        target_url = get_tracked_target_url(amazon_link)
+        amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != amazon_link else ""
+        
         enqueue_pin(
             post_id=f"manual_{ts}", image_path=processed_path, title=title,
             description=description, link=amazon_link, anime_name=anime_name,
             image_url="", board_id=board_id, priority=1, scheduled_date="today"
         )
-        await update.message.reply_text(f"✅ Queued: {title}\nUse /post_now to publish.")
+        confirm_text = (
+            f"✅ Queued: {title}\n"
+            f"🎌 Anime: {anime_name}\n"
+            f"🔗 Pin Link  : {amazon_link}"
+            f"{amazon_line}\n\n"
+            f"Use /post_now to publish immediately!"
+        )
+        if processed_path and os.path.exists(processed_path):
+            with open(processed_path, "rb") as img:
+                await update.message.reply_photo(photo=img, caption=confirm_text[:1024])
+        else:
+            await update.message.reply_text(confirm_text)
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
@@ -1069,6 +1089,10 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     type_emoji = "NEW" if pin_type == "NEW" else "BACKLOG"
     progress   = "".join(["✅" if i <= posted_today else "⬜" for i in range(1, max_today + 1)])
 
+    from database import get_tracked_target_url
+    target_url = get_tracked_target_url(link)
+    amazon_line = f"\n🎯 Amazon     : {target_url}" if target_url != link else ""
+
     caption = (
         f"📌 Pin Posted to Pinterest!\n"
         f"{'─' * 28}\n"
@@ -1077,7 +1101,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         f"🏷  Type       : {type_emoji}\n"
         f"🎌 Anime      : {anime_name}\n"
         f"📝 Title      : {title}\n"
-        f"🔗 Affiliate  : {link}"
+        f"🔗 Tracked Pin: {link}"
+        f"{amazon_line}"
     )
 
     async def _send():

@@ -15,10 +15,12 @@ if not os.path.exists('processed'):
 
 def process_image(filepath, channel_name=None):
     """
-    Processes the downloaded image to make it optimal for Pinterest.
-    - Resizes to 1000x1500 (2:3 aspect ratio) padding or cropping as needed.
-    - Optionally adds a watermark for the source channel.
-    Returns the path to the processed image.
+    Processes the downloaded image for Pinterest while preserving
+    100% full original aspect ratio and dimensions (ZERO CROPPING).
+    - Converts RGBA/P to clean RGB JPEG.
+    - If dimensions > 2400px, downscales proportionally to max 2400px (Lanczos).
+    - Otherwise keeps 100% original sharp resolution.
+    - No pixels cropped.
     """
     try:
         logger.info(f"Processing image: {filepath}")
@@ -28,40 +30,34 @@ def process_image(filepath, channel_name=None):
         if img.mode in ('RGBA', 'P'):
             img = img.convert('RGB')
             
-        # Resize logic (crop to fill 2:3 ratio)
         img_w, img_h = img.size
-        target_ratio = PINTEREST_WIDTH / PINTEREST_HEIGHT
-        current_ratio = img_w / img_h
         
-        if current_ratio > target_ratio:
-            # Image is wider than 2:3, crop width
-            new_w = int(img_h * target_ratio)
-            left = (img_w - new_w) / 2
-            right = (img_w + new_w) / 2
-            img = img.crop((left, 0, right, img_h))
-        elif current_ratio < target_ratio:
-            # Image is taller than 2:3, crop height
-            new_h = int(img_w / target_ratio)
-            top = (img_h - new_h) / 2
-            bottom = (img_h + new_h) / 2
-            img = img.crop((0, top, img_w, bottom))
-            
-        # Resize to exactly 1000x1500
-        img = img.resize((PINTEREST_WIDTH, PINTEREST_HEIGHT), Image.Resampling.LANCZOS)
-        
-        # No watermark — clean professional pins with full artwork visible
+        # Proportional resize only if excessively large (> 2400px), maintaining exact aspect ratio
+        MAX_DIM = 2400
+        if img_w > MAX_DIM or img_h > MAX_DIM:
+            if img_w >= img_h:
+                new_w = MAX_DIM
+                new_h = int((img_h / img_w) * MAX_DIM)
+            else:
+                new_h = MAX_DIM
+                new_w = int((img_w / img_h) * MAX_DIM)
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            logger.info(f"Proportionally scaled large image: {img_w}x{img_h} -> {new_w}x{new_h} (0% cropped)")
+        else:
+            logger.info(f"Preserved exact original dimensions: {img_w}x{img_h} (0% cropped)")
 
         filename = os.path.basename(filepath)
         processed_path = os.path.join('processed', filename)
         
-        # Save as JPEG for better compression
+        # Save as JPEG with high quality
         if not processed_path.lower().endswith(('.jpg', '.jpeg')):
             processed_path = os.path.splitext(processed_path)[0] + '.jpg'
             
-        img.save(processed_path, 'JPEG', quality=90)
-        logger.info(f"Successfully processed and saved to: {processed_path}")
+        img.save(processed_path, 'JPEG', quality=92, optimize=True)
+        logger.info(f"Successfully saved full original size image to: {processed_path}")
         return processed_path
         
     except Exception as e:
         logger.error(f"Error processing image {filepath}: {str(e)}")
         return filepath # Return original if processing fails
+

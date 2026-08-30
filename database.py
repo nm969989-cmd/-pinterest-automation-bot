@@ -669,7 +669,21 @@ def update_tracked_link_target(code: str, new_target_url: str) -> bool:
         return cursor.rowcount > 0
 
 
+def get_tracked_target_url(link_or_code: str) -> str:
+    """
+    Returns the destination Amazon URL for a given tracking URL or code.
+    If not a tracked redirect, returns link_or_code as-is.
+    """
+    if not link_or_code:
+        return ""
+    code = link_or_code.split("/r/")[-1].strip() if "/r/" in link_or_code else link_or_code.strip()
+    with _get_conn() as conn:
+        row = conn.execute("SELECT target_url FROM tracked_links WHERE code = ?", (code,)).fetchone()
+        return row[0] if row else link_or_code
+
+
 # Initialize on import
 init_db()
+
 
 
