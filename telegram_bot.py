@@ -19,8 +19,9 @@ Commands:
   /testpost      - Send a test pin via Make.com webhook
   /pause         - Pause posting
   /resume        - Resume posting
-  /queue         - Show pending pin queue size
-  /clearqueue    - Clear the pending queue
+  /queue         - Show pending queue with per-date schedule breakdown
+  /post_now      - Force-post next queued pin immediately (bypass time slot)
+  /clearqueue    - Wipe all pending pins from the queue
   /ping          - Check if bot responds
 """
 
@@ -511,34 +512,137 @@ async def cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show the real pending queue from SQLite with per-date breakdown."""
     if not _is_admin(update): return
-    q = _state.get("queue_size", 0)
-    if q == 0:
+    try:
+        from database import get_queue_counts, get_queue_detail
+        counts  = get_queue_counts()
+        details = get_queue_detail()
+    except Exception as e:
+        await update.message.reply_text(f"Could not read queue: {e}")
+        return
+
+    total = counts["total"]
+    if total == 0:
         await update.message.reply_text(
             "Queue is empty.\n"
-            "Bot will add pins after next scrape cycle."
+            "Bot will add pins after next scrape cycle (~10 min)."
         )
-    else:
-        await update.message.reply_text(
-            f"{q} pin(s) are waiting in the queue.\n"
-            f"They will be posted {_state['post_delay']} min apart."
-        )
+        return
+
+    # Build per-date breakdown
+    lines = []
+    for d in details:
+        parts = []
+        if d["new"] > 0:
+            parts.append(f"{d['new']} NEW")
+        if d["backlog"] > 0:
+            parts.append(f"{d['backlog']} BACKLOG")
+        lines.append(f"  {d['date']}: {', '.join(parts)}")
+
+    breakdown = "\n".join(lines)
+    await update.message.reply_text(
+        f"Pending Queue: {total} pin(s) total\n"
+        f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n\n"
+        f"Schedule:\n{breakdown}\n\n"
+        f"Use /post_now to force-post immediately.\n"
+        f"Use /clearqueue to wipe all pending pins."
+    )
 
 
 async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Purge all pending pins from the SQLite queue."""
     if not _is_admin(update): return
-    _state["queue_size"] = 0
-    if _scheduler_ref:
-        try:
-            with _scheduler_ref._lock:
-                _scheduler_ref._queue.clear()
-        except Exception:
-            pass
-    await update.message.reply_text(
-        "Queue cleared! All pending pins removed.\n"
-        "New pins will be added on next scrape cycle."
-    )
-    logger.info("[TG BOT] Queue cleared by admin.")
+    try:
+        from database import clear_pin_queue, get_queue_counts
+        # Show what we're about to clear
+        before = get_queue_counts()
+        if before["total"] == 0:
+            await update.message.reply_text(
+                "Queue is already empty! Nothing to clear."
+            )
+            return
+        cleared = clear_pin_queue()
+        await update.message.reply_text(
+            f"Queue cleared!\n"
+            f"Removed {cleared} pin(s) ({before['new']} NEW, {before['backlog']} BACKLOG).\n\n"
+            f"New pins will be added on next scrape cycle."
+        )
+        logger.info(f"[TG BOT] Queue cleared by admin: {cleared} pins removed.")
+    except Exception as e:
+        await update.message.reply_text(f"Error clearing queue: {e}")
+        logger.error(f"[TG BOT] clearqueue error: {e}")
+
+async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    Force-post the next queued pin immediately, bypassing the scheduled time slot.
+    Useful when you want a pin live NOW without waiting for 9 AM / 1 PM / 6 PM.
+    """
+    if not _is_admin(update): return
+    try:
+        from database import pop_next_pin_for_immediate_post, get_queue_counts
+        counts = get_queue_counts()
+        if counts["total"] == 0:
+            await update.message.reply_text(
+                "Queue is empty! No pins to post.\n"
+                "Wait for the scraper to pick up images from your Telegram channels."
+            )
+            return
+
+        pin = pop_next_pin_for_immediate_post()
+        if not pin:
+            await update.message.reply_text("Could not fetch a pin from the queue.")
+            return
+
+        pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+        await update.message.reply_text(
+            f"Posting {pin_type} pin immediately...\n"
+            f"Title: {pin['title']}\n"
+            f"Anime: {pin['anime_name']}"
+        )
+
+        from pinterest_uploader import upload_to_pinterest
+        success = upload_to_pinterest(
+            image_path=pin["image_path"],
+            title=pin["title"],
+            description=pin["description"],
+            link=pin["link"],
+            anime_name=pin["anime_name"],
+            board_id=pin.get("board_id", ""),
+        )
+
+        if success:
+            _state["posts_today"] = _state.get("posts_today", 0) + 1
+            _state["posts_total"] = _state.get("posts_total", 0) + 1
+            remaining = get_queue_counts()["total"]
+            await update.message.reply_text(
+                f"Pin posted to Pinterest!\n"
+                f"Title: {pin['title']}\n"
+                f"Link: {pin['link']}\n\n"
+                f"Remaining in queue: {remaining} pin(s)."
+            )
+            logger.info(f"[TG BOT] /post_now: posted '{pin['title']}'")
+        else:
+            # Upload failed — put pin back in queue so it isn't lost
+            from database import enqueue_pin
+            enqueue_pin(
+                post_id=pin["post_id"], image_path=pin["image_path"],
+                title=pin["title"], description=pin["description"],
+                link=pin["link"], anime_name=pin["anime_name"],
+                image_url=pin.get("image_url", ""),
+                board_id=pin.get("board_id", ""),
+                priority=pin["priority"],
+                scheduled_date="",   # re-queue for earliest available slot
+            )
+            await update.message.reply_text(
+                "Upload failed. Pin has been re-queued.\n"
+                "Check /logs for details."
+            )
+            logger.warning(f"[TG BOT] /post_now: upload failed for '{pin['title']}' — re-queued.")
+
+    except Exception as e:
+        await update.message.reply_text(f"Error during /post_now: {e}")
+        logger.error(f"[TG BOT] post_now error: {e}", exc_info=True)
 
 
 # -- Make.com Webhook Commands ------------------------------------------------
@@ -867,6 +971,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("resume",        cmd_resume),
             ("queue",         cmd_queue),
             ("clearqueue",    cmd_clearqueue),
+            ("post_now",      cmd_postnow),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -885,7 +990,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("dailyreport",   "Today's detailed Pinterest report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),
-                BotCommand("queue",         "Show pending queue size"),
+                BotCommand("queue",         "Show queue with per-date breakdown"),
                 BotCommand("channels",      "List monitored channels"),
                 BotCommand("addchannel",    "Add a source channel"),
                 BotCommand("removechannel", "Remove a source channel"),
@@ -897,7 +1002,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("testpost",      "Send a test pin via Make.com webhook"),
                 BotCommand("pause",         "Pause posting"),
                 BotCommand("resume",        "Resume posting"),
-                BotCommand("clearqueue",    "Clear pending queue"),
+                BotCommand("post_now",      "Force-post next queued pin NOW"),
+                BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

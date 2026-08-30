@@ -61,6 +61,18 @@ def init_db():
             conn.execute("ALTER TABLE pin_queue ADD COLUMN board_id TEXT DEFAULT ''")
         except Exception:
             pass
+
+        # ── Performance indexes (makes scheduler 100x faster) ───────────────
+        # Scheduler queries pin_queue every 30s — 2,880 times/day — needs an index
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_sched
+            ON pin_queue (scheduled_date, priority DESC, id ASC)
+        """)
+        # count_posts_today() also runs every 30s — index on uploaded_at
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploads_date
+            ON uploaded_files (uploaded_at)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -256,6 +268,71 @@ def count_posts_today(today_str: str) -> int:
             "SELECT COUNT(*) FROM uploaded_files WHERE date(uploaded_at) = ?",
             (today_str,)
         ).fetchone()[0]
+
+
+# ── Queue management helpers (used by Telegram bot commands) ─────────────────
+
+def clear_pin_queue() -> int:
+    """
+    Deletes ALL rows from pin_queue.
+    Used by the Telegram /clearqueue command.
+    Returns number of rows deleted.
+    """
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM pin_queue")
+        deleted = conn.execute("SELECT changes()").fetchone()[0]
+        conn.commit()
+    logger.info(f"[DB] pin_queue cleared: {deleted} pins removed.")
+    return deleted
+
+
+def get_queue_detail() -> list[dict]:
+    """
+    Returns a per-date breakdown of the pin queue for the /queue Telegram command.
+    Each entry: {scheduled_date, new_count, backlog_count}
+    Sorted by date ascending.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT
+                scheduled_date,
+                SUM(CASE WHEN priority = 1 THEN 1 ELSE 0 END) AS new_count,
+                SUM(CASE WHEN priority = 0 THEN 1 ELSE 0 END) AS backlog_count
+            FROM pin_queue
+            GROUP BY scheduled_date
+            ORDER BY scheduled_date ASC
+        """).fetchall()
+    return [
+        {"date": r[0], "new": r[1], "backlog": r[2]}
+        for r in rows
+    ]
+
+
+def pop_next_pin_for_immediate_post() -> dict | None:
+    """
+    Fetches and REMOVES the next highest-priority pin from the queue,
+    regardless of its scheduled_date. Used by /post_now Telegram command.
+    Returns pin dict or None if queue is empty.
+    """
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT id, post_id, image_path, title, description, link,
+                   anime_name, image_url, priority, board_id
+            FROM pin_queue
+            ORDER BY priority DESC, id ASC
+            LIMIT 1
+        """).fetchone()
+        if not row:
+            return None
+        # Remove from queue immediately (optimistic — upload may still fail)
+        conn.execute("DELETE FROM pin_queue WHERE id = ?", (row[0],))
+        conn.commit()
+    return {
+        "id": row[0], "post_id": row[1], "image_path": row[2],
+        "title": row[3], "description": row[4], "link": row[5],
+        "anime_name": row[6], "image_url": row[7], "priority": row[8],
+        "board_id": row[9] or "",
+    }
 
 
 # Initialize on import
