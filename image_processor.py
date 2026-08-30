@@ -1,5 +1,5 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,30 +49,8 @@ def process_image(filepath, channel_name=None):
         # Resize to exactly 1000x1500
         img = img.resize((PINTEREST_WIDTH, PINTEREST_HEIGHT), Image.Resampling.LANCZOS)
         
-        # Add watermark if channel name is provided
-        if channel_name:
-            draw = ImageDraw.Draw(img)
-            # Try to load a font, fallback to default
-            try:
-                # This might need adjustment depending on OS fonts available
-                font = ImageFont.truetype("arial.ttf", 36)
-            except IOError:
-                font = ImageFont.load_default()
-                
-            text = f"Source: @{channel_name}"
-            
-            # Use textbbox to get size
-            bbox = draw.textbbox((0, 0), text, font=font)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-            
-            x = PINTEREST_WIDTH - text_w - 20
-            y = PINTEREST_HEIGHT - text_h - 20
-            
-            # Draw semi-transparent background for text
-            draw.rectangle((x-5, y-5, x+text_w+5, y+text_h+5), fill=(0, 0, 0, 128))
-            draw.text((x, y), text, fill=(255, 255, 255), font=font)
-            
+        # No watermark — clean professional pins with full artwork visible
+
         filename = os.path.basename(filepath)
         processed_path = os.path.join('processed', filename)
         
