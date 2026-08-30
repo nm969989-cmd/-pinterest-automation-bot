@@ -16,6 +16,18 @@ SCRAPE_INTERVAL_MINUTES = int(os.getenv('SCRAPE_INTERVAL_MINUTES', 10))
 PINTEREST_ACCESS_TOKEN = os.getenv('PINTEREST_ACCESS_TOKEN')
 PINTEREST_BOARD_ID = os.getenv('PINTEREST_BOARD_ID')
 
+# Multi-Board Routing — set board IDs per genre in .env
+# Get board IDs from: pinterest.com/YOUR_USERNAME/YOUR_BOARD_NAME/ (last part of URL)
+# Falls back to PINTEREST_BOARD_ID if a genre-specific board is not configured.
+BOARD_ID_SHONEN  = os.getenv('BOARD_ID_SHONEN',  '')   # Action/battle anime
+BOARD_ID_ISEKAI  = os.getenv('BOARD_ID_ISEKAI',  '')   # Isekai/fantasy anime
+BOARD_ID_ROMANCE = os.getenv('BOARD_ID_ROMANCE', '')   # Romance/slice-of-life
+BOARD_ID_HORROR  = os.getenv('BOARD_ID_HORROR',  '')   # Horror/dark anime
+BOARD_ID_MECHA   = os.getenv('BOARD_ID_MECHA',   '')   # Mecha/robot anime
+BOARD_ID_SPORTS  = os.getenv('BOARD_ID_SPORTS',  '')   # Sports anime
+BOARD_ID_FANTASY = os.getenv('BOARD_ID_FANTASY', '')   # Fantasy/other anime
+BOARD_ID_GENERAL = os.getenv('BOARD_ID_GENERAL', os.getenv('PINTEREST_BOARD_ID', ''))  # Default
+
 # Make.com Webhook Config (bypass Pinterest API review — instant public pins!)
 # Get this URL from Make.com after creating your scenario with a Custom Webhook trigger.
 MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL', '')

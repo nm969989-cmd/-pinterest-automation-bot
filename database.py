@@ -44,17 +44,23 @@ def init_db():
                 link        TEXT,
                 anime_name  TEXT,
                 image_url   TEXT,
+                board_id    TEXT DEFAULT '',   -- Pinterest board ID for multi-board routing
                 priority    INTEGER DEFAULT 0,   -- 1=new, 0=backlog
                 scheduled_date TEXT,             -- YYYY-MM-DD when to post
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Add new columns if upgrading from older schema
-        for col in ["anime_name TEXT", "image_url TEXT"]:
+        for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''"]:
             try:
                 conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {col}")
             except Exception:
                 pass
+        # Add board_id to pin_queue if upgrading from older schema
+        try:
+            conn.execute("ALTER TABLE pin_queue ADD COLUMN board_id TEXT DEFAULT ''")
+        except Exception:
+            pass
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -173,6 +179,7 @@ def get_uploaded_count() -> int:
 
 def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
                 link: str, anime_name: str, image_url: str = "",
+                board_id: str = "",
                 priority: int = 0, scheduled_date: str = "") -> bool:
     """
     Add a pin to the persistent queue.
@@ -185,10 +192,10 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
             conn.execute("""
                 INSERT OR IGNORE INTO pin_queue
                     (post_id, image_path, title, description, link, anime_name,
-                     image_url, priority, scheduled_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     image_url, board_id, priority, scheduled_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (post_id, image_path, title, description, link, anime_name,
-                  image_url, priority, scheduled_date))
+                  image_url, board_id, priority, scheduled_date))
             conn.commit()
             return conn.execute(
                 "SELECT changes()"
@@ -207,7 +214,7 @@ def get_next_queued_pin(today_str: str) -> dict | None:
     with _get_conn() as conn:
         row = conn.execute("""
             SELECT id, post_id, image_path, title, description, link,
-                   anime_name, image_url, priority
+                   anime_name, image_url, priority, board_id
             FROM pin_queue
             WHERE scheduled_date <= ?
             ORDER BY priority DESC, id ASC
@@ -218,7 +225,8 @@ def get_next_queued_pin(today_str: str) -> dict | None:
     return {
         "id": row[0], "post_id": row[1], "image_path": row[2],
         "title": row[3], "description": row[4], "link": row[5],
-        "anime_name": row[6], "image_url": row[7], "priority": row[8]
+        "anime_name": row[6], "image_url": row[7], "priority": row[8],
+        "board_id": row[9] or "",
     }
 
 

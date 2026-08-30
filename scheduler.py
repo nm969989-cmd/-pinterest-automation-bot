@@ -74,7 +74,7 @@ class PinScheduler:
 
     def enqueue_new_image(self, post_id: str, image_path: str, title: str,
                           description: str, link: str, anime_name: str,
-                          image_url: str = ""):
+                          image_url: str = "", board_id: str = ""):
         """
         Add a NEW image (priority=1) from the Telegram channel.
         Automatically calculates the correct posting date based on queue depth.
@@ -99,7 +99,8 @@ class PinScheduler:
             added = enqueue_pin(
                 post_id=post_id, image_path=image_path, title=title,
                 description=description, link=link, anime_name=anime_name,
-                image_url=image_url, priority=1, scheduled_date=sched_date
+                image_url=image_url, board_id=board_id, priority=1,
+                scheduled_date=sched_date
             )
             if added:
                 logger.info(
@@ -110,7 +111,7 @@ class PinScheduler:
 
     def enqueue_backlog_image(self, post_id: str, image_path: str, title: str,
                                description: str, link: str, anime_name: str,
-                               image_url: str = ""):
+                               image_url: str = "", board_id: str = ""):
         """
         Add a BACKLOG image (priority=0). Only posts when no new images pending.
         Always schedules for a future date to avoid competing with new images today.
@@ -126,7 +127,8 @@ class PinScheduler:
             added = enqueue_pin(
                 post_id=post_id, image_path=image_path, title=title,
                 description=description, link=link, anime_name=anime_name,
-                image_url=image_url, priority=0, scheduled_date=sched_date
+                image_url=image_url, board_id=board_id, priority=0,
+                scheduled_date=sched_date
             )
             if added:
                 logger.info(
@@ -257,6 +259,7 @@ class PinScheduler:
                                 description=pin["description"],
                                 link=pin["link"],
                                 anime_name=pin["anime_name"],
+                                board_id=pin.get("board_id", ""),
                             )
                             if success:
                                 remove_queued_pin(pin["id"])

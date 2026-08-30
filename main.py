@@ -7,6 +7,8 @@ from amazon_search import generate_amazon_link
 from pinterest_uploader import upload_to_pinterest, upload_via_make_webhook
 from scheduler import scheduler
 from ai_caption import generate_pin_content
+from board_router import get_board_for_anime
+from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
 from telegram_bot import start_bot, record_pin, send_pin_approval_request
 from jsonbin_sync import restore_db_from_cloud, start_sync_thread, save_cloud_state
 from crash_protection import init_crash_protection, cleanup_old_files
@@ -52,21 +54,33 @@ def handle_new_image(filepath, caption, channel_name):
                 character_name = title.strip().split()[0]
             logger.info(f"[Main] Character extracted from title: '{character_name}'")
 
-        # 4. Generate Amazon affiliate deep link (with character for specific product match)
+        # 4. Route to correct Pinterest board + get genre
+        genre, board_id = get_board_for_anime(anime_name)
+
+        # 5. Generate Amazon affiliate deep link (with character for specific product match)
         amazon_link = generate_amazon_link(anime_name, character_name=character_name)
 
-        # 5. Insert affiliate link into description
+        # 6. Insert affiliate link into description
         description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
 
+        # 7. Replace AI hashtags with SEO-optimized hashtag set (12-15 tags)
+        optimized_tags = optimize_hashtags(
+            anime_name=anime_name,
+            genre=genre,
+            character_name=character_name,
+            product_hint="anime merch",
+        )
+        description = replace_hashtags_in_description(description, optimized_tags)
+
         # Guarantee FTC & Pinterest required disclosure tags are ALWAYS present
-        # (AI may or may not include them — this ensures 100% coverage)
+        # (already included in optimized_tags, but double-check for safety)
         if "#ad" not in description.lower():
             description = description.rstrip() + "\n#ad #affiliate"
 
-        # 6. Record pin for Telegram /preview and /stats
+        # 8. Record pin for Telegram /preview and /stats
         record_pin(anime_name, title, description, amazon_link, processed_path)
 
-        # 7. Queue with priority scheduling (new images always before backlog)
+        # 9. Queue with priority scheduling (new images always before backlog)
         if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
             logger.info("[Main] Sending pin to Telegram for approval...")
             send_pin_approval_request(processed_path, title, description, amazon_link)
@@ -79,6 +93,7 @@ def handle_new_image(filepath, caption, channel_name):
                 description=description,
                 link=amazon_link,
                 anime_name=anime_name,
+                board_id=board_id,
             )
 
         # 7. Clean up original download to save disk space (keep processed copy)

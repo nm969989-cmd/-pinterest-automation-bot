@@ -29,10 +29,11 @@ def get_board_id_dynamically(headers):
     return PINTEREST_BOARD_ID
 
 def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
-                            anime_name: str = "") -> bool:
+                            anime_name: str = "", board_id: str = "") -> bool:
     """
     Posts a pin via Make.com Custom Webhook → Pinterest: Create a Pin module.
     Retries up to 3 times with exponential backoff on failure.
+    board_id is passed in the payload so Make.com can route to the correct board.
     """
     if not MAKE_WEBHOOK_URL:
         logger.error("[Make.com] MAKE_WEBHOOK_URL is not set in .env")
@@ -45,11 +46,13 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         return False
 
     # Step 2: POST to Make.com webhook with retry (3 attempts)
+    # board_id allows Make.com to route the pin to the correct Pinterest board
     payload = {
         "title":       title[:100],
         "description": description[:500],
         "link":        link,
         "image_url":   image_url,
+        "board_id":    board_id or PINTEREST_BOARD_ID or "",
     }
     delays = [0, 5, 15]  # seconds between attempts
     for attempt, delay in enumerate(delays, 1):
@@ -76,11 +79,12 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
 
 
 
-def upload_to_pinterest(image_path, title, description, link, anime_name=""):
+def upload_to_pinterest(image_path, title, description, link, anime_name="", board_id=""):
     """
     Master upload function.
     Routes to Make.com webhook (instant public pins) if MAKE_WEBHOOK_URL is set,
     otherwise falls back to the official Pinterest API v5.
+    board_id overrides PINTEREST_BOARD_ID for multi-board routing.
     When DRY_RUN=true in .env, logs the pin data instead of uploading.
     """
     filename = os.path.basename(image_path)
@@ -108,7 +112,10 @@ def upload_to_pinterest(image_path, title, description, link, anime_name=""):
 
     # ── Route: Make.com Webhook (preferred — no API approval needed) ──────────
     if MAKE_WEBHOOK_URL:
-        image_url = upload_via_make_webhook(image_path, title, description, link, anime_name)
+        image_url = upload_via_make_webhook(
+            image_path, title, description, link,
+            anime_name=anime_name, board_id=board_id
+        )
         if image_url:
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
             return True
@@ -130,7 +137,8 @@ def upload_to_pinterest(image_path, title, description, link, anime_name=""):
             "Content-Type": "application/json"
         }
         
-        actual_board_id = PINTEREST_BOARD_ID
+        # Use board_id from router first, then fall back to config/dynamic lookup
+        actual_board_id = board_id or PINTEREST_BOARD_ID
         if not actual_board_id or not actual_board_id.isdigit():
             actual_board_id = get_board_id_dynamically(headers)
             if not actual_board_id:
