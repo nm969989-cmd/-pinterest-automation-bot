@@ -4,7 +4,7 @@ from keep_alive import keep_alive
 from telegram_listener import start_listener, set_image_callback
 from image_processor import process_image
 from amazon_search import generate_amazon_link
-from pinterest_uploader import upload_to_pinterest, upload_via_make_webhook
+from pinterest_uploader import upload_to_pinterest
 from scheduler import scheduler
 from ai_caption import generate_pin_content
 from board_router import get_board_for_anime
@@ -96,7 +96,7 @@ def handle_new_image(filepath, caption, channel_name):
                 board_id=board_id,
             )
 
-        # 7. Clean up original download to save disk space (keep processed copy)
+        # 10. Clean up original download to save disk space (keep processed copy)
         try:
             if filepath != processed_path and os.path.exists(filepath):
                 os.remove(filepath)

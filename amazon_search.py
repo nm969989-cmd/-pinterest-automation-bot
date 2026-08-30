@@ -137,14 +137,14 @@ def generate_amazon_link(anime_name: str, character_name: str = "") -> str:
         asin = _fetch_first_asin(search_query)
 
         if asin:
-            # ✅ Deep product link — lands directly on the "Buy Now" product page
+            # [OK] Deep product link — lands directly on the "Buy Now" product page
             deep_link = _build_deep_link(asin)
-            logger.info(f"[Amazon] Deep link generated → {deep_link}")
+            logger.info(f"[Amazon] Deep link generated: {deep_link}")
             return deep_link
         else:
-            # ⚠️ Fallback to search link if ASIN lookup fails
+            # [FALLBACK] Search link — ASIN lookup failed
             fallback_link = _build_search_link(search_query)
-            logger.warning(f"[Amazon] Using fallback search link → {fallback_link}")
+            logger.warning(f"[Amazon] Using fallback search link: {fallback_link}")
             return fallback_link
 
     except Exception as e:
