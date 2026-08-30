@@ -1,14 +1,16 @@
 """
 Smart Pin Scheduler
 ===================
-- Posts exactly 3 pins/day at fixed IST times: 9:00 AM, 1:00 PM, 6:00 PM
+- Posts 3 pins/day at human-like randomized IST times around 9 AM, 1 PM, 6 PM
+- Each slot has a daily random jitter of +/-20 minutes (looks 100% human to Pinterest)
+- Jitter is regenerated each day at midnight so times vary every day
 - Priority: NEW images always post before BACKLOG images
-- If 10 new images arrive → 3 today, 7 scheduled across next days
-- If new images arrive while backlog is pending → NEW images go first
+- If 10 new images arrive -> 3 today, 7 scheduled across next days
 - Multi-day queue is persisted in SQLite (survives restarts)
 """
 
 import time
+import random
 import threading
 import datetime
 from collections import deque
@@ -17,13 +19,57 @@ from config import MAX_POSTS_PER_DAY
 
 logger = get_logger(__name__)
 
-# Fixed IST posting times: 9:00 AM, 1:00 PM, 6:00 PM
+# Base IST posting times: 9:00 AM, 1:00 PM, 6:00 PM
 # IST = UTC+5:30, so in UTC: 3:30, 7:30, 12:30
-_POST_TIMES_UTC = [
+_BASE_POST_TIMES_UTC = [
     (3, 30),   # 09:00 AM IST
     (7, 30),   # 01:00 PM IST
     (12, 30),  # 06:00 PM IST
 ]
+
+# Anti-bot jitter: max +/- minutes to randomize each slot
+# Pinterest spam detection flags accounts that post at exact clockwork times.
+_JITTER_MAX_MINUTES = 20
+
+# ── Daily jitter state ────────────────────────────────────────────────────────
+# Generated once per day. Stores (day_str, [(h_offset, m_offset), ...])
+_jitter_cache: tuple[str, list] = ("", [])
+
+
+def _get_daily_jitter() -> list[tuple[int, int]]:
+    """
+    Returns the list of (hour_offset, minute_offset) for each slot today.
+    Re-generates fresh random offsets every new calendar day (IST).
+    Offsets are in range [-JITTER_MAX_MINUTES, +JITTER_MAX_MINUTES] minutes.
+    """
+    global _jitter_cache
+    today = _ist_now().strftime("%Y-%m-%d")
+    if _jitter_cache[0] != today:
+        offsets = []
+        for _ in _BASE_POST_TIMES_UTC:
+            jitter_minutes = random.randint(-_JITTER_MAX_MINUTES, _JITTER_MAX_MINUTES)
+            offsets.append(jitter_minutes)
+        _jitter_cache = (today, offsets)
+        logger.info(
+            f"[Scheduler] New daily jitter generated for {today}: "
+            + ", ".join(f"{'+' if j >= 0 else ''}{j}min" for j in offsets)
+        )
+    return _jitter_cache[1]
+
+
+def _get_jittered_times_utc() -> list[tuple[int, int]]:
+    """
+    Returns the 3 actual posting times (UTC) for today, with jitter applied.
+    e.g. base 09:00 IST + 12min jitter = 09:12 IST = 03:42 UTC
+    """
+    jitters = _get_daily_jitter()
+    result = []
+    for i, (base_h, base_m) in enumerate(_BASE_POST_TIMES_UTC):
+        total_minutes = base_h * 60 + base_m + jitters[i]
+        # Clamp to valid time range (never go before midnight or after 23:59)
+        total_minutes = max(0, min(23 * 60 + 59, total_minutes))
+        result.append((total_minutes // 60, total_minutes % 60))
+    return result
 
 
 def _ist_now() -> datetime.datetime:
@@ -158,19 +204,19 @@ class PinScheduler:
         return False
 
     def _minutes_to_next_slot(self) -> int:
-        """Returns minutes until the next posting slot."""
+        """Returns minutes until the next jittered posting slot (today or tomorrow)."""
         now = datetime.datetime.utcnow()
         today = now.date()
+        jittered = _get_jittered_times_utc()
         candidates = []
-        for (h, m) in _POST_TIMES_UTC:
+        for (h, m) in jittered:
             slot = datetime.datetime(today.year, today.month, today.day, h, m)
             if slot > now:
                 candidates.append(slot)
-        # Also check tomorrow's first slot
+        # Also check tomorrow's first base slot (jitter not yet known for tomorrow)
         tomorrow = today + datetime.timedelta(days=1)
-        h0, m0 = _POST_TIMES_UTC[0]
+        h0, m0 = _BASE_POST_TIMES_UTC[0]
         candidates.append(datetime.datetime(tomorrow.year, tomorrow.month, tomorrow.day, h0, m0))
-
         next_slot = min(candidates)
         return max(1, int((next_slot - now).total_seconds() / 60))
 
@@ -205,9 +251,16 @@ class PinScheduler:
         from pinterest_uploader import upload_to_pinterest
 
         self.is_running = True
+        # Log today's actual jittered posting times at startup
+        jittered = _get_jittered_times_utc()
+        ist_times = []
+        for (h_utc, m_utc) in jittered:
+            total = h_utc * 60 + m_utc + 5 * 60 + 30  # UTC -> IST
+            ist_times.append(f"{(total // 60) % 24:02d}:{total % 60:02d}")
         logger.info(
-            f"[Scheduler] Started. Max {MAX_POSTS_PER_DAY} pins/day at "
-            f"09:00, 13:00, 18:00 IST. New images have priority over backlog."
+            f"[Scheduler] Started. Max {MAX_POSTS_PER_DAY} pins/day. "
+            f"Today's jittered IST slots: {', '.join(ist_times)} "
+            f"(base: 09:00, 13:00, 18:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
 
@@ -215,12 +268,13 @@ class PinScheduler:
             now = datetime.datetime.utcnow()
             today_ist = _today_ist()
 
-            # ── Check if it's a posting time slot ──────────────────────────
+            # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
-            for (h, m) in _POST_TIMES_UTC:
+            jittered_times = _get_jittered_times_utc()
+            for (h, m) in jittered_times:
                 slot_start = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 diff = abs((now - slot_start).total_seconds())
-                if diff <= 120:
+                if diff <= 180:  # within 3 minutes of jittered slot
                     current_slot = (h, m)
                     break
 
@@ -228,10 +282,12 @@ class PinScheduler:
                 _last_fired_slot = current_slot
                 today_posted = count_posts_today(today_ist)
 
-                slot_ist_h = (current_slot[0] + 5) % 24
-                slot_ist_m = (current_slot[1] + 30) % 60
+                # Convert UTC slot to IST for display
+                slot_ist_total = current_slot[0] * 60 + current_slot[1] + 5 * 60 + 30
+                slot_ist_h = (slot_ist_total // 60) % 24
+                slot_ist_m = slot_ist_total % 60
                 logger.info(
-                    f"[Scheduler] Slot fired: {slot_ist_h:02d}:{slot_ist_m:02d} IST | "
+                    f"[Scheduler] Slot fired: {slot_ist_h:02d}:{slot_ist_m:02d} IST (jittered) | "
                     f"Posted today: {today_posted}/{MAX_POSTS_PER_DAY}"
                 )
 
@@ -296,10 +352,10 @@ class PinScheduler:
                         logger.info("[Scheduler] Queue empty at slot time. Nothing to post.")
 
             else:
-                # Reset slot tracker when outside all slot windows
+                # Reset slot tracker when outside ALL jittered slot windows
                 all_outside = not any(
-                    abs((now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds()) <= 120
-                    for (h, m) in _POST_TIMES_UTC
+                    abs((now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds()) <= 180
+                    for (h, m) in _get_jittered_times_utc()
                 )
                 if all_outside:
                     _last_fired_slot = None

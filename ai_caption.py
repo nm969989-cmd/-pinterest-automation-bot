@@ -9,6 +9,7 @@ Priority:
 
 import re
 import json
+import random
 import base64
 import requests as http_requests
 from logger import get_logger
@@ -62,18 +63,33 @@ _TEXT_PROMPT = (
 )
 
 
+# High-converting CTA templates — rotated randomly per pin for organic feel
+# ##LINK_PLACEHOLDER## is replaced with the actual Amazon affiliate link
+_CTA_TEMPLATES = [
+    "Shop this exact merch on Amazon India: ##LINK_PLACEHOLDER##",
+    "Find posters, hoodies & figures for this anime: ##LINK_PLACEHOLDER##",
+    "Get this as a poster or action figure on Amazon: ##LINK_PLACEHOLDER##",
+    "Limited stock available - check it out: ##LINK_PLACEHOLDER##",
+    "Tap the link to grab official merch: ##LINK_PLACEHOLDER##",
+    "Own this art as a wall poster or hoodie: ##LINK_PLACEHOLDER##",
+    "Perfect gift for any anime fan: ##LINK_PLACEHOLDER##",
+    "Shop the collection on Amazon India: ##LINK_PLACEHOLDER##",
+]
+
+
 def _inject_link(description_body, channel_name):
-    """Inserts ##LINK_PLACEHOLDER## before hashtags in the description."""
+    """Inserts a high-converting CTA with ##LINK_PLACEHOLDER## before hashtags."""
+    cta = random.choice(_CTA_TEMPLATES)
     hashtag_idx = description_body.rfind('\n#')
     if hashtag_idx == -1:
         return (
             f"{description_body}\n\n"
-            f"Shop merch below ##LINK_PLACEHOLDER##\n\n"
+            f"{cta}\n\n"
             f"Source: @{channel_name}"
         )
     before = description_body[:hashtag_idx].strip()
     tags   = description_body[hashtag_idx:].strip()
-    return f"{before}\n\nShop merch below ##LINK_PLACEHOLDER##\n\nSource: @{channel_name}\n{tags}"
+    return f"{before}\n\n{cta}\n\nSource: @{channel_name}\n{tags}"
 
 
 def _parse_ai_response(raw, channel_name):
