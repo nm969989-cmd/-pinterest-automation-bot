@@ -47,20 +47,23 @@ def init_db():
                 board_id    TEXT DEFAULT '',   -- Pinterest board ID for multi-board routing
                 priority    INTEGER DEFAULT 0,   -- 1=new, 0=backlog
                 scheduled_date TEXT,             -- YYYY-MM-DD when to post
+                retry_count INTEGER DEFAULT 0,   -- auto-retry: drop after 3 fails
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         # Add new columns if upgrading from older schema
-        for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''"]:
+        for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''",
+                    "retry_count INTEGER DEFAULT 0"]:
             try:
                 conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {col}")
             except Exception:
                 pass
-        # Add board_id to pin_queue if upgrading from older schema
-        try:
-            conn.execute("ALTER TABLE pin_queue ADD COLUMN board_id TEXT DEFAULT ''")
-        except Exception:
-            pass
+        # Add board_id and retry_count to pin_queue if upgrading from older schema
+        for col in ["board_id TEXT DEFAULT ''", "retry_count INTEGER DEFAULT 0"]:
+            try:
+                conn.execute(f"ALTER TABLE pin_queue ADD COLUMN {col}")
+            except Exception:
+                pass
 
         # ── Performance indexes (makes scheduler 100x faster) ───────────────
         # Scheduler queries pin_queue every 30s — 2,880 times/day — needs an index
@@ -268,6 +271,81 @@ def count_posts_today(today_str: str) -> int:
             "SELECT COUNT(*) FROM uploaded_files WHERE date(uploaded_at) = ?",
             (today_str,)
         ).fetchone()[0]
+
+
+def increment_retry_count(pin_id: int) -> int:
+    """
+    Increments retry_count for a queued pin after a failed upload attempt.
+    Returns the new retry_count value.
+    Used by scheduler to decide whether to keep retrying or drop the pin.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE pin_queue SET retry_count = retry_count + 1 WHERE id = ?",
+            (pin_id,)
+        )
+        conn.commit()
+        new_count = conn.execute(
+            "SELECT retry_count FROM pin_queue WHERE id = ?", (pin_id,)
+        ).fetchone()
+    return new_count[0] if new_count else 0
+
+
+def get_weekly_stats() -> dict:
+    """
+    Returns posting statistics for the last 7 days.
+    Used by the /analytics Telegram command.
+    Returns:
+      - daily_counts: list of {date, count} for last 7 days
+      - top_anime: top 5 anime by pin count this week
+      - total_week: total pins this week
+      - total_all_time: all-time total pins
+      - failed_retries: pins currently stuck in retry queue (retry_count > 0)
+    """
+    with _get_conn() as conn:
+        # Daily counts for last 7 days
+        daily = conn.execute("""
+            SELECT date(uploaded_at) as day, COUNT(*) as cnt
+            FROM uploaded_files
+            WHERE uploaded_at >= date('now', '-6 days')
+            GROUP BY day
+            ORDER BY day ASC
+        """).fetchall()
+
+        # Top 5 anime this week
+        top_anime = conn.execute("""
+            SELECT anime_name, COUNT(*) as cnt
+            FROM uploaded_files
+            WHERE uploaded_at >= date('now', '-6 days')
+              AND anime_name IS NOT NULL AND anime_name != ''
+            GROUP BY anime_name
+            ORDER BY cnt DESC
+            LIMIT 5
+        """).fetchall()
+
+        # Total this week
+        total_week = conn.execute("""
+            SELECT COUNT(*) FROM uploaded_files
+            WHERE uploaded_at >= date('now', '-6 days')
+        """).fetchone()[0]
+
+        # All-time total
+        total_all = conn.execute(
+            "SELECT COUNT(*) FROM uploaded_files"
+        ).fetchone()[0]
+
+        # Pins stuck in retry loop
+        failed = conn.execute(
+            "SELECT COUNT(*) FROM pin_queue WHERE retry_count > 0"
+        ).fetchone()[0]
+
+    return {
+        "daily_counts": [{"date": r[0], "count": r[1]} for r in daily],
+        "top_anime":    [(r[0], r[1]) for r in top_anime],
+        "total_week":   total_week,
+        "total_all_time": total_all,
+        "failed_retries": failed,
+    }
 
 
 # ── Queue management helpers (used by Telegram bot commands) ─────────────────

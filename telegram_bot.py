@@ -126,12 +126,15 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "--- INFO ---\n"
         "/status         - Bot status and uptime\n"
         "/stats          - Pins count and queue\n"
+        "/analytics      - 7-day performance report\n"
+        "/dailyreport    - Today's detailed pin report\n"
         "/preview        - Last pin with image\n"
         "/logs           - Recent log output\n"
-        "/queue          - Pending queue size\n"
+        "/queue          - Pending queue breakdown\n"
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
-        "--- MAKE.COM WEBHOOK ---\n"
+        "--- POSTING ---\n"
+        "/post_now       - Force-post next pin immediately\n"
         f"/autopilot      - Toggle auto-post vs approval mode (Webhook: {make_status})\n"
         "/testpost       - Send a test pin right now via webhook\n\n"
         "--- CONTROL ---\n"
@@ -207,6 +210,49 @@ async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     """Send today's detailed pin report on demand."""
     if not _is_admin(update): return
     await _send_daily_report(update.effective_chat.id)
+
+
+async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show 7-day performance analytics: daily counts, top anime, retry failures."""
+    if not _is_admin(update): return
+    try:
+        from database import get_weekly_stats
+        stats = get_weekly_stats()
+    except Exception as e:
+        await update.message.reply_text(f"Could not load analytics: {e}")
+        return
+
+    # Build daily chart (simple ASCII bar)
+    daily = stats["daily_counts"]
+    max_count = max((d["count"] for d in daily), default=1)
+    chart_lines = []
+    for d in daily:
+        bar_len = int((d["count"] / max_count) * 10) if max_count else 0
+        bar = "[" + "#" * bar_len + "." * (10 - bar_len) + "]"
+        chart_lines.append(f"  {d['date']}: {bar} {d['count']}")
+    chart = "\n".join(chart_lines) if chart_lines else "  No pins posted this week yet."
+
+    # Top anime
+    top_str = ""
+    for i, (name, cnt) in enumerate(stats["top_anime"], 1):
+        top_str += f"  {i}. {name or 'Unknown'}: {cnt} pins\n"
+    top_str = top_str or "  No data yet."
+
+    # Failed retries warning
+    retry_warning = ""
+    if stats["failed_retries"] > 0:
+        retry_warning = f"\n[!] {stats['failed_retries']} pin(s) have failed uploads in queue."
+
+    await update.message.reply_text(
+        f"7-Day Analytics Report\n"
+        f"{'=' * 30}\n"
+        f"This Week : {stats['total_week']} pins\n"
+        f"All-Time  : {stats['total_all_time']} pins\n\n"
+        f"Daily Breakdown:\n{chart}\n\n"
+        f"Top Anime This Week:\n{top_str}"
+        f"{retry_warning}"
+    )
+    logger.info("[TG BOT] /analytics report sent.")
 
 
 async def _send_daily_report(chat_id):
@@ -615,12 +661,27 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             remaining = get_queue_counts()["total"]
-            await update.message.reply_text(
+            # Send text confirmation
+            confirm_text = (
                 f"Pin posted to Pinterest!\n"
-                f"Title: {pin['title']}\n"
-                f"Link: {pin['link']}\n\n"
+                f"Title : {pin['title']}\n"
+                f"Anime : {pin['anime_name']}\n"
+                f"Link  : {pin['link']}\n\n"
                 f"Remaining in queue: {remaining} pin(s)."
             )
+            # Send image preview if file still exists on disk
+            image_path = pin.get("image_path", "")
+            if image_path and os.path.exists(image_path):
+                try:
+                    with open(image_path, "rb") as img_file:
+                        await update.message.reply_photo(
+                            photo=img_file,
+                            caption=confirm_text[:1024]
+                        )
+                except Exception:
+                    await update.message.reply_text(confirm_text)
+            else:
+                await update.message.reply_text(confirm_text)
             logger.info(f"[TG BOT] /post_now: posted '{pin['title']}'")
         else:
             # Upload failed — put pin back in queue so it isn't lost
@@ -972,6 +1033,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("queue",         cmd_queue),
             ("clearqueue",    cmd_clearqueue),
             ("post_now",      cmd_postnow),
+            ("analytics",     cmd_analytics),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -987,6 +1049,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("stats",         "Pins count and queue size"),
+                BotCommand("analytics",     "7-day performance report"),
                 BotCommand("dailyreport",   "Today's detailed Pinterest report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),

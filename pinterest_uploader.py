@@ -29,11 +29,13 @@ def get_board_id_dynamically(headers):
     return PINTEREST_BOARD_ID
 
 def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
-                            anime_name: str = "", board_id: str = "") -> bool:
+                            anime_name: str = "", board_id: str = "",
+                            alt_text: str = "") -> bool:
     """
-    Posts a pin via Make.com Custom Webhook → Pinterest: Create a Pin module.
+    Posts a pin via Make.com Custom Webhook -> Pinterest: Create a Pin module.
     Retries up to 3 times with exponential backoff on failure.
     board_id is passed in the payload so Make.com can route to the correct board.
+    alt_text is passed for Pinterest visual search SEO (Pinterest supports it).
     """
     if not MAKE_WEBHOOK_URL:
         logger.error("[Make.com] MAKE_WEBHOOK_URL is not set in .env")
@@ -46,13 +48,13 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         return False
 
     # Step 2: POST to Make.com webhook with retry (3 attempts)
-    # board_id allows Make.com to route the pin to the correct Pinterest board
     payload = {
         "title":       title[:100],
         "description": description[:500],
         "link":        link,
         "image_url":   image_url,
         "board_id":    board_id or PINTEREST_BOARD_ID or "",
+        "alt_text":    alt_text[:500] if alt_text else "",
     }
     delays = [0, 5, 15]  # seconds between attempts
     for attempt, delay in enumerate(delays, 1):
@@ -79,12 +81,14 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
 
 
 
-def upload_to_pinterest(image_path, title, description, link, anime_name="", board_id=""):
+def upload_to_pinterest(image_path, title, description, link, anime_name="",
+                        board_id="", alt_text=""):
     """
     Master upload function.
     Routes to Make.com webhook (instant public pins) if MAKE_WEBHOOK_URL is set,
     otherwise falls back to the official Pinterest API v5.
     board_id overrides PINTEREST_BOARD_ID for multi-board routing.
+    alt_text is used for Pinterest visual search SEO (passed to both routes).
     When DRY_RUN=true in .env, logs the pin data instead of uploading.
     """
     filename = os.path.basename(image_path)
@@ -101,6 +105,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="", boa
         logger.info(f"[DRY RUN]   Image    : {image_path}")
         logger.info(f"[DRY RUN]   Title    : {title}")
         logger.info(f"[DRY RUN]   Link     : {link}")
+        logger.info(f"[DRY RUN]   Alt Text : {alt_text[:60]}..." if alt_text else "[DRY RUN]   Alt Text : (none)")
         logger.info(f"[DRY RUN]   Desc     : {description[:100]}...")
         if MAKE_WEBHOOK_URL:
             logger.info("[DRY RUN]   Method   : Make.com Webhook (instant public pins)")
@@ -114,7 +119,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="", boa
     if MAKE_WEBHOOK_URL:
         image_url = upload_via_make_webhook(
             image_path, title, description, link,
-            anime_name=anime_name, board_id=board_id
+            anime_name=anime_name, board_id=board_id, alt_text=alt_text
         )
         if image_url:
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
@@ -203,9 +208,10 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="", boa
                 "source_type": "media_id",
                 "media_id": upload_id
             },
-            "title": title[:100], # Max 100 chars
-            "description": description[:500], # Max 500 chars
-            "link": link
+            "title":       title[:100],
+            "description": description[:500],
+            "link":        link,
+            "alt_text":    alt_text[:500] if alt_text else "",
         }
         
         res = requests.post(url, headers=headers, json=pin_data)

@@ -247,7 +247,8 @@ class PinScheduler:
     def _worker_loop(self):
         from database import (get_next_queued_pin, remove_queued_pin,
                                count_posts_today, mark_file_uploaded,
-                               is_file_uploaded, is_image_url_uploaded)
+                               is_file_uploaded, is_image_url_uploaded,
+                               increment_retry_count)
         from pinterest_uploader import upload_to_pinterest
 
         self.is_running = True
@@ -309,6 +310,12 @@ class PinScheduler:
                                 f"[Scheduler] Posting {'NEW' if pin['priority']==1 else 'BACKLOG'} pin: "
                                 f"'{pin['title']}'"
                             )
+                            # Build alt_text for Pinterest SEO
+                            alt_text = (
+                                f"{pin['anime_name']} anime art poster wallpaper "
+                                f"{pin['title'].replace('-', ' ')}"
+                            )[:500]
+
                             success = upload_to_pinterest(
                                 image_path=pin["image_path"],
                                 title=pin["title"],
@@ -316,6 +323,7 @@ class PinScheduler:
                                 link=pin["link"],
                                 anime_name=pin["anime_name"],
                                 board_id=pin.get("board_id", ""),
+                                alt_text=alt_text,
                             )
                             if success:
                                 remove_queued_pin(pin["id"])
@@ -326,7 +334,7 @@ class PinScheduler:
                                     f"[Scheduler] Pin posted. Today: "
                                     f"{counts_after}/{MAX_POSTS_PER_DAY}"
                                 )
-                                # ── Telegram notification ──────────────────
+                                # Telegram notification
                                 self._notify_pin_posted(
                                     title=pin["title"],
                                     anime_name=pin["anime_name"],
@@ -337,9 +345,31 @@ class PinScheduler:
                                     time_ist=now_ist,
                                 )
                             else:
-                                logger.error(
-                                    "[Scheduler] Upload failed. Will retry next slot."
-                                )
+                                # Auto-retry logic: increment counter, drop after 3 fails
+                                MAX_RETRIES = 3
+                                new_count = increment_retry_count(pin["id"])
+                                if new_count >= MAX_RETRIES:
+                                    logger.error(
+                                        f"[Scheduler] Pin failed {MAX_RETRIES} times, "
+                                        f"dropping: '{pin['title']}'"
+                                    )
+                                    remove_queued_pin(pin["id"])
+                                    # Notify admin via Telegram
+                                    try:
+                                        from telegram_bot import notify_admin
+                                        notify_admin(
+                                            f"[Bot Alert] Pin dropped after {MAX_RETRIES} failed "
+                                            f"upload attempts:\n'{pin['title']}'\n"
+                                            f"Anime: {pin['anime_name']}\n"
+                                            f"Check /logs for details."
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    logger.warning(
+                                        f"[Scheduler] Upload failed (attempt {new_count}/{MAX_RETRIES}). "
+                                        f"Pin stays in queue: '{pin['title']}'"
+                                    )
                     elif self._mem_queue:
                         # Fallback: in-memory queue (approval mode)
                         with self._lock:
