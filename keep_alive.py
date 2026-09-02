@@ -15,7 +15,17 @@ def home():
     uptime = datetime.datetime.utcnow() - _start_time
     h = int(uptime.total_seconds() // 3600)
     m = int((uptime.total_seconds() % 3600) // 60)
-    return f"Animanoizing Bot is alive! Uptime: {h}h {m}m", 200
+    return jsonify({
+        "status":  "ok",
+        "service": "Animanoizing Pinterest Bot",
+        "uptime":  f"{h}h {m}m",
+    }), 200
+
+
+@app.route('/ping')
+def ping():
+    """Ultra-lightweight keep-alive endpoint for cron-job.org."""
+    return "pong", 200
 
 @app.route('/health')
 def health():
@@ -24,11 +34,12 @@ def health():
         from crash_protection import get_memory_mb, get_disk_usage_mb
         from database import get_queue_counts, count_posts_today
         import datetime as dt
-        today = (dt.datetime.utcnow() + dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+        # Use UTC date — matches the uploaded_at column (stored as UTC)
+        today_utc = dt.datetime.utcnow().strftime("%Y-%m-%d")
         mem  = round(get_memory_mb(), 1)
         disk = round(get_disk_usage_mb("downloads") + get_disk_usage_mb("processed"), 1)
         q    = get_queue_counts()
-        posted_today = count_posts_today(today)
+        posted_today = count_posts_today(today_utc)
         uptime = datetime.datetime.utcnow() - _start_time
 
         return jsonify({

@@ -196,7 +196,7 @@ class PinScheduler:
         Slot window: fires within a ±2 minute window of the target time.
         """
         now = datetime.datetime.utcnow()
-        for (h, m) in _POST_TIMES_UTC:
+        for (h, m) in _get_jittered_times_utc():
             slot_start = now.replace(hour=h, minute=m, second=0, microsecond=0)
             diff = abs((now - slot_start).total_seconds())
             if diff <= 120:  # within 2 minutes of slot
@@ -329,7 +329,8 @@ class PinScheduler:
                                 remove_queued_pin(pin["id"])
                                 now_ist = _ist_now().strftime("%I:%M %p")
                                 pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
-                                counts_after = count_posts_today(today_ist) + 1
+                                # Re-count from DB after mark_file_uploaded was called inside upload_to_pinterest
+                                counts_after = count_posts_today(today_ist)
                                 logger.info(
                                     f"[Scheduler] Pin posted. Today: "
                                     f"{counts_after}/{MAX_POSTS_PER_DAY}"

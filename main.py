@@ -126,7 +126,9 @@ def main():
             token=config.TELEGRAM_BOT_TOKEN,
             admin_chat_id=config.TELEGRAM_ADMIN_CHAT_ID,
             channels=config.TELEGRAM_CHANNELS,
-            dry_run=config.DRY_RUN
+            dry_run=config.DRY_RUN,
+            post_delay=config.POST_DELAY_MINUTES,
+            max_per_day=config.MAX_POSTS_PER_DAY,   # ← fixes the "5/15" bug
         )
     else:
         logger.info("[TG BOT] No TELEGRAM_BOT_TOKEN set, control bot disabled.")

@@ -1052,10 +1052,12 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
         target_url = get_tracked_target_url(amazon_link)
         amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != amazon_link else ""
         
+        import datetime as _dt
+        today_ist_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
         enqueue_pin(
             post_id=f"manual_{ts}", image_path=processed_path, title=title,
             description=description, link=amazon_link, anime_name=anime_name,
-            image_url="", board_id=board_id, priority=1, scheduled_date="today"
+            image_url="", board_id=board_id, priority=1, scheduled_date=today_ist_str
         )
         confirm_text = (
             f"✅ Queued: {title}\n"
@@ -1086,18 +1088,24 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     if not _app_ref or not admin_id or not _loop_ref:
         return
 
-    type_emoji = "NEW" if pin_type == "NEW" else "BACKLOG"
-    progress   = "".join(["✅" if i <= posted_today else "⬜" for i in range(1, max_today + 1)])
+    # Use config MAX_POSTS_PER_DAY so bar is always correct size (3, not 15)
+    from config import MAX_POSTS_PER_DAY as _max
+    actual_max = _max  # always read from config, ignore stale state
+
+    type_emoji  = "🆕 NEW" if pin_type == "NEW" else "📦 BACKLOG"
+    # Build correctly-sized progress bar
+    filled  = min(posted_today, actual_max)
+    bar     = "".join(["✅" if i <= filled else "⬜" for i in range(1, actual_max + 1)])
 
     from database import get_tracked_target_url
-    target_url = get_tracked_target_url(link)
+    target_url  = get_tracked_target_url(link)
     amazon_line = f"\n🎯 Amazon     : {target_url}" if target_url != link else ""
 
     caption = (
         f"📌 Pin Posted to Pinterest!\n"
-        f"{'─' * 28}\n"
+        f"{'─' * 30}\n"
         f"🕐 Time       : {time_ist} IST\n"
-        f"📊 Today      : {progress} ({posted_today}/{max_today})\n"
+        f"📊 Today      : {bar} ({posted_today}/{actual_max})\n"
         f"🏷  Type       : {type_emoji}\n"
         f"🎌 Anime      : {anime_name}\n"
         f"📝 Title      : {title}\n"
@@ -1112,7 +1120,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                     await _app_ref.bot.send_photo(
                         chat_id=admin_id,
                         photo=img,
-                        caption=caption,
+                        caption=caption[:1024],
                     )
             else:
                 await _app_ref.bot.send_message(
@@ -1126,6 +1134,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
     except Exception as e:
         logger.warning(f"[TG BOT] Could not schedule pin notification: {e}")
+
 
 
 def send_pin_approval_request(image_path: str, title: str, description: str, link: str):

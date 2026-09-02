@@ -1,11 +1,18 @@
 services:
   - type: web
-    name: anime-pinterest-bot
+    name: -pinterest-automation-bot
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
+    healthCheckPath: /ping
     envVars:
+      - key: TELEGRAM_CHANNELS
+        sync: false
       - key: TELEGRAM_CHANNEL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
         sync: false
       - key: PINTEREST_ACCESS_TOKEN
         sync: false
@@ -13,7 +20,21 @@ services:
         sync: false
       - key: AMAZON_AFFILIATE_TAG
         sync: false
+      - key: MAKE_WEBHOOK_URL
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: JSONBIN_API_KEY
+        sync: false
+      - key: JSONBIN_BIN_ID
+        sync: false
+      - key: AUTO_POST_MODE
+        value: "true"
+      - key: DRY_RUN
+        value: "false"
       - key: POST_DELAY_MINUTES
         value: "10"
       - key: MAX_POSTS_PER_DAY
-        value: "15"
+        value: "3"
