@@ -813,20 +813,22 @@ async def cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show the real pending queue from SQLite with upcoming pin titles, schedule & countdown."""
     if not _is_admin(update): return
+    msg = update.effective_message
     try:
         from database import get_queue_counts, get_queue_detail, get_upcoming_queued_pins
         counts   = get_queue_counts()
         details  = get_queue_detail()
         upcoming = get_upcoming_queued_pins(limit=5)
     except Exception as e:
-        await update.message.reply_text(f"Could not read queue: {e}")
+        await msg.reply_text(f"Could not read queue: {e}")
         return
 
     total = counts["total"]
     if total == 0:
-        await update.message.reply_text(
+        await msg.reply_text(
             "Queue is empty.\n\n"
-            "👉 Run /scrape to fetch new pins now, or send any photo directly to this bot!"
+            "👉 Run /scrape to fetch new pins now, or send any photo directly to this bot!",
+            reply_markup=get_queue_keyboard()
         )
         return
 
@@ -849,7 +851,7 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         upcoming_lines.append(
             f"{i+1}. 🌸 {p['title']}\n"
             f"   🎌 Anime: {p['anime_name']}\n"
-            f"   ⏰ Scheduled: {time_label}"
+            f"   ⏰ Time: {time_label}"
         )
     upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None"
 
@@ -862,11 +864,11 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         if d["backlog"] > 0:
             parts.append(f"{d['backlog']} BACKLOG")
         lines.append(f"  • {d['date']}: {', '.join(parts)}")
-    breakdown = "\n".join(lines)
+    breakdown = "\n".join(lines) if lines else "  • No dates scheduled"
 
     await msg.reply_text(
         f"📋 Pending Queue: {total} pin(s) total\n"
-        f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n"
+        f"  ({counts['new']} NEW | {counts['backlog']} BACKLOG)\n"
         f"⏰ Next Auto-Post: {next_post_label}\n\n"
         f"📌 Upcoming Pins & Scheduled Times:\n"
         f"{upcoming_text}\n\n"
@@ -878,9 +880,65 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-    """Show today's 8:00 AM daily schedule report on demand."""
+    """Show today's daily posting schedule with exact times on demand."""
     if not _is_admin(update): return
-    await _send_daily_morning_schedule(str(update.effective_chat.id))
+    msg = update.effective_message
+    try:
+        from database import get_queue_counts, get_queue_detail, get_upcoming_queued_pins
+        from scheduler import get_upcoming_slot_times
+
+        counts = get_queue_counts()
+        total = counts["total"]
+        details = get_queue_detail()
+        upcoming = get_upcoming_queued_pins(limit=5)
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%d %b %Y")
+
+        slot_times = []
+        try:
+            slot_times = get_upcoming_slot_times(count=max(len(upcoming), 1))
+        except Exception:
+            pass
+
+        upcoming_lines = []
+        for i, p in enumerate(upcoming):
+            p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
+            time_label = slot_times[i] if i < len(slot_times) else f"{p['scheduled_date']} ({p_type})"
+            upcoming_lines.append(
+                f"{i+1}. 🌸 {p['title']}\n"
+                f"   🎌 Anime: {p['anime_name']}\n"
+                f"   ⏰ Time: {time_label}"
+            )
+        upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None queued yet."
+
+        lines = []
+        for d in details:
+            parts = []
+            if d["new"] > 0:
+                parts.append(f"{d['new']} NEW")
+            if d["backlog"] > 0:
+                parts.append(f"{d['backlog']} BACKLOG")
+            lines.append(f"  • {d['date']}: {', '.join(parts)}")
+        breakdown = "\n".join(lines) if lines else "  • No dates scheduled"
+
+        text = (
+            f"☀️ Daily Pinterest Posting Schedule\n"
+            f"📅 {today_str} • {now_ist.strftime('%I:%M %p')} IST\n"
+            f"{'═' * 30}\n\n"
+            f"📊 Queue Status: {total} pin(s) ready\n"
+            f"  ({counts['new']} NEW | {counts['backlog']} BACKLOG)\n\n"
+            f"📌 Scheduled Pins & Exact Clock Times:\n"
+            f"{upcoming_text}\n\n"
+            f"📅 Daily Distribution:\n{breakdown}\n\n"
+            f"👉 Use /post_now to publish pin #1 immediately\n"
+            f"👉 Use /scrape to check channels for fresh posts"
+        )
+        await msg.reply_text(text, reply_markup=get_queue_keyboard())
+    except Exception as e:
+        logger.error(f"[TG BOT] /schedule error: {e}", exc_info=True)
+        await msg.reply_text(f"❌ Error displaying schedule: {e}")
+
 
 
 
