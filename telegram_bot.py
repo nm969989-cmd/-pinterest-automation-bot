@@ -1275,7 +1275,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
 
         # ── Self-heal: Force Telegram to release any stuck polling session ──
         # Retries with backoff if rate-limited (429). Prevents Conflict errors.
-        for attempt in range(5):
+        # IMPORTANT: We cap the wait at 10s. If Telegram says wait longer,
+        # we skip /close and start immediately — a stuck session is less bad
+        # than being deaf to commands for 3+ minutes after every Render restart.
+        for attempt in range(3):
             try:
                 r = _req.get(
                     f"https://api.telegram.org/bot{token}/close",
@@ -1284,20 +1287,30 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 data = r.json()
                 if data.get("ok"):
                     logger.info("[TG BOT] Session closed cleanly.")
-                    time.sleep(3)
+                    time.sleep(2)
                     break
                 elif r.status_code == 429:
                     wait = data.get("parameters", {}).get("retry_after", 30)
+                    if wait > 10:
+                        # Don't block startup for a long rate-limit.
+                        # Telegram's getUpdates with drop_pending_updates=True
+                        # will handle any conflict at polling start.
+                        logger.warning(
+                            f"[TG BOT] Rate-limited on /close ({wait}s). "
+                            f"Skipping — proceeding with startup immediately."
+                        )
+                        break
                     logger.warning(f"[TG BOT] Rate-limited on /close. Waiting {wait}s...")
-                    time.sleep(wait + 2)
+                    time.sleep(wait + 1)
                 else:
                     # Already closed or not running — fine to proceed
-                    time.sleep(2)
+                    time.sleep(1)
                     break
             except Exception as e:
                 logger.warning(f"[TG BOT] /close attempt {attempt+1} failed: {e}")
-                time.sleep(3)
+                time.sleep(2)
         # ────────────────────────────────────────────────────────────────────
+
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
