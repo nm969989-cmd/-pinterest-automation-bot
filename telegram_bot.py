@@ -126,8 +126,9 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
     if not _TG_AVAILABLE:
         return None
     import config
-    p_url = pinterest_url or getattr(config, "PINTEREST_PROFILE_URL", "https://www.pinterest.com/animeasthetic/")
+    p_url = pinterest_url or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
     row1 = [InlineKeyboardButton("📌 View Pinterest Profile", url=p_url)]
+
     if amazon_url and amazon_url.startswith("http"):
         row1.append(InlineKeyboardButton("🎯 View Amazon Product", url=amazon_url))
 
@@ -1320,7 +1321,8 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
 
         target_url = get_tracked_target_url(amazon_link)
         amazon_line = f"\n🎯 Direct Amazon : {target_url}" if target_url != amazon_link else ""
-        pinterest_profile = getattr(config, "PINTEREST_PROFILE_URL", "https://www.pinterest.com/animeasthetic/")
+        pinterest_profile = getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+
 
         await status_msg.edit_text("🚀 Uploading pin to Pinterest now...")
 

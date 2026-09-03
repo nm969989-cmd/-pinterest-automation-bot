@@ -44,7 +44,8 @@ APP_BASE_URL = (os.getenv('APP_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL', ''
 CLICK_NOTIFICATION = os.getenv('CLICK_NOTIFICATION', 'false').lower() in ('true', '1', 'yes')
 
 # Pinterest Profile URL (for direct buttons in Telegram)
-PINTEREST_PROFILE_URL = os.getenv('PINTEREST_PROFILE_URL', 'https://www.pinterest.com/animeasthetic/')
+PINTEREST_PROFILE_URL = os.getenv('PINTEREST_PROFILE_URL', 'https://in.pinterest.com/muthelyrics/')
+
 
 
 # Gemini AI Config (optional — enables AI-powered captions)
