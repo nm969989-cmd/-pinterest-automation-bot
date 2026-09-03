@@ -1422,6 +1422,11 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             # Retry loop: if a Conflict error occurs (two instances polling
             # simultaneously after a fast restart), wait 15s for the old
             # instance to shut down, then retry up to 5 times.
+            #
+            # nonlocal required: we reassign 'app' in the except block.
+            # Without nonlocal, Python treats 'app' as local throughout the
+            # function and raises UnboundLocalError on the first 'async with app:'.
+            nonlocal app, _app_ref
             for poll_attempt in range(5):
                 try:
                     async with app:
