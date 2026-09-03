@@ -767,9 +767,67 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"Anime: {pin['anime_name']}"
         )
 
+        # ── File resurrection: re-download if Render wiped the FS ───────────
+        image_path = pin["image_path"]
+        if not os.path.exists(image_path):
+            cdn_url = pin.get("image_url", "")
+            if cdn_url and cdn_url.startswith("http"):
+                await update.message.reply_text(
+                    f"⚠️ Image file was lost (Render restart).\n"
+                    f"Re-downloading from Telegram CDN… please wait."
+                )
+                try:
+                    from telegram_listener import download_image
+                    from image_processor import process_image
+                    import os as _os
+                    safe_name = _os.path.splitext(_os.path.basename(image_path))[0]
+                    dl_path = download_image(cdn_url, safe_name)
+                    if dl_path:
+                        image_path = process_image(dl_path)
+                        from database import update_pin_image_path
+                        # pin was already popped; update will have no effect but good practice
+                        logger.info(f"[TG BOT] /post_now: Re-download success: {image_path}")
+                        await update.message.reply_text("✅ Re-download successful! Uploading to Pinterest…")
+                    else:
+                        raise RuntimeError("download_image returned None")
+                except Exception as rd_err:
+                    logger.error(f"[TG BOT] /post_now: Re-download failed: {rd_err}")
+                    # Re-queue the pin so it isn't lost
+                    from database import enqueue_pin
+                    enqueue_pin(
+                        post_id=pin["post_id"], image_path=pin["image_path"],
+                        title=pin["title"], description=pin["description"],
+                        link=pin["link"], anime_name=pin["anime_name"],
+                        image_url=pin.get("image_url", ""),
+                        board_id=pin.get("board_id", ""),
+                        priority=pin["priority"], scheduled_date="",
+                    )
+                    await update.message.reply_text(
+                        f"❌ Re-download failed (CDN URL may have expired).\n"
+                        f"Pin has been re-queued.\n"
+                        f"💡 Try re-sending the image to the Telegram channel to refresh the CDN URL."
+                    )
+                    return
+            else:
+                logger.error(f"[TG BOT] /post_now: Image missing and no CDN URL. Cannot recover.")
+                from database import enqueue_pin
+                enqueue_pin(
+                    post_id=pin["post_id"], image_path=pin["image_path"],
+                    title=pin["title"], description=pin["description"],
+                    link=pin["link"], anime_name=pin["anime_name"],
+                    image_url=pin.get("image_url", ""),
+                    board_id=pin.get("board_id", ""),
+                    priority=pin["priority"], scheduled_date="",
+                )
+                await update.message.reply_text(
+                    f"❌ Image file is gone and no CDN URL is stored.\n"
+                    f"Pin re-queued. Re-send the image in the Telegram channel to fix it."
+                )
+                return
+
         from pinterest_uploader import upload_to_pinterest
         success = upload_to_pinterest(
-            image_path=pin["image_path"],
+            image_path=image_path,
             title=pin["title"],
             description=pin["description"],
             link=pin["link"],
@@ -794,8 +852,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 f"{amazon_line}\n\n"
                 f"📥 Remaining in queue: {remaining} pin(s)."
             )
-            # Send image preview if file still exists on disk
-            image_path = pin.get("image_path", "")
+            # Send image preview if file exists on disk (use resurrected path if applicable)
             if image_path and os.path.exists(image_path):
                 try:
                     with open(image_path, "rb") as img_file:
