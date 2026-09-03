@@ -4,11 +4,14 @@ image_host.py - Uploads a local image to a free hosting service and returns a pu
 Used by the Make.com webhook flow, which requires images to be publicly accessible via URL.
 
 Upload chain (auto-fallback):
-  1. Catbox.moe     — no API key, permanent, fast (PRIMARY)
-  2. 0x0.st         — no API key, expires ~1 year (FALLBACK 1)
-  3. Cloudinary     — requires API key, permanent CDN (FALLBACK 2 — most reliable)
+  1. Cloudinary  — configured with API key, permanent CDN (PRIMARY — most reliable)
+  2. Catbox.moe  — no API key, permanent, fast (FALLBACK 1)
+  3. 0x0.st      — no API key, expires ~1 year (FALLBACK 2)
 
-To enable Cloudinary, add to .env / Render environment:
+Cloudinary is PRIMARY because anonymous hosts (Catbox/0x0.st) go down or reject uploads
+silently, causing blank Pinterest pins with no image.
+
+To configure Cloudinary (already set in .env):
   CLOUDINARY_CLOUD_NAME = your_cloud_name
   CLOUDINARY_API_KEY    = your_api_key
   CLOUDINARY_API_SECRET = your_api_secret
@@ -77,9 +80,11 @@ def upload_image_to_host(image_path: str) -> str | None:
     Upload a local image file to a free public host.
     Returns the public HTTPS URL string, or None if all attempts fail.
 
-    Chain: Catbox → 0x0.st → Cloudinary (if configured)
+    Chain: Cloudinary (PRIMARY) -> Catbox -> 0x0.st
+    Cloudinary is first because it's permanent, configured, and never goes down.
+    Anonymous hosts (Catbox/0x0.st) silently fail and cause blank Pinterest pins.
     """
-    # ── Pre-flight: ensure the file actually exists ──────────────────────────
+    # Pre-flight: ensure the file actually exists
     if not os.path.exists(image_path):
         logger.error(
             f"[ImageHost] File not found — cannot upload: '{image_path}'. "
@@ -88,9 +93,14 @@ def upload_image_to_host(image_path: str) -> str | None:
         )
         return None
 
+    # 1. PRIMARY: Cloudinary (permanent CDN, already configured)
+    url = _upload_to_cloudinary(image_path)
+    if url:
+        return url
 
+    # 2. Fallback: Catbox.moe
     try:
-        logger.info(f"[ImageHost] Uploading to Catbox: {image_path}")
+        logger.info(f"[ImageHost] Cloudinary unavailable — trying Catbox: {image_path}")
         with open(image_path, "rb") as f:
             res = requests.post(
                 _CATBOX_URL,
@@ -109,7 +119,7 @@ def upload_image_to_host(image_path: str) -> str | None:
     except Exception as e:
         logger.warning(f"[ImageHost] Catbox upload failed: {e}")
 
-    # ── 2. Fallback: 0x0.st ─────────────────────────────────────────────────
+    # 3. Final fallback: 0x0.st
     try:
         logger.info(f"[ImageHost] Trying 0x0.st: {image_path}")
         with open(image_path, "rb") as f:
@@ -128,11 +138,6 @@ def upload_image_to_host(image_path: str) -> str | None:
             )
     except Exception as e:
         logger.warning(f"[ImageHost] 0x0.st upload failed: {e}")
-
-    # ── 3. Final backup: Cloudinary (only if API key configured) ────────────
-    url = _upload_to_cloudinary(image_path)
-    if url:
-        return url
 
     logger.error("[ImageHost] All upload hosts failed. Cannot get public image URL.")
     return None
