@@ -137,6 +137,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/preview        - Last pin with image\n"
         "/logs           - Recent log output\n"
         "/queue          - Pending queue breakdown\n"
+        "/schedule       - Today's posting schedule (Auto: 8 AM IST)\n"
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- POSTING ---\n"
@@ -384,7 +385,6 @@ async def _send_daily_report(chat_id):
                 + "\n".join(lines)
             )
 
-        # Send (split if too long)
         for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
             await _app_ref.bot.send_message(chat_id=chat_id, text=chunk)
         logger.info(f"[TG BOT] Daily report sent to {chat_id}")
@@ -393,9 +393,77 @@ async def _send_daily_report(chat_id):
         logger.error(f"[TG BOT] Daily report error: {e}")
 
 
+async def _send_daily_morning_schedule(chat_id: str):
+    """
+    Sends today's scheduled posting plan and upcoming pins to the admin at 8:00 AM IST.
+    """
+    try:
+        from database import get_queue_counts, get_queue_detail, get_upcoming_queued_pins
+        from scheduler import get_upcoming_slot_times
+
+        counts = get_queue_counts()
+        total = counts["total"]
+        details = get_queue_detail()
+        upcoming = get_upcoming_queued_pins(limit=5)
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%d %b %Y")
+
+        slot_times = []
+        try:
+            slot_times = get_upcoming_slot_times(count=max(len(upcoming), 1))
+        except Exception:
+            pass
+
+        upcoming_lines = []
+        for i, p in enumerate(upcoming):
+            p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
+            time_label = slot_times[i] if i < len(slot_times) else f"{p['scheduled_date']} ({p_type})"
+            upcoming_lines.append(
+                f"{i+1}. 🌸 {p['title']}\n"
+                f"   🎌 Anime: {p['anime_name']}\n"
+                f"   ⏰ Scheduled: {time_label}"
+            )
+        upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None queued yet."
+
+        lines = []
+        for d in details:
+            parts = []
+            if d["new"] > 0:
+                parts.append(f"{d['new']} NEW")
+            if d["backlog"] > 0:
+                parts.append(f"{d['backlog']} BACKLOG")
+            lines.append(f"  • {d['date']}: {', '.join(parts)}")
+        breakdown = "\n".join(lines) if lines else "  • No dates scheduled"
+
+        msg = (
+            f"☀️ Good Morning! Daily Pinterest Posting Schedule\n"
+            f"📅 {today_str} • 08:00 AM IST\n"
+            f"{'═' * 32}\n\n"
+            f"📊 Queue Status: {total} pin(s) ready\n"
+            f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n\n"
+            f"📌 Today's Scheduled Pins & Times:\n"
+            f"{upcoming_text}\n\n"
+            f"📅 Daily Distribution:\n{breakdown}\n\n"
+            f"👉 Use /post_now to publish pin #1 immediately\n"
+            f"👉 Use /scrape to check channels for fresh posts\n"
+            f"👉 Use /queue to inspect full queue anytime"
+        )
+
+        for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
+            await _app_ref.bot.send_message(chat_id=chat_id, text=chunk)
+        logger.info(f"[TG BOT] 8:00 AM Morning schedule sent to {chat_id}")
+    except Exception as e:
+        logger.error(f"[TG BOT] 8:00 AM schedule report error: {e}", exc_info=True)
+
+
 def _start_daily_summary_thread(token: str, admin_chat_id: str):
     """
-    Background thread that sends a daily summary at 9:00 AM IST (03:30 UTC).
+    Background thread that sends:
+      • 8:00 AM IST (02:30 UTC): Today's Schedule & upcoming pins
+      • 9:00 AM IST (03:30 UTC): Daily summary report
+      • 10:00 AM IST (04:30 UTC): Automated 3-Day Health Check
+      • 10:30 AM IST (05:00 UTC): Monthly Self-Healing Link Audit
     Dynamically reads admin_chat_id from _state so it always finds the correct chat.
     """
     def _get_chat_id():
@@ -407,10 +475,24 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
         )
 
     def _loop():
-        logger.info("[TG BOT] Daily summary & 3-Day Health Check scheduler started.")
+        logger.info("[TG BOT] Daily summary & 8 AM Schedule scheduler started.")
         sent_today = None
+        sent_schedule_today = None
         while True:
             now_utc = datetime.datetime.utcnow()
+
+            # 08:00 AM IST = 02:30 UTC -> Daily Morning Schedule
+            if now_utc.hour == 2 and now_utc.minute == 30 and now_utc.date() != sent_schedule_today:
+                chat_id = _get_chat_id()
+                if _app_ref and chat_id and _loop_ref:
+                    sent_schedule_today = now_utc.date()
+                    logger.info(f"[TG BOT] Sending 8:00 AM daily schedule to {chat_id}...")
+                    asyncio.run_coroutine_threadsafe(
+                        _send_daily_morning_schedule(chat_id), _loop_ref
+                    )
+                else:
+                    logger.warning("[TG BOT] 8 AM schedule skipped — admin chat ID not set yet.")
+
             # 09:00 AM IST = 03:30 UTC -> Daily Summary Report
             if now_utc.hour == 3 and now_utc.minute == 30 and now_utc.date() != sent_today:
                 chat_id = _get_chat_id()
@@ -422,6 +504,7 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                     )
                 else:
                     logger.warning("[TG BOT] Daily report skipped — admin chat ID not set yet.")
+
 
             # 10:00 AM IST = 04:30 UTC -> Automated 3-Day Health Check
             if now_utc.hour == 4 and now_utc.minute == 30:
@@ -742,6 +825,12 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"👉 Use /post_now to publish pin #1 immediately.\n"
         f"👉 Use /scrape to fetch more pins from channels."
     )
+
+
+async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show today's 8:00 AM daily schedule report on demand."""
+    if not _is_admin(update): return
+    await _send_daily_morning_schedule(str(update.effective_chat.id))
 
 
 
@@ -1391,6 +1480,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("pause",         cmd_pause),
             ("resume",        cmd_resume),
             ("queue",         cmd_queue),
+            ("schedule",      cmd_schedule),
             ("clearqueue",    cmd_clearqueue),
             ("scrape",        cmd_scrape),
             ("post_now",      cmd_postnow),
@@ -1445,6 +1535,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("pause",         "Pause posting"),
                 BotCommand("resume",        "Resume posting"),
                 BotCommand("post_now",      "Force-post next queued pin NOW"),
+                BotCommand("schedule",      "Today's posting schedule (Auto: 8 AM)"),
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("help",          "Show all commands"),
