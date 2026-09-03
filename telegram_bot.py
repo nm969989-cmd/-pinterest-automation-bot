@@ -141,6 +141,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/ping           - Check bot is alive\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
+        "/scrape         - Scrape channels for new pins immediately\n"
         f"/autopilot      - Toggle auto-post vs approval mode (Webhook: {make_status})\n"
         "/testpost       - Send a test pin right now via webhook\n\n"
         "--- CONTROL ---\n"
@@ -739,6 +740,25 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await update.message.reply_text(f"Error clearing queue: {e}")
         logger.error(f"[TG BOT] clearqueue error: {e}")
 
+async def cmd_scrape(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Manually trigger channel scraping & backlog fetch immediately."""
+    if not _is_admin(update): return
+    await update.message.reply_text("🔄 Scraping channels and fetching fresh images... Please wait ~15-30s.")
+    try:
+        from telegram_listener import scrape_all_channels
+        import asyncio
+        loop = asyncio.get_running_loop()
+        new_found, queue_total = await loop.run_in_executor(None, scrape_all_channels)
+        await update.message.reply_text(
+            f"✅ Scrape completed!\n"
+            f"• New posts found: {new_found}\n"
+            f"• Current queue: {queue_total} pin(s)\n\n"
+            f"Use /post_now to publish immediately!"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Scrape error: {e}")
+        logger.error(f"[TG BOT] scrape error: {e}", exc_info=True)
+
 async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
     Force-post the next queued pin immediately, bypassing the scheduled time slot.
@@ -774,7 +794,17 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             # ── Pull next pin ─────────────────────────────────────────────────
             pin = pop_next_pin_for_immediate_post()
             if not pin:
-                await update.message.reply_text("Queue is now empty — nothing to post.")
+                if stale_dropped > 0:
+                    await update.message.reply_text(
+                        f"⚠️ All {stale_dropped} pin(s) in the queue had expired CDN links (older than 48h from past restarts).\n"
+                        f"They were safely cleared from the queue.\n\n"
+                        f"👉 Run /scrape to fetch fresh images now, or send any photo directly to this bot!"
+                    )
+                else:
+                    await update.message.reply_text(
+                        "Queue is empty!\n\n"
+                        "👉 Run /scrape to fetch fresh images now, or send any photo directly to this bot!"
+                    )
                 return
 
             image_path = pin["image_path"]
@@ -1333,6 +1363,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("resume",        cmd_resume),
             ("queue",         cmd_queue),
             ("clearqueue",    cmd_clearqueue),
+            ("scrape",        cmd_scrape),
             ("post_now",      cmd_postnow),
             ("clicks",        cmd_clicks),
             ("earnings",      cmd_clicks),
@@ -1385,6 +1416,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("pause",         "Pause posting"),
                 BotCommand("resume",        "Resume posting"),
                 BotCommand("post_now",      "Force-post next queued pin NOW"),
+                BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("help",          "Show all commands"),
             ])

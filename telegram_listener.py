@@ -281,30 +281,49 @@ def start_listener():
     for ch in TELEGRAM_CHANNELS:
         logger.info(f"  • {ch}")
 
-    while True:
-        total_new = 0
-        for channel in TELEGRAM_CHANNELS:
-            new = check_channel(channel)
-            total_new += new
-            if len(TELEGRAM_CHANNELS) > 1:
-                time.sleep(random.randint(3, 8))
+def scrape_all_channels() -> tuple[int, int]:
+    """
+    Runs one scrape pass across all channels: checks for new posts and
+    fills backlog if queue is low. Can be called on-demand via /scrape.
+    Returns (new_found, total_queue_count).
+    """
+    total_new = 0
+    for channel in TELEGRAM_CHANNELS:
+        new = check_channel(channel)
+        total_new += new
+        if len(TELEGRAM_CHANNELS) > 1:
+            time.sleep(random.randint(2, 5))
 
-        # If no new images found → check backlog
-        if total_new == 0:
-            from database import get_queue_counts
-            counts = get_queue_counts()
-            # Only fill backlog if queue is running low (< 3 backlog items)
-            if counts["backlog"] < 3:
-                logger.info(
-                    f"[Backlog] No new posts and only {counts['backlog']} backlog items. "
-                    f"Scanning for old posts..."
-                )
-                for channel in TELEGRAM_CHANNELS:
-                    _backlog_scrape(channel, max_posts=BACKLOG_MAX_POSTS)
-            else:
-                logger.info(
-                    f"[Backlog] No new posts. Backlog queue has {counts['backlog']} items — OK."
-                )
+    # If no new images or queue is low → fill backlog
+    from database import get_queue_counts
+    counts = get_queue_counts()
+    if counts["backlog"] < 3:
+        logger.info(
+            f"[Backlog] No new posts and only {counts['backlog']} backlog items. "
+            f"Scanning for old posts..."
+        )
+        for channel in TELEGRAM_CHANNELS:
+            _backlog_scrape(channel, max_posts=BACKLOG_MAX_POSTS)
+
+    final_counts = get_queue_counts()
+    return total_new, final_counts["total"]
+
+
+def start_listener():
+    """Starts the scraping loop. Runs backlog mode when no new posts found."""
+    if not TELEGRAM_CHANNELS:
+        logger.error("No channels configured. Set TELEGRAM_CHANNELS in .env")
+        return
+
+    logger.info(f"Starting Telegram Web Scraper — watching {len(TELEGRAM_CHANNELS)} channel(s)...")
+    for ch in TELEGRAM_CHANNELS:
+        logger.info(f"  • {ch}")
+
+    while True:
+        try:
+            scrape_all_channels()
+        except Exception as e:
+            logger.error(f"[Scraper] Error in scrape cycle: {e}")
 
         # Jitter sleep
         base_seconds = SCRAPE_INTERVAL_MINUTES * 60
@@ -312,3 +331,4 @@ def start_listener():
         actual_delay = base_seconds + random.randint(-jitter, jitter)
         logger.info(f"All channels checked. Sleeping {actual_delay/60:.1f} min before next cycle.")
         time.sleep(actual_delay)
+
