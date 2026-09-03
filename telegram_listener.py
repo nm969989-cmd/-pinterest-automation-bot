@@ -281,7 +281,7 @@ def start_listener():
     for ch in TELEGRAM_CHANNELS:
         logger.info(f"  • {ch}")
 
-def scrape_all_channels() -> tuple[int, int]:
+def scrape_all_channels(max_backlog: int = 10) -> tuple[int, int]:
     """
     Runs one scrape pass across all channels: checks for new posts and
     fills backlog if queue is low. Can be called on-demand via /scrape.
@@ -297,16 +297,17 @@ def scrape_all_channels() -> tuple[int, int]:
     # If no new images or queue is low → fill backlog
     from database import get_queue_counts
     counts = get_queue_counts()
-    if counts["backlog"] < 3:
+    if counts["backlog"] < 5:
         logger.info(
-            f"[Backlog] No new posts and only {counts['backlog']} backlog items. "
-            f"Scanning for old posts..."
+            f"[Backlog] Queue has {counts['backlog']} backlog items. "
+            f"Scanning up to {max_backlog} older posts..."
         )
         for channel in TELEGRAM_CHANNELS:
-            _backlog_scrape(channel, max_posts=BACKLOG_MAX_POSTS)
+            _backlog_scrape(channel, max_posts=max_backlog)
 
     final_counts = get_queue_counts()
     return total_new, final_counts["total"]
+
 
 
 def start_listener():

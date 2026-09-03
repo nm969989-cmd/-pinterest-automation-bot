@@ -748,7 +748,7 @@ async def cmd_scrape(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         from telegram_listener import scrape_all_channels
         import asyncio
         loop = asyncio.get_running_loop()
-        new_found, queue_total = await loop.run_in_executor(None, scrape_all_channels)
+        new_found, queue_total = await loop.run_in_executor(None, lambda: scrape_all_channels(max_backlog=5))
         await update.message.reply_text(
             f"✅ Scrape completed!\n"
             f"• New posts found: {new_found}\n"
