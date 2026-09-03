@@ -99,10 +99,11 @@ def save_cloud_state() -> bool:
             queue = [
                 {"post_id": r[0], "image_path": r[1], "title": r[2],
                  "description": r[3], "link": r[4], "anime_name": r[5],
-                 "image_url": r[6], "priority": r[7], "scheduled_date": r[8]}
+                 "image_url": r[6], "board_id": r[7], "priority": r[8],
+                 "scheduled_date": r[9]}
                 for r in conn.execute(
                     "SELECT post_id, image_path, title, description, link, "
-                    "anime_name, image_url, priority, scheduled_date FROM pin_queue"
+                    "anime_name, image_url, board_id, priority, scheduled_date FROM pin_queue"
                 ).fetchall()
             ]
 
@@ -168,21 +169,22 @@ def restore_db_from_cloud():
                   u.get("anime_name",""), u.get("image_url",""))
                  for u in uploads]
             )
-            # Restore pin queue
+            # Restore pin queue (including board_id)
             queue = state.get("pin_queue", [])
             conn.executemany(
                 "INSERT OR IGNORE INTO pin_queue "
                 "(post_id, image_path, title, description, link, "
-                "anime_name, image_url, priority, scheduled_date) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "anime_name, image_url, board_id, priority, scheduled_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [(q.get("post_id",""), q.get("image_path",""),
                   q.get("title",""), q.get("description",""),
                   q.get("link",""), q.get("anime_name",""),
-                  q.get("image_url",""), q.get("priority",0),
-                  q.get("scheduled_date",""))
+                  q.get("image_url",""), q.get("board_id",""),
+                  q.get("priority",0), q.get("scheduled_date",""))
                  for q in queue]
             )
             conn.commit()
+
 
         logger.info(
             f"[JSONBin] Restored from cloud: {len(posts)} posts, "
