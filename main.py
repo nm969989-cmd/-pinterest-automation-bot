@@ -22,9 +22,11 @@ else:
 
 logger = get_logger(__name__)
 
-def handle_new_image(filepath, caption, channel_name):
+def handle_new_image(filepath, caption, channel_name, image_url=""):
     """
     Callback fired when a new image is downloaded from Telegram.
+    image_url: the original Telegram CDN URL — stored in queue so we can
+               re-download the image if Render's ephemeral FS wipes local files.
     Wrapped in try/except so one bad image never crashes the whole bot.
     """
     try:
@@ -94,6 +96,7 @@ def handle_new_image(filepath, caption, channel_name):
                 link=amazon_link,
                 anime_name=anime_name,
                 board_id=board_id,
+                image_url=image_url,  # Store Telegram CDN URL for file resurrection after restarts
             )
 
         # 10. Clean up original download to save disk space (keep processed copy)

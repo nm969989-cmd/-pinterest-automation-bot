@@ -332,6 +332,19 @@ def increment_retry_count(pin_id: int) -> int:
     return new_count[0] if new_count else 0
 
 
+def update_pin_image_path(pin_id: int, new_image_path: str):
+    """
+    Updates the image_path for a queued pin after the file has been
+    re-downloaded (e.g. after Render's ephemeral FS wiped it on restart).
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE pin_queue SET image_path = ? WHERE id = ?",
+            (new_image_path, pin_id),
+        )
+        conn.commit()
+
+
 def get_weekly_stats() -> dict:
     """
     Returns posting statistics for the last 7 days.

@@ -79,7 +79,16 @@ def upload_image_to_host(image_path: str) -> str | None:
 
     Chain: Catbox → 0x0.st → Cloudinary (if configured)
     """
-    # ── 1. Primary: Catbox.moe ───────────────────────────────────────────────
+    # ── Pre-flight: ensure the file actually exists ──────────────────────────
+    if not os.path.exists(image_path):
+        logger.error(
+            f"[ImageHost] File not found — cannot upload: '{image_path}'. "
+            f"This usually means Render restarted and wiped the ephemeral FS. "
+            f"The scheduler should have re-downloaded it; check resurrection logs."
+        )
+        return None
+
+
     try:
         logger.info(f"[ImageHost] Uploading to Catbox: {image_path}")
         with open(image_path, "rb") as f:

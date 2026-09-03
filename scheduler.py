@@ -9,6 +9,7 @@ Smart Pin Scheduler
 - Multi-day queue is persisted in SQLite (survives restarts)
 """
 
+import os
 import time
 import random
 import threading
@@ -248,7 +249,7 @@ class PinScheduler:
         from database import (get_next_queued_pin, remove_queued_pin,
                                count_posts_today, mark_file_uploaded,
                                is_file_uploaded, is_image_url_uploaded,
-                               increment_retry_count)
+                               increment_retry_count, update_pin_image_path)
         from pinterest_uploader import upload_to_pinterest
 
         self.is_running = True
@@ -310,67 +311,130 @@ class PinScheduler:
                                 f"[Scheduler] Posting {'NEW' if pin['priority']==1 else 'BACKLOG'} pin: "
                                 f"'{pin['title']}'"
                             )
-                            # Build alt_text for Pinterest SEO
-                            alt_text = (
-                                f"{pin['anime_name']} anime art poster wallpaper "
-                                f"{pin['title'].replace('-', ' ')}"
-                            )[:500]
 
-                            success = upload_to_pinterest(
-                                image_path=pin["image_path"],
-                                title=pin["title"],
-                                description=pin["description"],
-                                link=pin["link"],
-                                anime_name=pin["anime_name"],
-                                board_id=pin.get("board_id", ""),
-                                alt_text=alt_text,
-                            )
-                            if success:
-                                remove_queued_pin(pin["id"])
-                                now_ist = _ist_now().strftime("%I:%M %p")
-                                pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
-                                # Re-count from DB after mark_file_uploaded was called inside upload_to_pinterest
-                                counts_after = count_posts_today(today_ist)
-                                logger.info(
-                                    f"[Scheduler] Pin posted. Today: "
-                                    f"{counts_after}/{MAX_POSTS_PER_DAY}"
-                                )
-                                # Telegram notification
-                                self._notify_pin_posted(
-                                    title=pin["title"],
-                                    anime_name=pin["anime_name"],
-                                    link=pin["link"],
-                                    image_path=pin["image_path"],
-                                    pin_type=pin_type,
-                                    posted_today=counts_after,
-                                    time_ist=now_ist,
-                                )
-                            else:
-                                # Auto-retry logic: increment counter, drop after 3 fails
-                                MAX_RETRIES = 3
-                                new_count = increment_retry_count(pin["id"])
-                                if new_count >= MAX_RETRIES:
-                                    logger.error(
-                                        f"[Scheduler] Pin failed {MAX_RETRIES} times, "
-                                        f"dropping: '{pin['title']}'"
-                                    )
-                                    remove_queued_pin(pin["id"])
-                                    # Notify admin via Telegram
-                                    try:
-                                        from telegram_bot import notify_admin
-                                        notify_admin(
-                                            f"[Bot Alert] Pin dropped after {MAX_RETRIES} failed "
-                                            f"upload attempts:\n'{pin['title']}'\n"
-                                            f"Anime: {pin['anime_name']}\n"
-                                            f"Check /logs for details."
-                                        )
-                                    except Exception:
-                                        pass
-                                else:
+                            # ── File resurrection (Render ephemeral FS fix) ───
+                            # Render's free tier wipes the filesystem on every
+                            # restart/spin-down. If the image file is gone but
+                            # the queue row has the original Telegram CDN URL,
+                            # re-download and re-process it automatically.
+                            image_path = pin["image_path"]
+                            if not os.path.exists(image_path):
+                                cdn_url = pin.get("image_url", "")
+                                if cdn_url and cdn_url.startswith("http"):
                                     logger.warning(
-                                        f"[Scheduler] Upload failed (attempt {new_count}/{MAX_RETRIES}). "
-                                        f"Pin stays in queue: '{pin['title']}'"
+                                        f"[Scheduler] Image file missing (Render FS wipe?): {image_path}\n"
+                                        f"[Scheduler] Re-downloading from CDN: {cdn_url}"
                                     )
+                                    try:
+                                        from telegram_listener import download_image
+                                        from image_processor import process_image
+                                        safe_name = os.path.splitext(os.path.basename(image_path))[0]
+                                        dl_path = download_image(cdn_url, safe_name)
+                                        if dl_path:
+                                            image_path = process_image(dl_path)
+                                            update_pin_image_path(pin["id"], image_path)
+                                            logger.info(
+                                                f"[Scheduler] Re-download success: {image_path}"
+                                            )
+                                        else:
+                                            raise RuntimeError("download_image returned None")
+                                    except Exception as re_err:
+                                        logger.error(
+                                            f"[Scheduler] Re-download failed for '{pin['title']}': {re_err}"
+                                        )
+                                        new_count = increment_retry_count(pin["id"])
+                                        if new_count >= 3:
+                                            remove_queued_pin(pin["id"])
+                                            logger.error(
+                                                f"[Scheduler] Dropped pin after 3 failed re-downloads: '{pin['title']}'"
+                                            )
+                                            try:
+                                                from telegram_bot import notify_admin
+                                                notify_admin(
+                                                    f"⚠️ Pin dropped — image lost & CDN expired:\n"
+                                                    f"'{pin['title']}'\n"
+                                                    f"Anime: {pin['anime_name']}\n"
+                                                    f"The Telegram CDN URL has expired. "
+                                                    f"Re-send the image to re-queue it."
+                                                )
+                                            except Exception:
+                                                pass
+                                        else:
+                                            logger.warning(
+                                                f"[Scheduler] Will retry re-download next slot "
+                                                f"(attempt {new_count}/3): '{pin['title']}'"
+                                            )
+                                        # Skip this slot — don't attempt upload with no file
+                                        image_path = None
+                                else:
+                                    logger.error(
+                                        f"[Scheduler] Image file missing and no CDN URL stored. "
+                                        f"Cannot recover pin: '{pin['title']}'. "
+                                        f"Dropping after next retry cycle."
+                                    )
+                                    increment_retry_count(pin["id"])
+                                    image_path = None
+
+                            if image_path:
+                                # Build alt_text for Pinterest SEO
+                                alt_text = (
+                                    f"{pin['anime_name']} anime art poster wallpaper "
+                                    f"{pin['title'].replace('-', ' ')}"
+                                )[:500]
+
+                                success = upload_to_pinterest(
+                                    image_path=image_path,
+                                    title=pin["title"],
+                                    description=pin["description"],
+                                    link=pin["link"],
+                                    anime_name=pin["anime_name"],
+                                    board_id=pin.get("board_id", ""),
+                                    alt_text=alt_text,
+                                )
+                                if success:
+                                    remove_queued_pin(pin["id"])
+                                    now_ist = _ist_now().strftime("%I:%M %p")
+                                    pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+                                    counts_after = count_posts_today(today_ist)
+                                    logger.info(
+                                        f"[Scheduler] Pin posted. Today: "
+                                        f"{counts_after}/{MAX_POSTS_PER_DAY}"
+                                    )
+                                    self._notify_pin_posted(
+                                        title=pin["title"],
+                                        anime_name=pin["anime_name"],
+                                        link=pin["link"],
+                                        image_path=image_path,
+                                        pin_type=pin_type,
+                                        posted_today=counts_after,
+                                        time_ist=now_ist,
+                                    )
+                                else:
+                                    # Auto-retry: drop after 3 fails
+                                    MAX_RETRIES = 3
+                                    new_count = increment_retry_count(pin["id"])
+                                    if new_count >= MAX_RETRIES:
+                                        logger.error(
+                                            f"[Scheduler] Pin failed {MAX_RETRIES} times, "
+                                            f"dropping: '{pin['title']}'"
+                                        )
+                                        remove_queued_pin(pin["id"])
+                                        try:
+                                            from telegram_bot import notify_admin
+                                            notify_admin(
+                                                f"[Bot Alert] Pin dropped after {MAX_RETRIES} failed "
+                                                f"upload attempts:\n'{pin['title']}'\n"
+                                                f"Anime: {pin['anime_name']}\n"
+                                                f"Check /logs for details."
+                                            )
+                                        except Exception:
+                                            pass
+                                    else:
+                                        logger.warning(
+                                            f"[Scheduler] Upload failed (attempt {new_count}/{MAX_RETRIES}). "
+                                            f"Pin stays in queue: '{pin['title']}'"
+                                        )
+
                     elif self._mem_queue:
                         # Fallback: in-memory queue (approval mode)
                         with self._lock:

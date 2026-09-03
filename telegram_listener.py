@@ -154,7 +154,7 @@ def check_channel(channel: str) -> int:
         filepath = download_image(img_url, f"post_{safe_post_id}")
 
         if filepath and _on_new_image_callback:
-            _on_new_image_callback(filepath, caption, clean_channel)
+            _on_new_image_callback(filepath, caption, clean_channel, img_url)
             new_found += 1
 
         mark_post_processed(post_id)
