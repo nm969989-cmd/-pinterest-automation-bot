@@ -679,12 +679,13 @@ async def cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-    """Show the real pending queue from SQLite with per-date breakdown."""
+    """Show the real pending queue from SQLite with upcoming pin titles, schedule & countdown."""
     if not _is_admin(update): return
     try:
-        from database import get_queue_counts, get_queue_detail
-        counts  = get_queue_counts()
-        details = get_queue_detail()
+        from database import get_queue_counts, get_queue_detail, get_upcoming_queued_pins
+        counts   = get_queue_counts()
+        details  = get_queue_detail()
+        upcoming = get_upcoming_queued_pins(limit=5)
     except Exception as e:
         await update.message.reply_text(f"Could not read queue: {e}")
         return
@@ -692,10 +693,30 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     total = counts["total"]
     if total == 0:
         await update.message.reply_text(
-            "Queue is empty.\n"
-            "Bot will add pins after next scrape cycle (~10 min)."
+            "Queue is empty.\n\n"
+            "👉 Run /scrape to fetch new pins now, or send any photo directly to this bot!"
         )
         return
+
+    # Calculate time until next automatic post
+    time_to_next = "soon"
+    try:
+        from scheduler import scheduler
+        mins = scheduler._minutes_to_next_slot()
+        h, m = divmod(mins, 60)
+        time_to_next = f"in ~{h}h {m}m" if h > 0 else f"in ~{m}m"
+    except Exception:
+        pass
+
+    # Build upcoming pins section (titles & anime)
+    upcoming_lines = []
+    for i, p in enumerate(upcoming, 1):
+        p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
+        upcoming_lines.append(
+            f"{i}. 🌸 {p['title']}\n"
+            f"   🎌 Anime: {p['anime_name']} | 📅 {p['scheduled_date']} ({p_type})"
+        )
+    upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None"
 
     # Build per-date breakdown
     lines = []
@@ -705,16 +726,20 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             parts.append(f"{d['new']} NEW")
         if d["backlog"] > 0:
             parts.append(f"{d['backlog']} BACKLOG")
-        lines.append(f"  {d['date']}: {', '.join(parts)}")
-
+        lines.append(f"  • {d['date']}: {', '.join(parts)}")
     breakdown = "\n".join(lines)
+
     await update.message.reply_text(
-        f"Pending Queue: {total} pin(s) total\n"
-        f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n\n"
-        f"Schedule:\n{breakdown}\n\n"
-        f"Use /post_now to force-post immediately.\n"
-        f"Use /clearqueue to wipe all pending pins."
+        f"📋 Pending Queue: {total} pin(s) total\n"
+        f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n"
+        f"⏰ Next Auto-Post: {time_to_next}\n\n"
+        f"📌 Upcoming Pins in Line:\n"
+        f"{upcoming_text}\n\n"
+        f"📅 Daily Distribution:\n{breakdown}\n\n"
+        f"👉 Use /post_now to publish the #1 pin immediately.\n"
+        f"👉 Use /scrape to fetch more pins from channels."
     )
+
 
 
 async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):

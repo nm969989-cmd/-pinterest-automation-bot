@@ -440,6 +440,31 @@ def get_queue_detail() -> list[dict]:
     ]
 
 
+def get_upcoming_queued_pins(limit: int = 5) -> list[dict]:
+    """
+    Returns the next `limit` pins in line to be posted, ordered by priority DESC, id ASC.
+    Used by /queue to show the titles and anime names of upcoming pins.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, title, anime_name, priority, scheduled_date
+            FROM pin_queue
+            ORDER BY priority DESC, id ASC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "anime_name": r[2],
+            "priority": r[3],
+            "scheduled_date": r[4]
+        }
+        for r in rows
+    ]
+
+
+
 def pop_next_pin_for_immediate_post() -> dict | None:
     """
     Fetches and REMOVES the next highest-priority pin from the queue,
