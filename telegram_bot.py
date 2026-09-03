@@ -698,23 +698,26 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         )
         return
 
-    # Calculate time until next automatic post
-    time_to_next = "soon"
+    # Calculate upcoming slot times with exact clock time
+    slot_times = []
+    next_post_label = "soon"
     try:
-        from scheduler import scheduler
-        mins = scheduler._minutes_to_next_slot()
-        h, m = divmod(mins, 60)
-        time_to_next = f"in ~{h}h {m}m" if h > 0 else f"in ~{m}m"
+        from scheduler import get_upcoming_slot_times
+        slot_times = get_upcoming_slot_times(count=max(len(upcoming), 1))
+        if slot_times:
+            next_post_label = slot_times[0]
     except Exception:
         pass
 
-    # Build upcoming pins section (titles & anime)
+    # Build upcoming pins section (titles, anime & exact posting time)
     upcoming_lines = []
-    for i, p in enumerate(upcoming, 1):
+    for i, p in enumerate(upcoming):
         p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
+        time_label = slot_times[i] if i < len(slot_times) else f"{p['scheduled_date']} ({p_type})"
         upcoming_lines.append(
-            f"{i}. 🌸 {p['title']}\n"
-            f"   🎌 Anime: {p['anime_name']} | 📅 {p['scheduled_date']} ({p_type})"
+            f"{i+1}. 🌸 {p['title']}\n"
+            f"   🎌 Anime: {p['anime_name']}\n"
+            f"   ⏰ Scheduled: {time_label}"
         )
     upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None"
 
@@ -732,13 +735,14 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     await update.message.reply_text(
         f"📋 Pending Queue: {total} pin(s) total\n"
         f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n"
-        f"⏰ Next Auto-Post: {time_to_next}\n\n"
-        f"📌 Upcoming Pins in Line:\n"
+        f"⏰ Next Auto-Post: {next_post_label}\n\n"
+        f"📌 Upcoming Pins & Scheduled Times:\n"
         f"{upcoming_text}\n\n"
         f"📅 Daily Distribution:\n{breakdown}\n\n"
-        f"👉 Use /post_now to publish the #1 pin immediately.\n"
+        f"👉 Use /post_now to publish pin #1 immediately.\n"
         f"👉 Use /scrape to fetch more pins from channels."
     )
+
 
 
 

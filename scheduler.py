@@ -82,6 +82,47 @@ def _today_ist() -> str:
     return _ist_now().strftime("%Y-%m-%d")
 
 
+def get_upcoming_slot_times(count: int = 5) -> list[str]:
+    """
+    Returns the next `count` exact scheduled posting slot times in IST.
+    e.g. ['Today @ 06:17 PM IST (in ~3h 41m)', 'Tomorrow @ ~09:00 AM IST', ...]
+    Used by the /queue Telegram command to display exact posting times.
+    """
+    now_utc = datetime.datetime.utcnow()
+    now_ist = _ist_now()
+    today_utc = now_utc.date()
+
+    jittered_utc = _get_jittered_times_utc()
+    slots = []
+
+    # Check today's remaining jittered slots (converted to IST)
+    for (h, m) in jittered_utc:
+        slot_utc = datetime.datetime(today_utc.year, today_utc.month, today_utc.day, h, m)
+        slot_ist = slot_utc + datetime.timedelta(hours=5, minutes=30)
+        if slot_ist > now_ist:
+            mins_away = int((slot_ist - now_ist).total_seconds() / 60)
+            h_diff, m_diff = divmod(mins_away, 60)
+            countdown = f"in ~{h_diff}h {m_diff}m" if h_diff > 0 else f"in ~{m_diff}m"
+            slots.append(f"Today @ {slot_ist.strftime('%I:%M %p')} IST ({countdown})")
+
+    # Fill remaining slots with upcoming future days
+    day_offset = 1
+    while len(slots) < count:
+        target_date = now_ist.date() + datetime.timedelta(days=day_offset)
+        prefix = "Tomorrow" if day_offset == 1 else target_date.strftime("%b %d")
+        for (bh, bm) in _BASE_POST_TIMES_UTC:
+            b_dt = datetime.datetime(
+                target_date.year, target_date.month, target_date.day, bh, bm
+            ) + datetime.timedelta(hours=5, minutes=30)
+            slots.append(f"{prefix} @ ~{b_dt.strftime('%I:%M %p')} IST")
+            if len(slots) >= count:
+                break
+        day_offset += 1
+
+    return slots[:count]
+
+
+
 def _assign_scheduled_date(queue_position: int) -> str:
     """
     Given a position in the queue (0-indexed), calculate which date to post.
