@@ -739,103 +739,91 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await update.message.reply_text(f"Error clearing queue: {e}")
         logger.error(f"[TG BOT] clearqueue error: {e}")
 
-async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", _depth: int = 0):
+async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
     Force-post the next queued pin immediately, bypassing the scheduled time slot.
-    Useful when you want a pin live NOW without waiting for 9 AM / 1 PM / 6 PM.
-    _depth: internal recursion counter — stops after 10 skipped stale pins.
+    Loops silently through stale (expired CDN) pins and sends exactly ONE result
+    message — no per-pin spam.
     """
     if not _is_admin(update): return
-    # Guard: stop recursing if we've skipped too many stale pins
-    if _depth >= 10:
-        await update.message.reply_text(
-            "⚠️ Tried 10 pins — all had expired CDN URLs.\n"
-            "The queue contains stale images from before the last Render restart.\n\n"
-            "👉 Use /clearqueue to wipe stale pins, then wait for new images from the channel."
-        )
-        return
     try:
-        from database import pop_next_pin_for_immediate_post, get_queue_counts
+        import requests as _req
+        from telegram_listener import download_image
+        from image_processor import process_image
+        from pinterest_uploader import upload_to_pinterest
+        from database import (pop_next_pin_for_immediate_post, get_queue_counts,
+                               enqueue_pin, remove_queued_pin)
+
+        # ── Quick check: is there anything in the queue? ─────────────────────
         counts = get_queue_counts()
         if counts["total"] == 0:
             await update.message.reply_text(
-                "Queue is empty! No pins to post.\n"
-                "Wait for the scraper to pick up images from your Telegram channels."
+                "Queue is empty!\n"
+                "Wait for the scraper to pick up new images from your Telegram channel."
             )
             return
 
-        pin = pop_next_pin_for_immediate_post()
-        if not pin:
-            await update.message.reply_text("Could not fetch a pin from the queue.")
-            return
-
-        pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
         await update.message.reply_text(
-            f"Posting {pin_type} pin immediately...\n"
-            f"Title: {pin['title']}\n"
-            f"Anime: {pin['anime_name']}"
+            f"🔍 Scanning queue ({counts['total']} pin(s))… please wait."
         )
 
-        # ── File resurrection: re-download if Render wiped the FS ───────────
-        image_path = pin["image_path"]
-        if not os.path.exists(image_path):
-            cdn_url = pin.get("image_url", "")
-            if cdn_url and cdn_url.startswith("http"):
-                await update.message.reply_text(
-                    f"⚠️ Image file was lost (Render restart).\n"
-                    f"Re-downloading from Telegram CDN… please wait."
-                )
-                try:
-                    from telegram_listener import download_image
-                    from image_processor import process_image
-                    import os as _os
-                    safe_name = _os.path.splitext(_os.path.basename(image_path))[0]
-                    dl_path = download_image(cdn_url, safe_name)
-                    if dl_path:
-                        image_path = process_image(dl_path)
-                        from database import update_pin_image_path
-                        # pin was already popped; update will have no effect but good practice
-                        logger.info(f"[TG BOT] /post_now: Re-download success: {image_path}")
-                        await update.message.reply_text("✅ Re-download successful! Uploading to Pinterest…")
-                    else:
-                        raise RuntimeError("download_image returned None")
-                except Exception as rd_err:
-                    logger.error(f"[TG BOT] /post_now: Re-download failed: {rd_err}")
-                    # CDN URL is expired/dead — drop this stale pin and try next
-                    logger.warning(
-                        f"[TG BOT] /post_now: CDN URL expired for '{pin['title']}'. "
-                        f"Dropping stale pin and trying next in queue."
-                    )
-                    # DON'T re-queue — it's broken. Try the next pin instead.
-                    await update.message.reply_text(
-                        f"❌ CDN URL expired for: {pin['title']}\n"
-                        f"Dropping this stale pin.\n"
-                        f"🔄 Trying next pin in queue…"
-                    )
-                    # Recursively call ourselves to try the next pin
-                    try:
-                        await cmd_postnow(update, context, _depth=_depth + 1)
-                    except Exception:
-                        pass
-                    return
-            else:
-                logger.error(f"[TG BOT] /post_now: Image missing and no CDN URL. Cannot recover.")
-                from database import enqueue_pin
-                enqueue_pin(
-                    post_id=pin["post_id"], image_path=pin["image_path"],
-                    title=pin["title"], description=pin["description"],
-                    link=pin["link"], anime_name=pin["anime_name"],
-                    image_url=pin.get("image_url", ""),
-                    board_id=pin.get("board_id", ""),
-                    priority=pin["priority"], scheduled_date="",
-                )
-                await update.message.reply_text(
-                    f"❌ Image file is gone and no CDN URL is stored.\n"
-                    f"Pin re-queued. Re-send the image in the Telegram channel to fix it."
-                )
+        stale_dropped = 0
+        MAX_TRIES = counts["total"]  # never try more pins than exist
+
+        for attempt in range(MAX_TRIES + 1):
+            # ── Pull next pin ─────────────────────────────────────────────────
+            pin = pop_next_pin_for_immediate_post()
+            if not pin:
+                await update.message.reply_text("Queue is now empty — nothing to post.")
                 return
 
-        from pinterest_uploader import upload_to_pinterest
+            image_path = pin["image_path"]
+
+            # ── File exists — upload immediately ─────────────────────────────
+            if os.path.exists(image_path):
+                break  # fall through to upload block below
+
+            # ── File missing — try CDN re-download ───────────────────────────
+            cdn_url = pin.get("image_url", "")
+            if cdn_url and cdn_url.startswith("http"):
+                # Fast HEAD check — avoid downloading a dead URL
+                try:
+                    head = _req.head(cdn_url, timeout=5, allow_redirects=True)
+                    cdn_alive = head.status_code < 400
+                except Exception:
+                    cdn_alive = False
+
+                if cdn_alive:
+                    try:
+                        safe_name = os.path.splitext(os.path.basename(image_path))[0]
+                        dl_path = download_image(cdn_url, safe_name)
+                        if dl_path:
+                            image_path = process_image(dl_path)
+                            logger.info(f"[TG BOT] /post_now: Re-download OK: {image_path}")
+                            break  # got a good image — upload it
+                    except Exception as dl_err:
+                        logger.warning(f"[TG BOT] /post_now: Re-download failed: {dl_err}")
+
+            # ── CDN dead or no URL — silently drop this pin ───────────────────
+            logger.warning(
+                f"[TG BOT] /post_now: Dropping stale pin (CDN expired): '{pin['title']}'"
+            )
+            stale_dropped += 1
+            # pin already popped — just continue loop
+        else:
+            # Exhausted all pins without finding a good one
+            await update.message.reply_text(
+                f"⚠️ All {stale_dropped} pin(s) in the queue had expired CDN URLs.\n"
+                f"They have been automatically cleared.\n\n"
+                f"📥 The scraper will pick up fresh images next cycle (~10 min).\n"
+                f"Or send images directly to the bot to queue them now."
+            )
+            return
+
+        # ── Upload the good pin ───────────────────────────────────────────────
+        pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+        stale_note = f"\n🗑 Skipped {stale_dropped} stale pin(s) with expired CDN URLs." if stale_dropped else ""
+
         success = upload_to_pinterest(
             image_path=image_path,
             title=pin["title"],
@@ -850,46 +838,39 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", _d
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             remaining = get_queue_counts()["total"]
             from database import get_tracked_target_url
-            target_url = get_tracked_target_url(pin['link'])
-            amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != pin['link'] else ""
-            # Send text confirmation
+            target_url = get_tracked_target_url(pin["link"])
+            amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != pin["link"] else ""
             confirm_text = (
-                f"📌 Pin posted to Pinterest!\n"
+                f"📌 {pin_type} pin posted!{stale_note}\n"
                 f"{'─' * 28}\n"
-                f"📝 Title     : {pin['title']}\n"
-                f"🎌 Anime     : {pin['anime_name']}\n"
-                f"🔗 Pin Link  : {pin['link']}"
+                f"📝 Title  : {pin['title']}\n"
+                f"🎌 Anime  : {pin['anime_name']}\n"
+                f"🔗 Link   : {pin['link']}"
                 f"{amazon_line}\n\n"
-                f"📥 Remaining in queue: {remaining} pin(s)."
+                f"📥 Remaining: {remaining} pin(s)."
             )
-            # Send image preview if file exists on disk (use resurrected path if applicable)
             if image_path and os.path.exists(image_path):
                 try:
                     with open(image_path, "rb") as img_file:
-                        await update.message.reply_photo(
-                            photo=img_file,
-                            caption=confirm_text[:1024]
-                        )
+                        await update.message.reply_photo(photo=img_file, caption=confirm_text[:1024])
                 except Exception:
                     await update.message.reply_text(confirm_text)
             else:
                 await update.message.reply_text(confirm_text)
-            logger.info(f"[TG BOT] /post_now: posted '{pin['title']}'")
+            logger.info(f"[TG BOT] /post_now: posted '{pin['title']}' (skipped {stale_dropped} stale)")
         else:
-            # Upload failed — put pin back in queue so it isn't lost
-            from database import enqueue_pin
+            # Upload failed — re-queue this pin
             enqueue_pin(
-                post_id=pin["post_id"], image_path=pin["image_path"],
+                post_id=pin["post_id"], image_path=image_path,
                 title=pin["title"], description=pin["description"],
                 link=pin["link"], anime_name=pin["anime_name"],
                 image_url=pin.get("image_url", ""),
                 board_id=pin.get("board_id", ""),
-                priority=pin["priority"],
-                scheduled_date="",   # re-queue for earliest available slot
+                priority=pin["priority"], scheduled_date="",
             )
             await update.message.reply_text(
-                "Upload failed. Pin has been re-queued.\n"
-                "Check /logs for details."
+                f"❌ Upload failed — pin re-queued.{stale_note}\n"
+                f"Check /logs for details."
             )
             logger.warning(f"[TG BOT] /post_now: upload failed for '{pin['title']}' — re-queued.")
 
@@ -899,6 +880,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", _d
 
 
 # -- Make.com Webhook Commands ------------------------------------------------
+
 
 async def cmd_autopilot(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Toggle between fully automatic posting and Telegram approval mode."""
