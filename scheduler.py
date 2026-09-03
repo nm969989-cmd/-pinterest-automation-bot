@@ -34,27 +34,63 @@ _JITTER_MAX_MINUTES = 20
 
 # ── Daily jitter state ────────────────────────────────────────────────────────
 # Generated once per day. Stores (day_str, [(h_offset, m_offset), ...])
+# PERSISTED to SQLite so Render restarts don't regenerate a different jitter
+# and accidentally skip a scheduled slot.
 _jitter_cache: tuple[str, list] = ("", [])
+
+
+def _load_jitter_from_db(today: str):
+    """Load persisted jitter offsets for today from the database (if they exist)."""
+    try:
+        from database import get_metadata
+        raw = get_metadata(f"jitter_{today}", "")
+        if raw:
+            offsets = [int(x) for x in raw.split(",")]
+            if len(offsets) == len(_BASE_POST_TIMES_UTC):
+                return offsets
+    except Exception:
+        pass
+    return None
+
+
+def _save_jitter_to_db(today: str, offsets: list):
+    """Persist today's jitter offsets to DB so they survive restarts."""
+    try:
+        from database import set_metadata
+        set_metadata(f"jitter_{today}", ",".join(str(o) for o in offsets))
+    except Exception:
+        pass
 
 
 def _get_daily_jitter() -> list[tuple[int, int]]:
     """
-    Returns the list of (hour_offset, minute_offset) for each slot today.
+    Returns the list of jitter offsets (minutes) for each slot today.
+    PERSISTS to SQLite so Render restarts reuse the same jitter — preventing
+    slot times from shifting after a restart and missing a scheduled post.
     Re-generates fresh random offsets every new calendar day (IST).
-    Offsets are in range [-JITTER_MAX_MINUTES, +JITTER_MAX_MINUTES] minutes.
     """
     global _jitter_cache
     today = _ist_now().strftime("%Y-%m-%d")
     if _jitter_cache[0] != today:
-        offsets = []
-        for _ in _BASE_POST_TIMES_UTC:
-            jitter_minutes = random.randint(-_JITTER_MAX_MINUTES, _JITTER_MAX_MINUTES)
-            offsets.append(jitter_minutes)
+        # Try to load from DB first (survives Render restart)
+        offsets = _load_jitter_from_db(today)
+        if offsets is None:
+            # First run today — generate new jitter and persist it
+            offsets = [
+                random.randint(-_JITTER_MAX_MINUTES, _JITTER_MAX_MINUTES)
+                for _ in _BASE_POST_TIMES_UTC
+            ]
+            _save_jitter_to_db(today, offsets)
+            logger.info(
+                f"[Scheduler] NEW daily jitter generated & saved for {today}: "
+                + ", ".join(f"{'+' if j >= 0 else ''}{j}min" for j in offsets)
+            )
+        else:
+            logger.info(
+                f"[Scheduler] Loaded persisted jitter for {today}: "
+                + ", ".join(f"{'+' if j >= 0 else ''}{j}min" for j in offsets)
+            )
         _jitter_cache = (today, offsets)
-        logger.info(
-            f"[Scheduler] New daily jitter generated for {today}: "
-            + ", ".join(f"{'+' if j >= 0 else ''}{j}min" for j in offsets)
-        )
     return _jitter_cache[1]
 
 
@@ -235,13 +271,14 @@ class PinScheduler:
     def _should_post_now(self) -> bool:
         """
         Returns True if current UTC time matches one of the 3 daily posting slots.
-        Slot window: fires within a ±2 minute window of the target time.
+        Slot window: fires within a ±6 minute window of the target time.
+        Wider window ensures the slot fires even if bot is briefly slow/restarting.
         """
         now = datetime.datetime.utcnow()
         for (h, m) in _get_jittered_times_utc():
             slot_start = now.replace(hour=h, minute=m, second=0, microsecond=0)
             diff = abs((now - slot_start).total_seconds())
-            if diff <= 120:  # within 2 minutes of slot
+            if diff <= 360:  # within 6 minutes of slot
                 return True
         return False
 
@@ -306,6 +343,27 @@ class PinScheduler:
             f"(base: 09:00, 13:00, 18:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
+        _pending_catchup = False  # True if a missed slot needs immediate posting
+
+        # ── Catch-up check on startup ─────────────────────────────────────────
+        # If a slot was missed while the bot was down (Render restart/spin-down),
+        # fire it immediately if it was missed within the last 30 minutes.
+        now_startup = datetime.datetime.utcnow()
+        jittered_startup = _get_jittered_times_utc()
+        for (h, m) in jittered_startup:
+            slot_start = now_startup.replace(hour=h, minute=m, second=0, microsecond=0)
+            secs_past = (now_startup - slot_start).total_seconds()
+            if 0 < secs_past <= 1800:  # slot passed within last 30 min
+                slot_ist_total = h * 60 + m + 5 * 60 + 30
+                slot_ist_h = (slot_ist_total // 60) % 24
+                slot_ist_m = slot_ist_total % 60
+                logger.warning(
+                    f"[Scheduler] CATCH-UP: Missed slot {slot_ist_h:02d}:{slot_ist_m:02d} IST "
+                    f"({int(secs_past/60)} min ago — bot was restarting). Will post immediately."
+                )
+                _last_fired_slot = (h, m)  # mark it so we don't double-fire in normal loop
+                _pending_catchup = True     # signal the main loop to post NOW
+                break
 
         while self.is_running:
             now = datetime.datetime.utcnow()
@@ -317,16 +375,20 @@ class PinScheduler:
             for (h, m) in jittered_times:
                 slot_start = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 diff = abs((now - slot_start).total_seconds())
-                if diff <= 180:  # within 3 minutes of jittered slot
+                if diff <= 360:  # within 6 minutes of jittered slot (wider = safer)
                     current_slot = (h, m)
                     break
 
-            if current_slot and current_slot != _last_fired_slot:
-                _last_fired_slot = current_slot
+            # Trigger posting for: (a) normal slot OR (b) missed-slot catch-up on restart
+            if (current_slot and current_slot != _last_fired_slot) or _pending_catchup:
+                _pending_catchup = False  # consume the catch-up flag
+                if current_slot:
+                    _last_fired_slot = current_slot
+                display_slot = current_slot or _last_fired_slot or (0, 0)
                 today_posted = count_posts_today(today_ist)
 
                 # Convert UTC slot to IST for display
-                slot_ist_total = current_slot[0] * 60 + current_slot[1] + 5 * 60 + 30
+                slot_ist_total = display_slot[0] * 60 + display_slot[1] + 5 * 60 + 30
                 slot_ist_h = (slot_ist_total // 60) % 24
                 slot_ist_m = slot_ist_total % 60
                 logger.info(
@@ -490,7 +552,7 @@ class PinScheduler:
             else:
                 # Reset slot tracker when outside ALL jittered slot windows
                 all_outside = not any(
-                    abs((now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds()) <= 180
+                    abs((now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds()) <= 360
                     for (h, m) in _get_jittered_times_utc()
                 )
                 if all_outside:

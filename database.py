@@ -306,10 +306,12 @@ def get_queue_counts() -> dict:
 
 
 def count_posts_today(today_str: str) -> int:
-    """Count how many pins were actually uploaded to Pinterest today."""
+    """Count how many pins were actually uploaded to Pinterest today (IST).
+    Uses IST-adjusted date so midnight-5:30 AM UTC posts count for the correct IST day."""
     with _get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM uploaded_files WHERE date(uploaded_at) = ?",
+            "SELECT COUNT(*) FROM uploaded_files "
+            "WHERE date(uploaded_at, '+5 hours', '+30 minutes') = ?",
             (today_str,)
         ).fetchone()[0]
 
