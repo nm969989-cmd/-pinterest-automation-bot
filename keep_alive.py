@@ -34,12 +34,13 @@ def health():
         from crash_protection import get_memory_mb, get_disk_usage_mb
         from database import get_queue_counts, count_posts_today
         import datetime as dt
-        # Use UTC date — matches the uploaded_at column (stored as UTC)
-        today_utc = dt.datetime.utcnow().strftime("%Y-%m-%d")
+        # Use IST date — matches our count_posts_today IST offset fix
+        now_ist = dt.datetime.utcnow() + dt.timedelta(hours=5, minutes=30)
+        today_ist = now_ist.strftime("%Y-%m-%d")
         mem  = round(get_memory_mb(), 1)
         disk = round(get_disk_usage_mb("downloads") + get_disk_usage_mb("processed"), 1)
         q    = get_queue_counts()
-        posted_today = count_posts_today(today_utc)
+        posted_today = count_posts_today(today_ist)
         uptime = datetime.datetime.utcnow() - _start_time
 
         return jsonify({

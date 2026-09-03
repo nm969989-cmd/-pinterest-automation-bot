@@ -230,8 +230,30 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
                 api_key=config.GEMINI_API_KEY,
                 openrouter_key=config.OPENROUTER_API_KEY
             )
-            amazon_link = generate_amazon_link(anime_name, title=title)
+            character_name = ""
+            if title:
+                if " - " in title:
+                    character_name = title.split(" - ")[0].strip().split()[0]
+                else:
+                    character_name = title.strip().split()[0]
+
+            amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
             description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
+
+            # Apply SEO hashtag optimization (same as new images in main.py)
+            try:
+                from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
+                from board_router import get_board_for_anime
+                genre, board_id = get_board_for_anime(anime_name)
+                optimized_tags = optimize_hashtags(
+                    anime_name=anime_name, genre=genre,
+                    character_name=character_name, product_hint="anime merch"
+                )
+                description = replace_hashtags_in_description(description, optimized_tags)
+                if "#ad" not in description.lower():
+                    description = description.rstrip() + "\n#ad #affiliate"
+            except Exception as ht_err:
+                logger.warning(f"[Backlog] Hashtag optimization failed (non-critical): {ht_err}")
 
             # Add to BACKLOG queue (priority=0)
             added = scheduler.enqueue_backlog_image(
@@ -271,15 +293,6 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
     logger.info(f"[Backlog] Scan complete. Added {backlog_added} old posts to queue.")
 
 
-def start_listener():
-    """Starts the scraping loop. Runs backlog mode when no new posts found."""
-    if not TELEGRAM_CHANNELS:
-        logger.error("No channels configured. Set TELEGRAM_CHANNELS in .env")
-        return
-
-    logger.info(f"Starting Telegram Web Scraper — watching {len(TELEGRAM_CHANNELS)} channel(s)...")
-    for ch in TELEGRAM_CHANNELS:
-        logger.info(f"  • {ch}")
 
 def scrape_all_channels(max_backlog: int = 10) -> tuple[int, int]:
     """
@@ -294,10 +307,10 @@ def scrape_all_channels(max_backlog: int = 10) -> tuple[int, int]:
         if len(TELEGRAM_CHANNELS) > 1:
             time.sleep(random.randint(2, 5))
 
-    # If no new images or queue is low → fill backlog
+    # If no new images or total queue is low → fill backlog
     from database import get_queue_counts
     counts = get_queue_counts()
-    if counts["backlog"] < 5:
+    if counts["total"] < 5:  # check total, not just backlog
         logger.info(
             f"[Backlog] Queue has {counts['backlog']} backlog items. "
             f"Scanning up to {max_backlog} older posts..."

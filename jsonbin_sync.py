@@ -106,11 +106,19 @@ def save_cloud_state() -> bool:
                     "anime_name, image_url, board_id, priority, scheduled_date FROM pin_queue"
                 ).fetchall()
             ]
+            # Bot metadata (jitter, health check dates, etc.)
+            metadata = [
+                {"key": r[0], "value": r[1]}
+                for r in conn.execute(
+                    "SELECT key, value FROM bot_metadata"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
             "uploaded_files":  uploads,
             "pin_queue":       queue,
+            "bot_metadata":    metadata,
         }
 
         r = requests.put(
@@ -160,13 +168,14 @@ def restore_db_from_cloud():
                 "INSERT OR IGNORE INTO processed_posts (post_id) VALUES (?)",
                 [(p,) for p in posts]
             )
-            # Restore uploaded files
+            # Restore uploaded files — preserve original uploaded_at timestamp
             uploads = state.get("uploaded_files", [])
             conn.executemany(
                 "INSERT OR IGNORE INTO uploaded_files "
-                "(filename, title, anime_name, image_url) VALUES (?, ?, ?, ?)",
+                "(filename, title, anime_name, image_url, uploaded_at) VALUES (?, ?, ?, ?, ?)",
                 [(u.get("filename",""), u.get("title",""),
-                  u.get("anime_name",""), u.get("image_url",""))
+                  u.get("anime_name",""), u.get("image_url",""),
+                  u.get("uploaded_at") or "2000-01-01 00:00:00")  # preserve original timestamp!
                  for u in uploads]
             )
             # Restore pin queue (including board_id)
@@ -183,6 +192,13 @@ def restore_db_from_cloud():
                   q.get("priority",0), q.get("scheduled_date",""))
                  for q in queue]
             )
+            # Restore bot_metadata (jitter, health check dates, etc.)
+            metadata = state.get("bot_metadata", [])
+            if metadata:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO bot_metadata (key, value) VALUES (?, ?)",
+                    [(m.get("key",""), m.get("value","")) for m in metadata if m.get("key")]
+                )
             conn.commit()
 
 
