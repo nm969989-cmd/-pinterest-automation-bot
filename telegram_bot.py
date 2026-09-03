@@ -739,12 +739,21 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await update.message.reply_text(f"Error clearing queue: {e}")
         logger.error(f"[TG BOT] clearqueue error: {e}")
 
-async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE", _depth: int = 0):
     """
     Force-post the next queued pin immediately, bypassing the scheduled time slot.
     Useful when you want a pin live NOW without waiting for 9 AM / 1 PM / 6 PM.
+    _depth: internal recursion counter — stops after 10 skipped stale pins.
     """
     if not _is_admin(update): return
+    # Guard: stop recursing if we've skipped too many stale pins
+    if _depth >= 10:
+        await update.message.reply_text(
+            "⚠️ Tried 10 pins — all had expired CDN URLs.\n"
+            "The queue contains stale images from before the last Render restart.\n\n"
+            "👉 Use /clearqueue to wipe stale pins, then wait for new images from the channel."
+        )
+        return
     try:
         from database import pop_next_pin_for_immediate_post, get_queue_counts
         counts = get_queue_counts()
@@ -792,21 +801,22 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                         raise RuntimeError("download_image returned None")
                 except Exception as rd_err:
                     logger.error(f"[TG BOT] /post_now: Re-download failed: {rd_err}")
-                    # Re-queue the pin so it isn't lost
-                    from database import enqueue_pin
-                    enqueue_pin(
-                        post_id=pin["post_id"], image_path=pin["image_path"],
-                        title=pin["title"], description=pin["description"],
-                        link=pin["link"], anime_name=pin["anime_name"],
-                        image_url=pin.get("image_url", ""),
-                        board_id=pin.get("board_id", ""),
-                        priority=pin["priority"], scheduled_date="",
+                    # CDN URL is expired/dead — drop this stale pin and try next
+                    logger.warning(
+                        f"[TG BOT] /post_now: CDN URL expired for '{pin['title']}'. "
+                        f"Dropping stale pin and trying next in queue."
                     )
+                    # DON'T re-queue — it's broken. Try the next pin instead.
                     await update.message.reply_text(
-                        f"❌ Re-download failed (CDN URL may have expired).\n"
-                        f"Pin has been re-queued.\n"
-                        f"💡 Try re-sending the image to the Telegram channel to refresh the CDN URL."
+                        f"❌ CDN URL expired for: {pin['title']}\n"
+                        f"Dropping this stale pin.\n"
+                        f"🔄 Trying next pin in queue…"
                     )
+                    # Recursively call ourselves to try the next pin
+                    try:
+                        await cmd_postnow(update, context, _depth=_depth + 1)
+                    except Exception:
+                        pass
                     return
             else:
                 logger.error(f"[TG BOT] /post_now: Image missing and no CDN URL. Cannot recover.")
@@ -1409,21 +1419,48 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         # it tries to install Unix signal handlers (set_wakeup_fd) which only
         # work in the main thread. We use the low-level async API instead.
         async def _async_polling():
-            try:
-                async with app:
-                    # Register the command menu
-                    await _set_menu(app)
-                    # Start polling — no signal handlers
-                    await app.updater.start_polling(drop_pending_updates=True)
-                    await app.start()
-                    logger.info("[TG BOT] Polling started successfully (thread-safe mode).")
-                    # Keep running until the loop is stopped
-                    while True:
-                        await asyncio.sleep(60)
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"[TG BOT] Polling error: {e}")
+            # Retry loop: if a Conflict error occurs (two instances polling
+            # simultaneously after a fast restart), wait 15s for the old
+            # instance to shut down, then retry up to 5 times.
+            for poll_attempt in range(5):
+                try:
+                    async with app:
+                        # Register the command menu
+                        await _set_menu(app)
+                        # Start polling — drop stale updates, no signal handlers
+                        await app.updater.start_polling(drop_pending_updates=True)
+                        await app.start()
+                        logger.info("[TG BOT] Polling started successfully (thread-safe mode).")
+                        # Keep running until the loop is stopped
+                        while True:
+                            await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if "Conflict" in err_str and poll_attempt < 4:
+                        wait_s = 15 * (poll_attempt + 1)
+                        logger.warning(
+                            f"[TG BOT] Conflict error (old instance still running?). "
+                            f"Retrying in {wait_s}s... (attempt {poll_attempt+1}/5)"
+                        )
+                        await asyncio.sleep(wait_s)
+                        # Re-build app to get a fresh connection
+                        app = Application.builder().token(token).build()
+                        _app_ref = app
+                        for cmd, handler in handlers:
+                            app.add_handler(CommandHandler(cmd, handler))
+                        app.add_handler(CallbackQueryHandler(handle_approval_callback))
+                        if _TG_AVAILABLE:
+                            app.add_handler(
+                                MessageHandler(
+                                    filters.PHOTO | filters.Document.IMAGE,
+                                    handle_admin_photo_upload
+                                )
+                            )
+                    else:
+                        logger.error(f"[TG BOT] Polling error: {e}")
+                        break
 
         loop.run_until_complete(_async_polling())
         # ────────────────────────────────────────────────────────────────────
