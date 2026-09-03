@@ -1426,7 +1426,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             # nonlocal required: we reassign 'app' in the except block.
             # Without nonlocal, Python treats 'app' as local throughout the
             # function and raises UnboundLocalError on the first 'async with app:'.
-            nonlocal app, _app_ref
+            # NOTE: _app_ref is a module global, not local to _run(), so we
+            # cannot use nonlocal for it — we use 'global _app_ref' inline below.
+            nonlocal app
             for poll_attempt in range(5):
                 try:
                     async with app:
@@ -1450,8 +1452,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                             f"Retrying in {wait_s}s... (attempt {poll_attempt+1}/5)"
                         )
                         await asyncio.sleep(wait_s)
-                        # Re-build app to get a fresh connection
+                        # Re-build app with fresh connection for next attempt
                         app = Application.builder().token(token).build()
+                        global _app_ref
                         _app_ref = app
                         for cmd, handler in handlers:
                             app.add_handler(CommandHandler(cmd, handler))
