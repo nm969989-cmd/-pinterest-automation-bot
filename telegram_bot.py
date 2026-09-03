@@ -125,10 +125,11 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
     """Returns interactive direct link buttons for a posted pin."""
     if not _TG_AVAILABLE:
         return None
-    p_url = pinterest_url or os.getenv("PINTEREST_PROFILE_URL", "https://www.pinterest.com")
-    row1 = [InlineKeyboardButton("📌 Open on Pinterest", url=p_url)]
+    import config
+    p_url = pinterest_url or getattr(config, "PINTEREST_PROFILE_URL", "https://www.pinterest.com/animeasthetic/")
+    row1 = [InlineKeyboardButton("📌 View Pinterest Profile", url=p_url)]
     if amazon_url and amazon_url.startswith("http"):
-        row1.append(InlineKeyboardButton("🎯 Open Amazon Product", url=amazon_url))
+        row1.append(InlineKeyboardButton("🎯 View Amazon Product", url=amazon_url))
 
     return InlineKeyboardMarkup([
         row1,
@@ -137,6 +138,7 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
             InlineKeyboardButton("📋 View Queue", callback_data="btn_queue"),
         ],
     ])
+
 
 
 # -- Command handlers ---------------------------------------------------------
@@ -1240,7 +1242,11 @@ def notify_admin(message: str):
 def notify_link_clicked(anime_name: str, title: str, today_count: int):
     """
     Sends a real-time notification to Telegram whenever a Pinterest user clicks your link.
+    Silenced by default as requested by user to avoid message spam.
     """
+    import config
+    if not config.CLICK_NOTIFICATION:
+        return
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
@@ -1270,10 +1276,12 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int):
 async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
     Handler for when admin sends/forwards any photo or image directly to the bot.
-    Runs the full processing pipeline and queues the pin for Pinterest.
+    Processes the image, generates AI vision captions, finds Amazon merchandise,
+    and uploads directly to Pinterest immediately with a full detailed report!
     """
     if not _is_admin(update): return
-    await update.message.reply_text("📥 Received your image! Processing now...")
+    msg = update.effective_message
+    status_msg = await msg.reply_text("📥 Processing your image & generating AI caption...")
     try:
         import time as _time
         os.makedirs("downloads", exist_ok=True)
@@ -1295,7 +1303,8 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
         from amazon_search import generate_amazon_link
         from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
         from board_router import get_board_for_anime
-        from database import enqueue_pin
+        from pinterest_uploader import upload_to_pinterest
+        from database import mark_file_uploaded, enqueue_pin, get_tracked_target_url
         import config
 
         processed_path = process_image(save_path, "manual_upload")
@@ -1311,32 +1320,81 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             desc_template.replace("##LINK_PLACEHOLDER##", amazon_link),
             optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
         )
-        
-        from database import get_tracked_target_url
+
         target_url = get_tracked_target_url(amazon_link)
-        amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != amazon_link else ""
-        
-        import datetime as _dt
-        today_ist_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-        enqueue_pin(
-            post_id=f"manual_{ts}", image_path=processed_path, title=title,
-            description=description, link=amazon_link, anime_name=anime_name,
-            image_url="", board_id=board_id, priority=1, scheduled_date=today_ist_str
+        amazon_line = f"\n🎯 Direct Amazon : {target_url}" if target_url != amazon_link else ""
+        pinterest_profile = getattr(config, "PINTEREST_PROFILE_URL", "https://www.pinterest.com/animeasthetic/")
+
+        await status_msg.edit_text("🚀 Uploading pin to Pinterest now...")
+
+        # Direct upload to Pinterest
+        uploaded_ok = upload_to_pinterest(
+            image_path=processed_path,
+            title=title,
+            description=description,
+            link=amazon_link,
+            anime_name=anime_name,
+            board_id=board_id,
         )
+
+        if uploaded_ok:
+            mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
+            _state["posts_today"] = _state.get("posts_today", 0) + 1
+            _state["posts_total"] = _state.get("posts_total", 0) + 1
+            status_header = "📌 Live on Pinterest! (Uploaded Successfully)"
+            action_note = "Your pin is live on Pinterest right now."
+        else:
+            # Enqueue if upload failed or dry-run
+            import datetime as _dt
+            today_ist_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+            enqueue_pin(
+                post_id=f"manual_{ts}", image_path=processed_path, title=title,
+                description=description, link=amazon_link, anime_name=anime_name,
+                image_url="", board_id=board_id, priority=1, scheduled_date=today_ist_str
+            )
+            status_header = "📥 Queued for Posting (#1 in line)"
+            action_note = "Queued! Tap [ 🚀 Post Now ] below to publish immediately."
+
         confirm_text = (
-            f"✅ Queued: {title}\n"
-            f"🎌 Anime: {anime_name}\n"
-            f"🔗 Pin Link  : {amazon_link}"
+            f"{status_header}\n"
+            f"{'═' * 32}\n"
+            f"📝 Title     : {title}\n"
+            f"🎌 Anime     : {anime_name}{f' ({character_name})' if character_name else ''}\n"
+            f"📂 Board     : {genre.title()} Anime\n"
+            f"🛒 Affiliate : {amazon_link}"
             f"{amazon_line}\n\n"
-            f"Use /post_now to publish immediately!"
+            f"📄 Description:\n{description[:400]}...\n\n"
+            f"💡 {action_note}"
         )
+
+        # Build direct link buttons
+        buttons = [
+            [
+                InlineKeyboardButton("📌 View Pinterest Profile", url=pinterest_profile),
+                InlineKeyboardButton("🎯 View Amazon Product", url=target_url or amazon_link),
+            ]
+        ]
+        if not uploaded_ok:
+            buttons.append([InlineKeyboardButton("🚀 Post to Pinterest NOW", callback_data="btn_postnow")])
+        buttons.append([InlineKeyboardButton("📋 View Queue", callback_data="btn_queue")])
+        markup = InlineKeyboardMarkup(buttons)
+
+        # Delete intermediate status message and send rich confirmation with photo
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
         if processed_path and os.path.exists(processed_path):
             with open(processed_path, "rb") as img:
-                await update.message.reply_photo(photo=img, caption=confirm_text[:1024])
+                await msg.reply_photo(photo=img, caption=confirm_text[:1024], reply_markup=markup)
         else:
-            await update.message.reply_text(confirm_text)
+            await msg.reply_text(confirm_text, reply_markup=markup)
+
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        logger.error(f"[TG BOT] Mobile upload error: {e}", exc_info=True)
+        await msg.reply_text(f"❌ Error processing upload: {e}")
+
 
 
 def notify_admin_pin_posted(title: str, anime_name: str, link: str,
@@ -1368,14 +1426,15 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     caption = (
         f"📌 Pin Posted to Pinterest!\n"
         f"{'─' * 30}\n"
-        f"🕐 Time       : {time_ist} IST\n"
-        f"📊 Today      : {bar} ({posted_today}/{actual_max})\n"
-        f"🏷  Type       : {type_emoji}\n"
-        f"🎌 Anime      : {anime_name}\n"
-        f"📝 Title      : {title}\n"
-        f"🔗 Tracked Pin: {link}"
+        f"🕐 Time          : {time_ist} IST\n"
+        f"📊 Today         : {bar} ({posted_today}/{actual_max})\n"
+        f"🏷  Type          : {type_emoji}\n"
+        f"🎌 Anime         : {anime_name}\n"
+        f"📝 Title         : {title}\n"
+        f"🛒 Affiliate Buy : {link}"
         f"{amazon_line}"
     )
+
 
     reply_markup = get_post_confirmation_keyboard(target_url or link)
 
