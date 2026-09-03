@@ -101,6 +101,44 @@ def _is_admin(update: "Update") -> bool:
     return str(update.effective_chat.id) == str(admin_id)
 
 
+def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
+    """Returns interactive inline buttons for quick 1-tap actions."""
+    if not _TG_AVAILABLE:
+        return None
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Post Next Now", callback_data="btn_postnow"),
+            InlineKeyboardButton("🔄 Scrape Channels", callback_data="btn_scrape"),
+        ],
+        [
+            InlineKeyboardButton("📋 View Queue", callback_data="btn_queue"),
+            InlineKeyboardButton("⏰ Today's Schedule", callback_data="btn_schedule"),
+        ],
+        [
+            InlineKeyboardButton("📊 Stats", callback_data="btn_stats"),
+            InlineKeyboardButton("🩺 Doctor Check", callback_data="btn_doctor"),
+        ],
+    ])
+
+
+def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "") -> "InlineKeyboardMarkup | None":
+    """Returns interactive direct link buttons for a posted pin."""
+    if not _TG_AVAILABLE:
+        return None
+    p_url = pinterest_url or os.getenv("PINTEREST_PROFILE_URL", "https://www.pinterest.com")
+    row1 = [InlineKeyboardButton("📌 Open on Pinterest", url=p_url)]
+    if amazon_url and amazon_url.startswith("http"):
+        row1.append(InlineKeyboardButton("🎯 Open Amazon Product", url=amazon_url))
+
+    return InlineKeyboardMarkup([
+        row1,
+        [
+            InlineKeyboardButton("🚀 Post Next Now", callback_data="btn_postnow"),
+            InlineKeyboardButton("📋 View Queue", callback_data="btn_queue"),
+        ],
+    ])
+
+
 # -- Command handlers ---------------------------------------------------------
 
 async def cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -164,6 +202,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     if not _is_admin(update): return
+    msg = update.effective_message
     uptime = datetime.datetime.now() - _state["start_time"]
     h, rem = divmod(int(uptime.total_seconds()), 3600)
     m = rem // 60
@@ -172,7 +211,7 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     make_url = os.getenv("MAKE_WEBHOOK_URL", "")
     post_method = "Make.com Webhook" if make_url else "Pinterest API"
     auto_label  = "AUTO-PILOT" if _state.get("auto_post", True) else "APPROVAL MODE (tap button)"
-    await update.message.reply_text(
+    await msg.reply_text(
         f"Bot Status\n"
         f"{'='*25}\n"
         f"Status   : {paused}\n"
@@ -184,12 +223,14 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"Delay    : {_state['post_delay']} min between pins\n"
         f"Max/day  : {_state['max_per_day']} pins\n"
         f"Today    : {_state['posts_today']} pins posted\n"
-        f"Queue    : {_state['queue_size']} pending"
+        f"Queue    : {_state['queue_size']} pending",
+        reply_markup=get_queue_keyboard()
     )
 
 
 async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     if not _is_admin(update): return
+    msg = update.effective_message
     try:
         from database import get_all_time_stats
         db_stats = get_all_time_stats()
@@ -205,7 +246,7 @@ async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
     pin = _state.get("last_pin")
     last_time = pin["time"] if pin else "None yet"
-    await update.message.reply_text(
+    await msg.reply_text(
         f"Pin Statistics\n"
         f"{'='*25}\n"
         f"Today    : {today_db} pins\n"
@@ -213,7 +254,8 @@ async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"Queue    : {_state['queue_size']} pending\n"
         f"Last pin : {last_time}\n"
         f"Mode     : {'DRY RUN' if _state['dry_run'] else 'LIVE'}\n\n"
-        f"Top Anime:\n{top_str or '  (none yet)'}"
+        f"Top Anime:\n{top_str or '  (none yet)'}",
+        reply_markup=get_queue_keyboard()
     )
 
 
@@ -226,14 +268,16 @@ async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
 async def cmd_doctor(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Run full system diagnostics and reply with health report."""
     if not _is_admin(update): return
+    msg = update.effective_message
     try:
         from doctor import run_full_system_diagnostic, format_health_report
         diag = run_full_system_diagnostic()
         report = format_health_report(diag, is_scheduled=False)
-        await update.message.reply_text(report)
+        await msg.reply_text(report, reply_markup=get_queue_keyboard())
         logger.info("[TG BOT] /doctor diagnostic report sent.")
     except Exception as e:
-        await update.message.reply_text(f"Doctor diagnostic error: {e}")
+        await msg.reply_text(f"Doctor diagnostic error: {e}")
+
 
 
 async def cmd_repairlinks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -451,7 +495,9 @@ async def _send_daily_morning_schedule(chat_id: str):
         )
 
         for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
-            await _app_ref.bot.send_message(chat_id=chat_id, text=chunk)
+            await _app_ref.bot.send_message(
+                chat_id=chat_id, text=chunk, reply_markup=get_queue_keyboard()
+            )
         logger.info(f"[TG BOT] 8:00 AM Morning schedule sent to {chat_id}")
     except Exception as e:
         logger.error(f"[TG BOT] 8:00 AM schedule report error: {e}", exc_info=True)
@@ -815,7 +861,7 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         lines.append(f"  • {d['date']}: {', '.join(parts)}")
     breakdown = "\n".join(lines)
 
-    await update.message.reply_text(
+    await msg.reply_text(
         f"📋 Pending Queue: {total} pin(s) total\n"
         f"  {counts['new']} NEW  |  {counts['backlog']} BACKLOG\n"
         f"⏰ Next Auto-Post: {next_post_label}\n\n"
@@ -823,7 +869,8 @@ async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"{upcoming_text}\n\n"
         f"📅 Daily Distribution:\n{breakdown}\n\n"
         f"👉 Use /post_now to publish pin #1 immediately.\n"
-        f"👉 Use /scrape to fetch more pins from channels."
+        f"👉 Use /scrape to fetch more pins from channels.",
+        reply_markup=get_queue_keyboard()
     )
 
 
@@ -861,20 +908,22 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
 async def cmd_scrape(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Manually trigger channel scraping & backlog fetch immediately."""
     if not _is_admin(update): return
-    await update.message.reply_text("🔄 Scraping channels and fetching fresh images... Please wait ~15-30s.")
+    msg = update.effective_message
+    await msg.reply_text("🔄 Scraping channels and fetching fresh images... Please wait ~15-30s.")
     try:
         from telegram_listener import scrape_all_channels
         import asyncio
         loop = asyncio.get_running_loop()
         new_found, queue_total = await loop.run_in_executor(None, lambda: scrape_all_channels(max_backlog=5))
-        await update.message.reply_text(
+        await msg.reply_text(
             f"✅ Scrape completed!\n"
             f"• New posts found: {new_found}\n"
             f"• Current queue: {queue_total} pin(s)\n\n"
-            f"Use /post_now to publish immediately!"
+            f"Use /post_now to publish immediately!",
+            reply_markup=get_queue_keyboard()
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ Scrape error: {e}")
+        await msg.reply_text(f"❌ Scrape error: {e}")
         logger.error(f"[TG BOT] scrape error: {e}", exc_info=True)
 
 async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -884,6 +933,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     message — no per-pin spam.
     """
     if not _is_admin(update): return
+    msg = update.effective_message
     try:
         import requests as _req
         from telegram_listener import download_image
@@ -895,15 +945,16 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         # ── Quick check: is there anything in the queue? ─────────────────────
         counts = get_queue_counts()
         if counts["total"] == 0:
-            await update.message.reply_text(
+            await msg.reply_text(
                 "Queue is empty!\n"
                 "Wait for the scraper to pick up new images from your Telegram channel."
             )
             return
 
-        await update.message.reply_text(
+        await msg.reply_text(
             f"🔍 Scanning queue ({counts['total']} pin(s))… please wait."
         )
+
 
         stale_dropped = 0
         MAX_TRIES = counts["total"]  # never try more pins than exist
@@ -913,13 +964,13 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             pin = pop_next_pin_for_immediate_post()
             if not pin:
                 if stale_dropped > 0:
-                    await update.message.reply_text(
+                    await msg.reply_text(
                         f"⚠️ All {stale_dropped} pin(s) in the queue had expired CDN links (older than 48h from past restarts).\n"
                         f"They were safely cleared from the queue.\n\n"
                         f"👉 Run /scrape to fetch fresh images now, or send any photo directly to this bot!"
                     )
                 else:
-                    await update.message.reply_text(
+                    await msg.reply_text(
                         "Queue is empty!\n\n"
                         "👉 Run /scrape to fetch fresh images now, or send any photo directly to this bot!"
                     )
@@ -960,7 +1011,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             # pin already popped — just continue loop
         else:
             # Exhausted all pins without finding a good one
-            await update.message.reply_text(
+            await msg.reply_text(
                 f"⚠️ All {stale_dropped} pin(s) in the queue had expired CDN URLs.\n"
                 f"They have been automatically cleared.\n\n"
                 f"📥 The scraper will pick up fresh images next cycle (~10 min).\n"
@@ -997,14 +1048,15 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 f"{amazon_line}\n\n"
                 f"📥 Remaining: {remaining} pin(s)."
             )
+            confirm_markup = get_post_confirmation_keyboard(target_url or pin["link"])
             if image_path and os.path.exists(image_path):
                 try:
                     with open(image_path, "rb") as img_file:
-                        await update.message.reply_photo(photo=img_file, caption=confirm_text[:1024])
+                        await msg.reply_photo(photo=img_file, caption=confirm_text[:1024], reply_markup=confirm_markup)
                 except Exception:
-                    await update.message.reply_text(confirm_text)
+                    await msg.reply_text(confirm_text, reply_markup=confirm_markup)
             else:
-                await update.message.reply_text(confirm_text)
+                await msg.reply_text(confirm_text, reply_markup=confirm_markup)
             logger.info(f"[TG BOT] /post_now: posted '{pin['title']}' (skipped {stale_dropped} stale)")
         else:
             # Upload failed — re-queue this pin
@@ -1016,15 +1068,16 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 board_id=pin.get("board_id", ""),
                 priority=pin["priority"], scheduled_date="",
             )
-            await update.message.reply_text(
+            await msg.reply_text(
                 f"❌ Upload failed — pin re-queued.{stale_note}\n"
                 f"Check /logs for details."
             )
             logger.warning(f"[TG BOT] /post_now: upload failed for '{pin['title']}' — re-queued.")
 
     except Exception as e:
-        await update.message.reply_text(f"Error during /post_now: {e}")
+        await msg.reply_text(f"Error during /post_now: {e}")
         logger.error(f"[TG BOT] post_now error: {e}", exc_info=True)
+
 
 
 # -- Make.com Webhook Commands ------------------------------------------------
@@ -1148,6 +1201,20 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
         _pending_approvals.pop(key, None)
         await query.edit_message_caption(caption="Pin discarded.")
         logger.info("[TG BOT] Pin discarded by admin.")
+
+    elif data == "btn_postnow":
+        await query.message.reply_text("🚀 Triggering immediate post...")
+        await cmd_postnow(update, context)
+    elif data == "btn_scrape":
+        await cmd_scrape(update, context)
+    elif data == "btn_queue":
+        await cmd_queue(update, context)
+    elif data == "btn_schedule":
+        await cmd_schedule(update, context)
+    elif data == "btn_stats":
+        await cmd_stats(update, context)
+    elif data == "btn_doctor":
+        await cmd_doctor(update, context)
 
 
 # -- Notify admin helper ------------------------------------------------------
@@ -1310,6 +1377,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         f"{amazon_line}"
     )
 
+    reply_markup = get_post_confirmation_keyboard(target_url or link)
+
     async def _send():
         try:
             if image_path and os.path.exists(image_path):
@@ -1318,11 +1387,13 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                         chat_id=admin_id,
                         photo=img,
                         caption=caption[:1024],
+                        reply_markup=reply_markup,
                     )
             else:
                 await _app_ref.bot.send_message(
                     chat_id=admin_id,
                     text=caption,
+                    reply_markup=reply_markup,
                 )
         except Exception as e:
             logger.warning(f"[TG BOT] Pin notification failed: {e}")
