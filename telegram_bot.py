@@ -1040,16 +1040,13 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             remaining = get_queue_counts()["total"]
             from database import get_tracked_target_url
             target_url = get_tracked_target_url(pin["link"])
-            amazon_line = f"\n🎯 Amazon URL: {target_url}" if target_url != pin["link"] else ""
             confirm_text = (
                 f"📌 {pin_type} pin posted!{stale_note}\n"
-                f"{'─' * 28}\n"
-                f"📝 Title  : {pin['title']}\n"
-                f"🎌 Anime  : {pin['anime_name']}\n"
-                f"🔗 Link   : {pin['link']}"
-                f"{amazon_line}\n\n"
-                f"📥 Remaining: {remaining} pin(s)."
+                f"{'─' * 26}\n"
+                f"📝 {pin['title']}\n"
+                f"🎌 {pin['anime_name']} • {remaining} left in queue"
             )
+
             confirm_markup = get_post_confirmation_keyboard(target_url or pin["link"])
             if image_path and os.path.exists(image_path):
                 try:
@@ -1355,23 +1352,29 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             status_header = "📥 Queued for Posting (#1 in line)"
             action_note = "Queued! Tap [ 🚀 Post Now ] below to publish immediately."
 
-        confirm_text = (
-            f"{status_header}\n"
-            f"{'═' * 32}\n"
-            f"📝 Title     : {title}\n"
-            f"🎌 Anime     : {anime_name}{f' ({character_name})' if character_name else ''}\n"
-            f"📂 Board     : {genre.title()} Anime\n"
-            f"🛒 Affiliate : {amazon_link}"
-            f"{amazon_line}\n\n"
-            f"📄 Description:\n{description[:400]}...\n\n"
-            f"💡 {action_note}"
-        )
+        board_label = f" • {genre.title()}" if genre else ""
+        char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
 
-        # Build direct link buttons
+        if uploaded_ok:
+            confirm_text = (
+                f"📌 Live on Pinterest!\n"
+                f"{'─' * 26}\n"
+                f"📝 {title}\n"
+                f"🎌 {anime_name}{char_label}{board_label}"
+            )
+        else:
+            confirm_text = (
+                f"📥 Queued (#1 in line)\n"
+                f"{'─' * 26}\n"
+                f"📝 {title}\n"
+                f"🎌 {anime_name}{char_label}{board_label}"
+            )
+
+        # Direct link buttons
         buttons = [
             [
-                InlineKeyboardButton("📌 View Pinterest Profile", url=pinterest_profile),
-                InlineKeyboardButton("🎯 View Amazon Product", url=target_url or amazon_link),
+                InlineKeyboardButton("📌 View on Pinterest", url=pinterest_profile),
+                InlineKeyboardButton("🎯 View Amazon Merch", url=target_url or amazon_link),
             ]
         ]
         if not uploaded_ok:
@@ -1424,16 +1427,12 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     amazon_line = f"\n🎯 Amazon     : {target_url}" if target_url != link else ""
 
     caption = (
-        f"📌 Pin Posted to Pinterest!\n"
-        f"{'─' * 30}\n"
-        f"🕐 Time          : {time_ist} IST\n"
-        f"📊 Today         : {bar} ({posted_today}/{actual_max})\n"
-        f"🏷  Type          : {type_emoji}\n"
-        f"🎌 Anime         : {anime_name}\n"
-        f"📝 Title         : {title}\n"
-        f"🛒 Affiliate Buy : {link}"
-        f"{amazon_line}"
+        f"📌 Pin Posted! ({bar} {posted_today}/{actual_max})\n"
+        f"{'─' * 26}\n"
+        f"📝 {title}\n"
+        f"🎌 {anime_name} • {time_ist} IST"
     )
+
 
 
     reply_markup = get_post_confirmation_keyboard(target_url or link)
