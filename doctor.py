@@ -62,9 +62,18 @@ def run_full_system_diagnostic() -> dict:
     if stats["failed_retries"] > 0:
         warnings.append(f"{stats['failed_retries']} pin(s) experienced upload retries.")
 
-    # 5. Make.com Webhook Status
+    # 5. Make.com Webhook & Board Status
     webhook_set = bool(config.MAKE_WEBHOOK_URL and config.MAKE_WEBHOOK_URL.startswith("http"))
     webhook_status = "🟢 Connected & Active" if webhook_set else "🟡 Using Direct API / Dry-run"
+
+    board_id = config.PINTEREST_BOARD_ID or config.BOARD_ID_GENERAL
+    if board_id:
+        board_status = f"🟢 Configured ({board_id})"
+    elif webhook_set:
+        board_status = "🟡 Uses Make.com Default Board (PINTEREST_BOARD_ID empty)"
+    else:
+        board_status = "🔴 Missing Board ID"
+        warnings.append("No Pinterest Board ID configured. Pins may fail to upload.")
 
     # 6. Amazon Affiliate & PA-API Status
     tag = config.AMAZON_AFFILIATE_TAG or "Not set"
@@ -101,6 +110,7 @@ def run_full_system_diagnostic() -> dict:
         "stats": stats,
         "days_buffer": days_buffer,
         "webhook_status": webhook_status,
+        "board_status": board_status,
         "amazon_status": amazon_status,
         "pa_api_status": pa_api_status,
         "tracker_status": tracker_status,
@@ -133,10 +143,12 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Image Storage  : {diag['disk_mb']} MB ({diag['disk_status']})\n"
         f"  • SQLite Database: {diag['db_status']}\n\n"
         f"📌 Pinterest & Queue Health:\n"
+        f"  • Board Routing            : {diag.get('board_status', 'N/A')}\n"
         f"  • Pins Posted (Last 3 Days): {stats['pins_3d']} pins\n"
         f"  • All-Time Total Pins      : {stats['total_pins']} pins\n"
         f"  • Queue Remaining          : {stats['queue']['total']} pins (~{diag['days_buffer']} days buffer)\n"
         f"  • Failed Upload Retries    : {stats['failed_retries']}\n\n"
+
         f"💰 Affiliate & Earnings Health:\n"
         f"  • Amazon Store Tag : {diag['amazon_status']}\n"
         f"  • Product Engine   : {diag['pa_api_status']}\n"

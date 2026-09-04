@@ -147,9 +147,9 @@ def test_jitter_range():
 check(f"All jitter offsets within +/-{20}min range", test_jitter_range)
 
 def test_jittered_times():
-    from scheduler import _get_jittered_times_utc
+    from scheduler import _get_jittered_times_utc, _BASE_POST_TIMES_UTC
     times = _get_jittered_times_utc()
-    assert len(times) == 3
+    assert len(times) == len(_BASE_POST_TIMES_UTC)
     for (h, m) in times:
         assert 0 <= h <= 23 and 0 <= m <= 59
 check("Jittered UTC times are valid (0-23h, 0-59m)", test_jittered_times)
@@ -202,6 +202,39 @@ def test_amazon_deep_link():
     assert "/dp/" in link
     assert AMAZON_AFFILIATE_TAG in link
 check("Deep link /dp/ASIN contains tag", test_amazon_deep_link)
+
+def test_product_types_no_hoodie():
+    from amazon_search import _PRODUCT_TYPES
+    assert "anime hoodie" not in _PRODUCT_TYPES, "'anime hoodie' should not be in _PRODUCT_TYPES (causes generic clothes)"
+    for pt in _PRODUCT_TYPES:
+        assert any(k in pt for k in ("poster", "figure", "art", "plush", "merchandise", "sticker", "keychain", "scroll"))
+check("Product types contain only anime artwork/collectibles (no hoodies)", test_product_types_no_hoodie)
+
+def test_character_sanitization():
+    from amazon_search import clean_character_name
+    assert clean_character_name("Seductive") == "", "Adjective 'Seductive' must not be accepted as character name"
+    assert clean_character_name("Cute") == ""
+    assert clean_character_name("Tanjiro") == "Tanjiro"
+    assert clean_character_name("Luffy") == "Luffy"
+    assert clean_character_name("Gojo") == "Gojo"
+check("Character name cleaner filters adjectives and allows valid anime characters", test_character_sanitization)
+
+def test_anime_name_sanitization():
+    from amazon_search import _sanitize_anime_name
+    assert "Demon Slayer" in _sanitize_anime_name("Demon Slayer: Kimetsu no Yaiba")
+    # Compound title with fluff words should be cleaned
+    cleaned = _sanitize_anime_name("Seductive Original Art / Isekai Demon")
+    assert "/" not in cleaned and "Seductive" not in cleaned and "Original Art" not in cleaned
+    assert "Isekai Demon" in cleaned or "Anime" in cleaned
+check("Anime name sanitizer cleans compound names, slashes, and fluff words", test_anime_name_sanitization)
+
+def test_relevance_checker():
+    from amazon_search import _is_product_relevant
+    assert not _is_product_relevant("NOBERO Men's Fleece Hooded Hoodie Yellow", "Isekai Demon")
+    assert not _is_product_relevant("Men's Plain Cotton T-Shirt", "Demon Slayer")
+    assert _is_product_relevant("Demon Slayer Tanjiro Action Figure Anime Collectible", "Demon Slayer")
+    assert _is_product_relevant("Anime Aesthetic Wall Art Poster HD Print", "Anime")
+check("Amazon product relevance filter rejects generic clothes and accepts anime merch", test_relevance_checker)
 
 # ── Results Summary ───────────────────────────────────────
 print()

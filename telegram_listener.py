@@ -233,9 +233,11 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
             character_name = ""
             if title:
                 if " - " in title:
-                    character_name = title.split(" - ")[0].strip().split()[0]
+                    raw_char = title.split(" - ")[0].strip().split()[0]
                 else:
-                    character_name = title.strip().split()[0]
+                    raw_char = title.strip().split()[0]
+                from amazon_search import clean_character_name
+                character_name = clean_character_name(raw_char)
 
             amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
             description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)

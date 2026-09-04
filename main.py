@@ -20,6 +20,14 @@ if config.OPENROUTER_API_KEY:
 else:
     print("[config] AI captions: DISABLED (regex fallback) - set OPENROUTER_API_KEY to enable")
 
+# Log Pinterest board status at startup
+if config.PINTEREST_BOARD_ID:
+    print(f"[config] Pinterest board: CONFIGURED (ID: {config.PINTEREST_BOARD_ID})")
+elif config.MAKE_WEBHOOK_URL:
+    print("[config] Pinterest board: Using Make.com default board (PINTEREST_BOARD_ID is empty in .env)")
+else:
+    print("[config] Pinterest board: WARNING - No board ID or Make.com webhook configured")
+
 logger = get_logger(__name__)
 
 def handle_new_image(filepath, caption, channel_name, image_url=""):
@@ -50,11 +58,15 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
         if title:
             if " - " in title:
                 # e.g. "Tanjiro - Demon Slayer Poster" → first word before dash = character
-                character_name = title.split(" - ")[0].strip().split()[0]
+                raw_char = title.split(" - ")[0].strip().split()[0]
             else:
-                # No dash: just take first word as a best-effort character guess
-                character_name = title.strip().split()[0]
-            logger.info(f"[Main] Character extracted from title: '{character_name}'")
+                # No dash: take first word
+                raw_char = title.strip().split()[0]
+            from amazon_search import clean_character_name
+            character_name = clean_character_name(raw_char)
+            if character_name:
+                logger.info(f"[Main] Character extracted from title: '{character_name}'")
+
 
         # 4. Route to correct Pinterest board + get genre
         genre, board_id = get_board_for_anime(anime_name)

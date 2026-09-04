@@ -885,7 +885,7 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     msg = update.effective_message
     try:
         from database import get_queue_counts, get_queue_detail, get_upcoming_queued_pins
-        from scheduler import get_upcoming_slot_times
+        from scheduler import get_upcoming_slot_times, _get_jittered_times_utc, _ist_now
 
         counts = get_queue_counts()
         total = counts["total"]
@@ -895,23 +895,54 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         today_str = now_ist.strftime("%d %b %Y")
 
+        # ── Always show today's 5 actual slot times ────────────────────────
+        today_slot_lines = []
+        try:
+            jittered_utc = _get_jittered_times_utc()
+            now_utc = datetime.datetime.utcnow()
+            for i, (h, m) in enumerate(jittered_utc):
+                slot_utc = now_utc.replace(hour=h, minute=m, second=0, microsecond=0)
+                slot_ist = slot_utc + datetime.timedelta(hours=5, minutes=30)
+                is_past = slot_ist < now_ist
+                status = "✅ Done" if is_past else "⏳ Upcoming"
+                if not is_past:
+                    mins_away = int((slot_ist - now_ist).total_seconds() / 60)
+                    h_diff, m_diff = divmod(mins_away, 60)
+                    countdown = f"in ~{h_diff}h {m_diff}m" if h_diff > 0 else f"in ~{m_diff}m"
+                    status = f"⏳ {countdown}"
+                today_slot_lines.append(
+                    f"  Slot {i+1}: {slot_ist.strftime('%I:%M %p')} IST — {status}"
+                )
+        except Exception:
+            today_slot_lines = ["  (Could not calculate slot times)"]
+        today_slots_text = "\n".join(today_slot_lines)
+
+        # ── Upcoming pinned posts ──────────────────────────────────────────
         slot_times = []
         try:
             slot_times = get_upcoming_slot_times(count=max(len(upcoming), 1))
         except Exception:
             pass
 
-        upcoming_lines = []
-        for i, p in enumerate(upcoming):
-            p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
-            time_label = slot_times[i] if i < len(slot_times) else f"{p['scheduled_date']} ({p_type})"
-            upcoming_lines.append(
-                f"{i+1}. 🌸 {p['title']}\n"
-                f"   🎌 Anime: {p['anime_name']}\n"
-                f"   ⏰ Time: {time_label}"
+        if total == 0:
+            upcoming_text = (
+                "⚠️ Queue is empty — no pins scheduled!\n\n"
+                "👉 Tap 🔄 Scrape Channels below to fetch new pins from your\n"
+                "   Telegram channel and fill the queue automatically."
             )
-        upcoming_text = "\n\n".join(upcoming_lines) if upcoming_lines else "None queued yet."
+        else:
+            upcoming_lines = []
+            for i, p in enumerate(upcoming):
+                p_type = "NEW" if p["priority"] == 1 else "BACKLOG"
+                time_label = slot_times[i] if i < len(slot_times) else f"{p['scheduled_date']} ({p_type})"
+                upcoming_lines.append(
+                    f"{i+1}. 🌸 {p['title']}\n"
+                    f"   🎌 Anime: {p['anime_name']}\n"
+                    f"   ⏰ Time: {time_label}"
+                )
+            upcoming_text = "\n\n".join(upcoming_lines)
 
+        # ── Per-date breakdown ─────────────────────────────────────────────
         lines = []
         for d in details:
             parts = []
@@ -926,6 +957,8 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"☀️ Daily Pinterest Posting Schedule\n"
             f"📅 {today_str} • {now_ist.strftime('%I:%M %p')} IST\n"
             f"{'═' * 30}\n\n"
+            f"🕐 Today's Posting Slots:\n"
+            f"{today_slots_text}\n\n"
             f"📊 Queue Status: {total} pin(s) ready\n"
             f"  ({counts['new']} NEW | {counts['backlog']} BACKLOG)\n\n"
             f"📌 Scheduled Pins & Exact Clock Times:\n"
@@ -938,6 +971,7 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         logger.error(f"[TG BOT] /schedule error: {e}", exc_info=True)
         await msg.reply_text(f"❌ Error displaying schedule: {e}")
+
 
 
 
@@ -1369,7 +1403,9 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             caption_hint, "manual_upload", image_path=processed_path,
             api_key=None, openrouter_key=config.OPENROUTER_API_KEY
         )
-        character_name = title.split(" - ")[0].split()[0] if title else ""
+        from amazon_search import clean_character_name
+        raw_char = title.split(" - ")[0].split()[0] if title else ""
+        character_name = clean_character_name(raw_char)
         genre, board_id = get_board_for_anime(anime_name)
         amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
         description = replace_hashtags_in_description(

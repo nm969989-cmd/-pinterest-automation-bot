@@ -1,11 +1,11 @@
 """
 Smart Pin Scheduler
 ===================
-- Posts 3 pins/day at human-like randomized IST times around 9 AM, 1 PM, 6 PM
+- Posts 5 pins/day at human-like randomized IST times: 9 AM, 1 PM, 4 PM, 6 PM, 8 PM
 - Each slot has a daily random jitter of +/-20 minutes (looks 100% human to Pinterest)
 - Jitter is regenerated each day at midnight so times vary every day
 - Priority: NEW images always post before BACKLOG images
-- If 10 new images arrive -> 3 today, 7 scheduled across next days
+- If 10 new images arrive -> 5 today, 5 scheduled across next days
 - Multi-day queue is persisted in SQLite (survives restarts)
 """
 
@@ -20,12 +20,14 @@ from config import MAX_POSTS_PER_DAY
 
 logger = get_logger(__name__)
 
-# Base IST posting times: 9:00 AM, 1:00 PM, 6:00 PM
-# IST = UTC+5:30, so in UTC: 3:30, 7:30, 12:30
+# Base IST posting times: 9:00 AM, 1:00 PM, 4:00 PM, 6:00 PM, 8:00 PM
+# IST = UTC+5:30, so in UTC: 3:30, 7:30, 10:30, 12:30, 14:30
 _BASE_POST_TIMES_UTC = [
-    (3, 30),   # 09:00 AM IST
-    (7, 30),   # 01:00 PM IST
+    (3,  30),  # 09:00 AM IST
+    (7,  30),  # 01:00 PM IST
+    (10, 30),  # 04:00 PM IST
     (12, 30),  # 06:00 PM IST
+    (14, 30),  # 08:00 PM IST
 ]
 
 # Anti-bot jitter: max +/- minutes to randomize each slot
@@ -340,7 +342,7 @@ class PinScheduler:
         logger.info(
             f"[Scheduler] Started. Max {MAX_POSTS_PER_DAY} pins/day. "
             f"Today's jittered IST slots: {', '.join(ist_times)} "
-            f"(base: 09:00, 13:00, 18:00 +/- up to {_JITTER_MAX_MINUTES}min)"
+            f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
         _pending_catchup = False  # True if a missed slot needs immediate posting

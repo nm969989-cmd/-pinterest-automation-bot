@@ -228,11 +228,15 @@ def get_board_for_anime(anime_name: str) -> tuple[str, str]:
     genre = get_genre_for_anime(anime_name)
     board_id = _BOARD_IDS.get(genre, "")
 
-    # If genre-specific board not configured, fall back to general
-    if not board_id:
-        board_id = _BOARD_IDS.get("general", "")
-        if board_id:
-            logger.info(f"[BoardRouter] '{anime_name}' -> genre='{genre}' -> board_id='{board_id}'")
+    # 1. Genre-specific board configured
+    if board_id:
+        logger.info(f"[BoardRouter] '{anime_name}' -> genre='{genre}' -> board_id='{board_id}' (genre board)")
+        return genre, board_id
+
+    # 2. Fall back to general board / PINTEREST_BOARD_ID
+    board_id = _BOARD_IDS.get("general", "")
+    if board_id:
+        logger.info(f"[BoardRouter] '{anime_name}' -> genre='{genre}' -> board_id='{board_id}' (fallback to general board)")
     else:
         logger.warning(
             f"[BoardRouter] '{anime_name}' -> genre='{genre}' "
@@ -240,3 +244,4 @@ def get_board_for_anime(anime_name: str) -> tuple[str, str]:
         )
 
     return genre, board_id
+
