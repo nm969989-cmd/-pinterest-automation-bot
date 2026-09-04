@@ -77,32 +77,18 @@ def check_link_health(url: str) -> tuple[bool, str]:
 
 def repair_dead_link(code: str, anime_name: str, title: str) -> str:
     """
-    Generates a fresh, active Amazon search/deep link for the anime/title
+    Generates a fresh, active Amazon deep product link for the anime/title
     and updates the database destination for this short link.
     """
-    import config
+    from amazon_search import generate_amazon_link, clean_character_name
     from database import update_tracked_link_target
 
-    tag = config.AMAZON_AFFILIATE_TAG or "animeasthet06-21"
-    
-    # Extract clean search query from title / anime
-    query_parts = []
-    if anime_name:
-        query_parts.append(anime_name)
+    character_name = ""
     if title:
-        # e.g. "Tanjiro Kamado - Battle Poster" -> take key words
-        clean_title = title.split(" - ")[0].strip()
-        query_parts.append(clean_title)
-    query_parts.append("anime merchandise")
+        raw_char = title.split(" - ")[0].strip().split()[0] if " - " in title else title.strip().split()[0]
+        character_name = clean_character_name(raw_char)
 
-    search_query = " ".join(query_parts)
-    encoded = urllib.parse.quote(search_query)
-    
-    fresh_url = (
-        f"https://www.amazon.in/s?k={encoded}"
-        f"&tag={tag}"
-        f"&utm_source=Pinterest&utm_medium=organic&utm_campaign=self_healed"
-    )
+    fresh_url = generate_amazon_link(anime_name, character_name=character_name, title=title)
 
     # Update the destination in SQLite
     update_tracked_link_target(code, fresh_url)

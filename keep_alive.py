@@ -81,9 +81,12 @@ def redirect_link(code):
 
         return redirect(target_url, code=302)
     except Exception as e:
-        logging.error(f"[Redirect] Error handling /r/{code}: {e}")
         from config import AMAZON_AFFILIATE_TAG
-        return redirect(f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG or 'aniflexindia-21'}", code=302)
+        tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+        return redirect(
+            f"https://www.amazon.in/s?k=anime+action+figure+poster&rh=n%3A1350387031&tag={tag}&sort=review-rank",
+            code=302
+        )
 
 
 def run():

@@ -56,7 +56,8 @@ def load_cloud_state() -> dict | None:
                 f"[JSONBin] Loaded cloud state: "
                 f"{len(data.get('processed_posts', []))} posts, "
                 f"{len(data.get('uploaded_files', []))} uploads, "
-                f"{len(data.get('pin_queue', []))} queued"
+                f"{len(data.get('pin_queue', []))} queued, "
+                f"{len(data.get('tracked_links', []))} tracked links"
             )
             return data
         else:
@@ -113,12 +114,20 @@ def save_cloud_state() -> bool:
                     "SELECT key, value FROM bot_metadata"
                 ).fetchall()
             ]
+            # Tracked links (last 500 links so short redirects survive restarts)
+            tracked = [
+                {"code": r[0], "target_url": r[1], "anime_name": r[2], "title": r[3], "created_at": r[4]}
+                for r in conn.execute(
+                    "SELECT code, target_url, anime_name, title, created_at FROM tracked_links ORDER BY created_at DESC LIMIT 500"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
             "uploaded_files":  uploads,
             "pin_queue":       queue,
             "bot_metadata":    metadata,
+            "tracked_links":   tracked,
         }
 
         r = requests.put(
@@ -130,7 +139,7 @@ def save_cloud_state() -> bool:
         if r.status_code == 200:
             logger.info(
                 f"[JSONBin] Synced: {len(posts)} posts, "
-                f"{len(uploads)} uploads, {len(queue)} queued"
+                f"{len(uploads)} uploads, {len(queue)} queued, {len(tracked)} tracked links"
             )
             return True
         else:
@@ -199,12 +208,24 @@ def restore_db_from_cloud():
                     "INSERT OR REPLACE INTO bot_metadata (key, value) VALUES (?, ?)",
                     [(m.get("key",""), m.get("value","")) for m in metadata if m.get("key")]
                 )
+            # Restore tracked links
+            links = state.get("tracked_links", [])
+            if links:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO tracked_links "
+                    "(code, target_url, anime_name, title, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [(l.get("code",""), l.get("target_url",""),
+                      l.get("anime_name",""), l.get("title",""),
+                      l.get("created_at") or "2000-01-01 00:00:00")
+                     for l in links if l.get("code") and l.get("target_url")]
+                )
             conn.commit()
 
 
         logger.info(
             f"[JSONBin] Restored from cloud: {len(posts)} posts, "
-            f"{len(uploads)} uploads, {len(queue)} queued. "
+            f"{len(uploads)} uploads, {len(queue)} queued, {len(links)} tracked links. "
             f"No duplicates will be re-posted!"
         )
     except Exception as e:

@@ -498,18 +498,23 @@ def pop_next_pin_for_immediate_post() -> dict | None:
 
 def create_tracked_link(target_url: str, anime_name: str = "", title: str = "") -> str:
     """
-    Stores a destination URL and returns a unique 6-character short code.
-    E.g. target_url='https://amazon.in/dp/B08...?tag=...' -> code='a7f9b2'
+    Stores a destination URL and returns a short code.
+    If target_url is a direct product (/dp/ASIN), embeds the ASIN (e.g. 'dp_B0CHR8R1L3')
+    making the link stateless and 100% resilient across server restarts.
     """
-    import hashlib, time, random
-    # Generate unique 6-char hash code
-    seed = f"{target_url}_{anime_name}_{time.time()}_{random.random()}"
-    code = hashlib.md5(seed.encode()).hexdigest()[:6]
+    import hashlib, time, random, re
+
+    asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', target_url)
+    if asin_match:
+        code = f"dp_{asin_match.group(1)}"
+    else:
+        seed = f"{target_url}_{anime_name}_{time.time()}_{random.random()}"
+        code = hashlib.md5(seed.encode()).hexdigest()[:6]
 
     with _get_conn() as conn:
         try:
             conn.execute("""
-                INSERT INTO tracked_links (code, target_url, anime_name, title)
+                INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title)
                 VALUES (?, ?, ?, ?)
             """, (code, target_url, anime_name, title))
             conn.commit()
@@ -521,10 +526,13 @@ def create_tracked_link(target_url: str, anime_name: str = "", title: str = "") 
 def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tuple[str, str, str]:
     """
     Records a click for the given link code and returns (target_url, anime_name, title).
-    If code not found, returns fallback default Amazon URL.
+    If code not found in DB:
+      1. Reconstructs direct product URL if code contains ASIN (stateless recovery).
+      2. Otherwise falls back to top-rated anime figures & posters category.
     """
+    import re
     from config import AMAZON_AFFILIATE_TAG
-    fallback_url = f"https://www.amazon.in/s?k=anime+merchandise&tag={AMAZON_AFFILIATE_TAG or 'aniflexindia-21'}"
+    tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
 
     with _get_conn() as conn:
         row = conn.execute("""
@@ -539,8 +547,41 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tu
             """, (code, anime_name, title, user_agent[:255], referrer[:255]))
             conn.commit()
             return target_url, anime_name, title
-        else:
-            return fallback_url, "Anime", "Anime Merch"
+
+        # Stateless self-healing recovery: reconstruct direct product URL from ASIN code
+        asin = None
+        if code.startswith("dp_") and len(code) == 13 and code[3:].isalnum():
+            asin = code[3:]
+        elif len(code) == 10 and code.isalnum() and code.isupper():
+            asin = code
+
+        if asin:
+            direct_product_url = (
+                f"https://www.amazon.in/dp/{asin}"
+                f"?tag={tag}&linkCode=ogi&th=1&psc=1"
+            )
+            logger.info(f"[DB] Reconstructed stateless product link for ASIN: {asin}")
+            try:
+                conn.execute("""
+                    INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title)
+                    VALUES (?, ?, ?, ?)
+                """, (code, direct_product_url, "Anime", "Anime Product"))
+                conn.execute("""
+                    INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (code, "Anime", "Anime Product", user_agent[:255], referrer[:255]))
+                conn.commit()
+            except Exception:
+                pass
+            return direct_product_url, "Anime", "Anime Product"
+
+        # Best-in-class fallback: Amazon India top-rated anime merchandise & posters
+        fallback_url = (
+            f"https://www.amazon.in/s?k=anime+action+figure+poster"
+            f"&rh=n%3A1350387031"
+            f"&tag={tag}&sort=review-rank"
+        )
+        return fallback_url, "Anime", "Anime Merch"
 
 
 def count_clicks_today() -> int:

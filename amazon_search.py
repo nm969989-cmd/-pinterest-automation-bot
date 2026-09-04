@@ -28,37 +28,117 @@ _PRODUCT_TYPES = [
 # When the HTML scraper is blocked by Amazon, these give direct product links.
 # ASINs sourced from Amazon.in for popular anime merchandise (verified 2026).
 _ANIME_ASIN_MAP = {
+    # One Piece
     "one piece":                 "B0CHR8R1L3",   # One Piece Zoro figure
+    "zoro":                      "B0CHR8R1L3",   # Zoro figure / merch
+    "luffy":                     "B0897K9V4P",   # Luffy figure / poster
+    "sanji":                     "B0CHR8R1L3",
+    # Naruto
     "naruto":                    "B0BQ9HF1YV",   # Naruto action figure set
+    "naruto shippuden":          "B0BQ9HF1YV",
+    "sasuke":                    "B0BQ9HF1YV",
+    "itachi":                    "B0BQ9HF1YV",
+    "kakashi":                   "B0BQ9HF1YV",
+    # Demon Slayer
     "demon slayer":              "B09WQZMX5C",   # Demon Slayer Tanjiro figure
-    "kimetsu no yaiba":          "B09WQZMX5C",   # Same as Demon Slayer
+    "kimetsu no yaiba":          "B09WQZMX5C",
+    "tanjiro":                   "B09WQZMX5C",
+    "nezuko":                    "B09WQZMX5C",
+    "zenitsu":                   "B09WQZMX5C",
+    "inosuke":                   "B09WQZMX5C",
+    "rengoku":                   "B09WQZMX5C",
+    # Attack on Titan
     "attack on titan":           "B0BXMVZYL5",   # AOT Eren figure
     "shingeki no kyojin":        "B0BXMVZYL5",
+    "eren":                      "B0BXMVZYL5",
+    "levi":                      "B0BXMVZYL5",
+    "mikasa":                    "B0BXMVZYL5",
+    # Jujutsu Kaisen
+    "jujutsu kaisen":            "B0C4KQ3V1S",   # JJK Gojo figure
+    "gojo":                      "B0C4KQ3V1S",
+    "sukuna":                    "B0C4KQ3V1S",
+    "itadori":                   "B0C4KQ3V1S",
+    "megumi":                    "B0C4KQ3V1S",
+    # Kaguya-sama
+    "kaguya sama":               "B0BPQK9C45",   # Kaguya-sama merch
+    "kaguya-sama":               "B0BPQK9C45",
+    "kaguya":                    "B0BPQK9C45",
+    "shinomiya":                 "B0BPQK9C45",
+    # Cyberpunk Edgerunners
+    "cyberpunk":                 "B0BG36Y9S4",
+    "edgerunners":               "B0BG36Y9S4",
+    "rebecca":                   "B0BG36Y9S4",
+    "lucy":                      "B0BG36Y9S4",
+    # Slime (Rimuru)
+    "slime":                     "B09L7X8X4G",
+    "rimuru":                    "B09L7X8X4G",
+    "tensei shitara":            "B09L7X8X4G",
+    # Chainsaw Man
+    "chainsaw man":              "B0BNQCYM56",   # Chainsaw Man figure
+    "denji":                     "B0BNQCYM56",
+    "makima":                    "B0BNQCYM56",
+    "power":                     "B0BNQCYM56",
+    # Spy x Family
+    "spy x family":              "B0BC273P9Y",   # Spy x Family Anya figure
+    "anya":                      "B0BC273P9Y",
+    "yor":                       "B0BC273P9Y",
+    # Frieren
+    "frieren":                   "B0CW1M2K5P",   # Frieren poster
+    "fern":                      "B0CW1M2K5P",
+    "stark":                     "B0CW1M2K5P",
+    # Solo Leveling
+    "solo leveling":             "B0CRVK31T8",   # Solo Leveling merch
+    "jinwoo":                    "B0CRVK31T8",
+    # Bleach
+    "bleach":                    "B0C8K7H5XP",   # Bleach Ichigo poster
+    "ichigo":                    "B0C8K7H5XP",
+    # Death Note
+    "death note":                "B0855N8182",   # Death Note notebook
+    "light yagami":              "B0855N8182",
+    # My Hero Academia
     "my hero academia":          "B0BZ6GGJPG",   # MHA Deku figure
     "boku no hero academia":     "B0BZ6GGJPG",
+    "deku":                      "B0BZ6GGJPG",
+    "bakugo":                    "B0BZ6GGJPG",
+    # Dragon Ball
     "dragon ball":               "B0CJG1YKYJ",   # Dragon Ball Goku figure
     "dragon ball z":             "B0CJG1YKYJ",
-    "jujutsu kaisen":            "B0C4KQ3V1S",   # JJK Gojo figure
-    "bleach":                    "B0C8K7H5XP",   # Bleach Ichigo poster
-    "fairy tail":                "B07X6KBHND",   # Fairy Tail merch
-    "sword art online":          "B08NLQ3CPB",   # SAO poster set
-    "fullmetal alchemist":       "B07VFK4V8S",   # FMA poster
+    "goku":                      "B0CJG1YKYJ",
+    "vegeta":                    "B0CJG1YKYJ",
+    # Hunter x Hunter
     "hunter x hunter":           "B09B4MZ5Z3",   # HxH merch
-    "tokyo ghoul":               "B07T34N5G1",   # Tokyo Ghoul poster
+    "killua":                    "B09B4MZ5Z3",
+    "gon":                       "B09B4MZ5Z3",
+    # Re:Zero
     "re zero":                   "B08C8DPK3N",   # Re:Zero merch
-    "kaguya sama":               "B0BPQK9C45",   # Kaguya-sama merch
+    "re:zero":                   "B08C8DPK3N",
+    "rem":                       "B08C8DPK3N",
+    # Haikyuu
+    "haikyuu":                   "B09B4MS5Y6",   # Haikyuu merch
+    "hinata":                    "B09B4MS5Y6",
+    # Darling in the Franxx
     "zero two":                  "B08C9RBQFN",   # Darling in the FranXX
     "darling in the franxx":     "B08C9RBQFN",
-    "chainsaw man":              "B0BNQCYM56",   # Chainsaw Man figure
-    "spy x family":              "B0BC273P9Y",   # Spy x Family Anya figure
-    "solo leveling":             "B0CRVK31T8",   # Solo Leveling merch
-    "death note":                "B0855N8182",   # Death Note notebook
-    "blue lock":                 "B0BX5G881C",   # Blue Lock poster
-    "haikyuu":                   "B09B4MS5Y6",   # Haikyuu merch
+    # JoJo
     "jojo":                      "B08NLR9G9T",   # Jojo poster
-    "black clover":              "B09QRP2S8K",   # Black Clover poster
+    "jotaro":                    "B08NLR9G9T",
+    # Blue Lock
+    "blue lock":                 "B0BX5G881C",   # Blue Lock poster
+    # Vinland Saga
+    "vinland":                   "B08R9ZCG7D",
+    "vinland saga":              "B08R9ZCG7D",
+    # Overlord
+    "overlord":                  "B07Z491C3S",
+    "ainz":                      "B07Z491C3S",
+    # Genshin Impact
     "genshin":                   "B09L7X8X4G",   # Genshin poster/figure
-    "frieren":                   "B0CW1M2K5P",   # Frieren poster
+    "genshin impact":            "B09L7X8X4G",
+    # Other Top Anime
+    "fairy tail":                "B07X6KBHND",
+    "sword art online":          "B08NLQ3CPB",
+    "fullmetal alchemist":       "B07VFK4V8S",
+    "tokyo ghoul":               "B07T34N5G1",
+    "black clover":              "B09QRP2S8K",
 }
 
 # Words that indicate non-character titles (adjectives, generic labels)
@@ -187,12 +267,12 @@ def _build_deep_link(asin: str) -> str:
     )
 
 
-def _fetch_first_asin(search_query: str, anime_name: str = "") -> str | None:
+def _fetch_first_asin(search_query: str, anime_name: str = "", character_name: str = "") -> str | None:
     """
     Gets the first relevant ASIN for a search query.
 
     Priority:
-      0. Hardcoded ASIN map (instant, zero network, never fails)
+      0. Hardcoded ASIN map by anime or character (instant, zero network, never fails)
       1. Amazon PA-API (official, reliable — used when credentials set in .env)
       2. HTML scraper fallback with strict relevance validation
 
@@ -201,10 +281,16 @@ def _fetch_first_asin(search_query: str, anime_name: str = "") -> str | None:
     # ── Priority 0: Hardcoded ASIN map (instant & 100% reliable) ─────────────
     if anime_name:
         key = anime_name.lower().strip()
-        # Try exact match first, then partial
         for map_key, asin in _ANIME_ASIN_MAP.items():
             if map_key in key or key in map_key:
-                logger.info(f"[Amazon] ASIN map hit for '{anime_name}': {asin}")
+                logger.info(f"[Amazon] ASIN map hit for anime '{anime_name}': {asin}")
+                return asin
+
+    if character_name:
+        char_key = character_name.lower().strip()
+        for map_key, asin in _ANIME_ASIN_MAP.items():
+            if map_key in char_key or char_key in map_key:
+                logger.info(f"[Amazon] ASIN map hit for character '{character_name}': {asin}")
                 return asin
 
     if not search_query:
@@ -266,18 +352,19 @@ def _fetch_first_asin(search_query: str, anime_name: str = "") -> str | None:
 def _build_search_link(search_query: str, anime_name: str = "") -> str:
     """
     Fallback: returns an anime-specific Amazon search link if ASIN lookup fails.
-    Uses the anime name in the search query so it's relevant, not generic.
+    Uses category node for Anime Figures & Collectibles and reviews sorting
+    so the user lands on high-converting buyable anime products.
     """
-    # Build an anime-specific search query — never use generic "anime merchandise"
     if anime_name and anime_name.strip().lower() not in ("anime", ""):
-        # Use the anime name + poster as the search query for a relevant result
-        specific_query = f"{anime_name.strip()} anime poster"
+        specific_query = f"{anime_name.strip()} anime figure poster"
     else:
         specific_query = search_query
     encoded_query = urllib.parse.quote(specific_query)
     return (
         f"https://www.amazon.in/s?k={encoded_query}"
+        f"&rh=n%3A1350387031"
         f"&tag={AMAZON_AFFILIATE_TAG}"
+        f"&sort=review-rank"
         f"&utm_source=Pinterest&utm_medium=organic"
     )
 
@@ -327,7 +414,7 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
         clean_char = clean_character_name(character_name)
 
         # ── STEP 0: Check hardcoded ASIN map first (instant & reliable) ───────
-        asin = _fetch_first_asin("", anime_name=clean_name)
+        asin = _fetch_first_asin("", anime_name=clean_name, character_name=clean_char)
 
         if not asin:
             # Pick a safe product type (all strictly poster/figure/collectible — NO hoodies)
@@ -340,7 +427,7 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
                 search_query = f"{clean_name} {product}".strip()
 
             # ── STEP 1: Try to get a real ASIN (PA-API -> HTML scraper with relevance check)
-            asin = _fetch_first_asin(search_query, anime_name=clean_name)
+            asin = _fetch_first_asin(search_query, anime_name=clean_name, character_name=clean_char)
 
         if asin:
             # [OK] Deep product link — lands directly on the "Buy Now" product page
@@ -360,8 +447,10 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
         # Even the last-resort fallback uses the anime name if available
         safe_name = _sanitize_anime_name(anime_name)
         fallback_default = (
-            f"https://www.amazon.in/s?k={urllib.parse.quote(safe_name)}+anime+poster"
+            f"https://www.amazon.in/s?k={urllib.parse.quote(safe_name)}+anime+figure+poster"
+            f"&rh=n%3A1350387031"
             f"&tag={AMAZON_AFFILIATE_TAG}"
+            f"&sort=review-rank"
         )
         return wrap_with_tracker(fallback_default, anime_name=anime_name, title=title)
 
