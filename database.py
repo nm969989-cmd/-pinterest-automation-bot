@@ -243,6 +243,12 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
     priority=0 → backlog image
     Returns True if added, False if already in queue.
     """
+    try:
+        from amazon_search import preflight_validate_destination
+        link = preflight_validate_destination(link, anime_name=anime_name, title=title)
+    except Exception:
+        pass
+
     with _get_conn() as conn:
         try:
             conn.execute("""
@@ -278,9 +284,16 @@ def get_next_queued_pin(today_str: str) -> dict | None:
         """, (today_str,)).fetchone()
     if not row:
         return None
+    link_val = row[5]
+    try:
+        from amazon_search import preflight_validate_destination
+        link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
+    except Exception:
+        pass
+
     return {
         "id": row[0], "post_id": row[1], "image_path": row[2],
-        "title": row[3], "description": row[4], "link": row[5],
+        "title": row[3], "description": row[4], "link": link_val,
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
     }
@@ -486,9 +499,16 @@ def pop_next_pin_for_immediate_post() -> dict | None:
         # Remove from queue immediately (optimistic — upload may still fail)
         conn.execute("DELETE FROM pin_queue WHERE id = ?", (row[0],))
         conn.commit()
+    link_val = row[5]
+    try:
+        from amazon_search import preflight_validate_destination
+        link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
+    except Exception:
+        pass
+
     return {
         "id": row[0], "post_id": row[1], "image_path": row[2],
-        "title": row[3], "description": row[4], "link": row[5],
+        "title": row[3], "description": row[4], "link": link_val,
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
     }

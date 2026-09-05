@@ -44,6 +44,13 @@ def check_link_health(url: str) -> tuple[bool, str]:
     if not url or not url.startswith("http"):
         return True, "Empty or invalid URL"
 
+    from amazon_search import _DEAD_ASINS
+    for dead_asin in _DEAD_ASINS:
+        if dead_asin in url:
+            return True, f"Known dead ASIN '{dead_asin}'"
+    if "1350387031" in url:
+        return True, "Erroneous Watches category node 1350387031"
+
     try:
         # Fast HEAD or lightweight GET request
         res = requests.get(

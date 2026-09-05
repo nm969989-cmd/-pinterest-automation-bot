@@ -5,7 +5,7 @@ from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, DRY_RUN, MAKE_WEB
 from image_host import upload_image_to_host
 from logger import get_logger
 from database import is_file_uploaded, mark_file_uploaded
-from amazon_search import resolve_to_direct_link, is_direct_product_link
+from amazon_search import preflight_validate_destination, is_direct_product_link
 
 logger = get_logger(__name__)
 
@@ -49,18 +49,9 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         return False
 
     # Step 2: POST to Make.com webhook with retry (3 attempts)
-    # ── PROTECTION: Always use direct /dp/ASIN link for Pinterest 'Visit site' ──
-    # The stored link may be a tracker redirect (e.g. https://bot.onrender.com/r/X).
-    # If the Render server is spun down, the redirect fails and Pinterest shows
-    # a generic page. resolve_to_direct_link() guarantees we send a real product URL.
-    pinterest_link = resolve_to_direct_link(link, anime_name=anime_name)
-    if not is_direct_product_link(pinterest_link):
-        logger.warning(
-            f"[Make.com] PROTECTION 2 WARNING: Link is not a direct /dp/ URL after resolution: "
-            f"{pinterest_link[:80]} — users may see search results page"
-        )
-    else:
-        logger.info(f"[Make.com] Protection OK — direct product link confirmed: {pinterest_link[:80]}")
+    # ── MANDATORY PRE-FLIGHT GATEKEEPER: Zero-404 Destination Verification ──
+    pinterest_link = preflight_validate_destination(link, anime_name=anime_name, title=title)
+    logger.info(f"[Make.com] Pre-flight destination verified: {pinterest_link[:80]}")
 
     payload = {
         "title":       title[:100],
@@ -215,16 +206,9 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
             logger.error("Media processing timed out.")
             return False
             
-        # ── PROTECTION: Always use direct /dp/ASIN link for Pinterest 'Visit site' ──
-        # Same guard as Make.com path: resolve tracker/search URLs to real product page.
-        pinterest_link = resolve_to_direct_link(link, anime_name=anime_name)
-        if not is_direct_product_link(pinterest_link):
-            logger.warning(
-                f"[Pinterest API] PROTECTION 2 WARNING: Could not resolve to direct /dp/ link: "
-                f"{pinterest_link[:80]}"
-            )
-        else:
-            logger.info(f"[Pinterest API] Protection OK — direct product link: {pinterest_link[:80]}")
+        # ── MANDATORY PRE-FLIGHT GATEKEEPER: Zero-404 Destination Verification ──
+        pinterest_link = preflight_validate_destination(link, anime_name=anime_name, title=title)
+        logger.info(f"[Pinterest API] Pre-flight destination verified: {pinterest_link[:80]}")
 
         # --- Pin Creation ---
         pin_data = {
