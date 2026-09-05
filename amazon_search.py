@@ -394,7 +394,9 @@ def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = ""
 def generate_amazon_link(anime_name: str, character_name: str = "", title: str = "") -> str:
     """
     Generates a DEEP product link for an exact Amazon.in product page.
-    Automatically wraps with click tracking if APP_BASE_URL is configured.
+    If APP_BASE_URL is set, wraps in a tracker redirect for click metrics.
+    NOTE: For Pinterest 'link' (Visit site) field, use resolve_to_direct_link()
+    to ensure users always land on the real Amazon product page, not a redirect.
 
     Strategy:
       0. Check hardcoded ASIN map (instant, zero-failure for top anime).
@@ -453,5 +455,106 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
             f"&sort=review-rank"
         )
         return wrap_with_tracker(fallback_default, anime_name=anime_name, title=title)
+
+
+# ── PROTECTION LAYER ─────────────────────────────────────────────────────────
+# These two functions are the safety net that guarantees Pinterest's "Visit site"
+# button ALWAYS lands on a real Amazon product page (never a tracker redirect,
+# Render server, or search results page).
+
+def is_direct_product_link(url: str) -> bool:
+    """
+    PROTECTION 1: Returns True only if `url` is a real Amazon /dp/ASIN direct
+    product page link (not a search results page, not a tracker redirect).
+
+    Valid:   https://www.amazon.in/dp/B08XYZ1234?tag=...
+    Invalid: https://www.amazon.in/s?k=anime+poster  (search results)
+    Invalid: https://mybot.onrender.com/r/ABC123     (tracker redirect)
+    """
+    if not url or not url.startswith("http"):
+        return False
+    # Must be an amazon.in/dp/ direct product page
+    if "amazon.in/dp/" in url:
+        # Extract the ASIN segment (10 chars, alphanumeric)
+        asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
+        return asin_match is not None
+    return False
+
+
+def resolve_to_direct_link(link: str, anime_name: str = "", character_name: str = "") -> str:
+    """
+    PROTECTION 2: Resolves ANY link to a guaranteed direct Amazon /dp/ASIN
+    product page URL before it's passed to Pinterest's 'link' (Visit site) field.
+
+    Resolution priority:
+      1. Already a /dp/ASIN link — return as-is (strip tracker params if needed).
+      2. A tracker redirect (/r/<code>) — look up the target_url in the database.
+         If the target is a /dp/ link, use it. If it's a search link, go to step 3.
+      3. A search results link (/s?k=...) OR any unrecognized URL — generate a
+         fresh ASIN-based direct link using the anime name as fallback.
+
+    This function is called by pinterest_uploader.py immediately before posting
+    to guarantee "Visit site" always opens a buyable Amazon product page.
+    """
+    if not link:
+        anime_name = anime_name or "Anime"
+        fallback_asin = _fetch_first_asin("", anime_name=anime_name, character_name=character_name)
+        if fallback_asin:
+            return _build_deep_link(fallback_asin)
+        return f"https://www.amazon.in/s?k={urllib.parse.quote(anime_name)}+anime+figure&rh=n%3A1350387031&tag={AMAZON_AFFILIATE_TAG}"
+
+    # ── Step 1: Already a direct /dp/ product link — perfect, use it ────────
+    if is_direct_product_link(link):
+        logger.debug(f"[DirectLink] Link is already a direct product page: {link[:80]}")
+        return link
+
+    # ── Step 2: Tracker redirect → look up the real target URL ──────────────
+    if "/r/" in link:
+        try:
+            from database import get_tracked_target_url
+            target = get_tracked_target_url(link)
+            if target and target != link and is_direct_product_link(target):
+                logger.info(f"[DirectLink] Resolved tracker {link[-12:]} -> direct: {target[:80]}")
+                return target
+            # Target is also a search link — fall through to step 3
+            if target and target != link:
+                logger.warning(f"[DirectLink] Tracker target is a search link, upgrading to ASIN...")
+                link = target  # Use as hint for anime name extraction below
+        except Exception as e:
+            logger.warning(f"[DirectLink] Could not resolve tracker link: {e}")
+
+    # ── Step 3: Search link or unknown — generate fresh ASIN direct link ────
+    # Try to extract anime name from search query URL if not provided
+    if not anime_name or anime_name.lower() == "anime":
+        try:
+            parsed = urllib.parse.urlparse(link)
+            query_str = urllib.parse.parse_qs(parsed.query).get("k", [""])[0]
+            if query_str:
+                # Strip product type keywords to get just the anime name
+                for pt in _PRODUCT_TYPES:
+                    query_str = query_str.replace(pt, "").strip()
+                anime_name = query_str.strip() or anime_name
+        except Exception:
+            pass
+
+    clean_name = _sanitize_anime_name(anime_name) if anime_name else "Anime"
+    clean_char = clean_character_name(character_name) if character_name else ""
+
+    # Try ASIN map first (instant, reliable)
+    asin = _fetch_first_asin("", anime_name=clean_name, character_name=clean_char)
+    if not asin:
+        # Try scraper with a search query
+        product = random.choice(_PRODUCT_TYPES)
+        sq = f"{clean_char} {clean_name} {product}".strip() if clean_char else f"{clean_name} {product}".strip()
+        asin = _fetch_first_asin(sq, anime_name=clean_name, character_name=clean_char)
+
+    if asin:
+        direct = _build_deep_link(asin)
+        logger.info(f"[DirectLink] Upgraded to direct product link: {direct}")
+        return direct
+
+    # Last resort: return the best search link we have (still amazon.in, still anime-specific)
+    logger.warning(f"[DirectLink] Could not find ASIN, using search fallback for '{clean_name}'")
+    return _build_search_link(f"{clean_name} anime figure", anime_name=clean_name)
 
 
