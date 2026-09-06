@@ -1749,16 +1749,19 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         global _app_ref, _loop_ref
         import time, requests as _req
 
-        # ── Self-heal: Kill any existing polling session before we start ──────
-        # The CORRECT way to evict an old polling instance is to call getUpdates
-        # with timeout=0. Telegram immediately terminates any other bot that is
-        # currently long-polling on this token. /close does NOT achieve this.
+        # ── Self-heal: Grab and HOLD the Telegram polling session ────────────
+        # Root problem on Render: when a new instance deploys, the old instance
+        # is still alive. One getUpdates(0) kick evicts the old poller, but the
+        # old instance immediately retries — racing our own start_polling() call.
         #
-        # Step 1: deleteWebhook — clears stuck webhook state (harmless if none).
-        # Step 2: getUpdates(timeout=0) — forcefully kicks out any old poller.
-        # Step 3: Wait 3s for the old instance's connection to fully die.
-        # Step 4: One more getUpdates(timeout=0) to drain any queued updates and
-        #         confirm we now exclusively own the session.
+        # Solution: "hold" the session by calling getUpdates(0) in a rapid loop
+        # for ~20 seconds. Every successful call re-confirms we own the session
+        # and blocks the old instance from re-grabbing it. Only after 20s of
+        # uncontested ownership do we hand off to start_polling().
+        #
+        # Step 1: deleteWebhook — clears any stuck webhook (harmless if none).
+        # Step 2: Hold loop — getUpdates(0) every 2s for up to 20s.
+        # Step 3: If we get 5 consecutive successful responses, we own it.
         BASE = f"https://api.telegram.org/bot{token}"
         try:
             _req.get(f"{BASE}/deleteWebhook", params={"drop_pending_updates": "true"}, timeout=8)
@@ -1766,30 +1769,40 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         except Exception as e:
             logger.warning(f"[TG BOT] deleteWebhook failed (non-critical): {e}")
 
-        for kick_attempt in range(3):
+        consecutive_ok = 0
+        hold_target = 5  # Need 5 consecutive successful getUpdates before handing to start_polling
+        for hold_attempt in range(15):  # Max 15 attempts × 2s = 30s hold window
             try:
-                # timeout=0 → Telegram returns immediately AND kills any
-                # concurrent long-poll session on the same token.
                 r = _req.get(
                     f"{BASE}/getUpdates",
-                    params={"timeout": 0, "limit": 1},
+                    params={"timeout": 0, "limit": 1, "offset": -1},
                     timeout=10
                 )
                 data = r.json()
                 if data.get("ok"):
-                    logger.info("[TG BOT] Session acquired via getUpdates — old poller evicted.")
-                    time.sleep(3)  # Let old instance's TCP conn fully close
-                    break
+                    consecutive_ok += 1
+                    logger.info(
+                        f"[TG BOT] Session hold {consecutive_ok}/{hold_target} — "
+                        f"we exclusively own getUpdates."
+                    )
+                    if consecutive_ok >= hold_target:
+                        logger.info("[TG BOT] Session fully secured. Handing off to start_polling().")
+                        break
+                    time.sleep(2)
                 elif r.status_code == 429:
                     wait = data.get("parameters", {}).get("retry_after", 10)
-                    wait = min(wait, 15)  # cap so we don't block startup forever
-                    logger.warning(f"[TG BOT] Rate-limited on kick getUpdates. Waiting {wait}s...")
+                    wait = min(wait, 15)
+                    logger.warning(f"[TG BOT] Rate-limited during hold. Waiting {wait}s...")
+                    consecutive_ok = 0
                     time.sleep(wait)
                 else:
+                    # Conflict from another instance? Reset and try again
+                    consecutive_ok = 0
+                    logger.warning(f"[TG BOT] Hold attempt {hold_attempt+1} got: {data}. Retrying...")
                     time.sleep(2)
-                    break
             except Exception as e:
-                logger.warning(f"[TG BOT] Kick getUpdates attempt {kick_attempt+1} failed: {e}")
+                consecutive_ok = 0
+                logger.warning(f"[TG BOT] Hold attempt {hold_attempt+1} error: {e}")
                 time.sleep(2)
         # ─────────────────────────────────────────────────────────────────────
 
