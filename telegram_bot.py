@@ -1107,6 +1107,32 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"[TG BOT] /fixqueue complete: {results['fixed']} fixed, "
             f"{results['failed']} failed, {results['deleted']} deleted (unrecoverable)."
         )
+
+        # ── CRITICAL: immediately sync clean state to JSONBin cloud ──────────
+        # Without this, the next Render restart would restore the OLD cloud
+        # snapshot (which still has the deleted CDN entries) via
+        # restore_db_from_cloud(), bringing zombie entries back to life.
+        if results["fixed"] > 0 or results["deleted"] > 0:
+            try:
+                from jsonbin_sync import save_cloud_state
+                synced = await asyncio.get_event_loop().run_in_executor(
+                    None, save_cloud_state
+                )
+                if synced:
+                    await msg.reply_text(
+                        "☁️ Cloud backup updated with cleaned queue.\n"
+                        "Deleted/fixed entries will NOT come back after a restart."
+                    )
+                    logger.info("[fixqueue] Cloud sync completed after cleanup.")
+                else:
+                    await msg.reply_text(
+                        "⚠️ Cloud sync failed — deleted entries may reappear after restart.\n"
+                        "Check JSONBIN_API_KEY / JSONBIN_BIN_ID in env vars."
+                    )
+            except Exception as sync_err:
+                logger.warning(f"[fixqueue] Cloud sync after cleanup failed: {sync_err}")
+        # ─────────────────────────────────────────────────────────────────────
+
     except Exception as e:
         await msg.reply_text(f"Error running fixqueue: {e}")
         logger.error(f"[TG BOT] fixqueue error: {e}", exc_info=True)

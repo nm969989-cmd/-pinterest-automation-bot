@@ -222,6 +222,41 @@ def restore_db_from_cloud():
                 )
             conn.commit()
 
+        # \u2500\u2500 Auto-purge stale Telegram CDN entries restored from cloud snapshot \u2500\u2500\u2500
+        # The cloud snapshot may be up to 30 min old. If /fixqueue cleaned the DB
+        # between the last cloud sync and this restart, the restore above would
+        # bring those deleted CDN entries back ("zombie" entries). We immediately
+        # scan and delete them so they never reach the scheduler.
+        purged_count = 0
+        purged_titles = []
+        try:
+            with sqlite3.connect(DB_PATH) as conn2:
+                stale = conn2.execute(
+                    "SELECT id, title FROM pin_queue "
+                    "WHERE image_url LIKE '%telesco.pe%' OR image_url LIKE '%/t.me/%'"
+                ).fetchall()
+                for row_id, title in stale:
+                    conn2.execute("DELETE FROM pin_queue WHERE id=?", (row_id,))
+                    purged_count += 1
+                    purged_titles.append(title or "untitled")
+                conn2.commit()
+        except Exception as purge_err:
+            logger.warning(f"[JSONBin] Auto-purge scan error (non-critical): {purge_err}")
+
+        if purged_count > 0:
+            logger.warning(
+                f"[JSONBin] AUTO-PURGED {purged_count} stale Telegram CDN entry(ies) "
+                f"that were restored from cloud snapshot: "
+                + ", ".join(f"'{t[:30]}'" for t in purged_titles)
+            )
+            # Immediately push the cleaned state back to cloud so next restart is clean
+            try:
+                from jsonbin_sync import save_cloud_state
+                save_cloud_state()
+                logger.info("[JSONBin] Auto-pushed cleaned state back to cloud after CDN purge.")
+            except Exception as resync_err:
+                logger.warning(f"[JSONBin] Re-sync after auto-purge failed: {resync_err}")
+        # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
         logger.info(
             f"[JSONBin] Restored from cloud: {len(posts)} posts, "
@@ -230,6 +265,7 @@ def restore_db_from_cloud():
         )
     except Exception as e:
         logger.error(f"[JSONBin] Restore error: {e}")
+
 
 
 # ── Background sync thread ────────────────────────────────────────────────────
