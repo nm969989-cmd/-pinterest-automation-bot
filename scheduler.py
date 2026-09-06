@@ -345,31 +345,106 @@ class PinScheduler:
             f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
-        _pending_catchup = False  # True if a missed slot needs immediate posting
+        _pending_catchup_count = 0  # How many missed slots to immediately post
 
-        # ── Catch-up check on startup ─────────────────────────────────────────
-        # If a slot was missed while the bot was down (Render restart/spin-down),
-        # fire it immediately if it was missed within the last 30 minutes.
+        # ── Full startup schedule recovery ────────────────────────────────────
+        # On every restart (Render deploy, spin-down, crash), we check ALL slots
+        # that were scheduled for today and count how many posts were actually made.
+        # If the bot missed N slots while offline, we queue N immediate catch-up posts.
+        #
+        # Guards:
+        #   - Only fires for slots > 6 min in the past (outside normal fire window)
+        #   - Counts today's actual DB posts vs expected posts by now
+        #   - Never exceeds MAX_POSTS_PER_DAY cap
         now_startup = datetime.datetime.utcnow()
+        today_ist_startup = _today_ist()
         jittered_startup = _get_jittered_times_utc()
+        today_posted_startup = count_posts_today(today_ist_startup)
+
+        # Count how many slots have fully passed today (beyond the 6-min fire window)
+        slots_passed_today = 0
         for (h, m) in jittered_startup:
             slot_start = now_startup.replace(hour=h, minute=m, second=0, microsecond=0)
             secs_past = (now_startup - slot_start).total_seconds()
-            if 0 < secs_past <= 1800:  # slot passed within last 30 min
-                slot_ist_total = h * 60 + m + 5 * 60 + 30
-                slot_ist_h = (slot_ist_total // 60) % 24
-                slot_ist_m = slot_ist_total % 60
-                logger.warning(
-                    f"[Scheduler] CATCH-UP: Missed slot {slot_ist_h:02d}:{slot_ist_m:02d} IST "
-                    f"({int(secs_past/60)} min ago — bot was restarting). Will post immediately."
+            if secs_past > 360:  # slot passed and outside normal 6-min fire window
+                slots_passed_today += 1
+
+        # How many posts SHOULD have been made by now?
+        expected_posts_by_now = min(slots_passed_today, MAX_POSTS_PER_DAY)
+        missed_posts = max(0, expected_posts_by_now - today_posted_startup)
+
+        if missed_posts > 0:
+            logger.warning(
+                f"[Scheduler] RECOVERY: {slots_passed_today} slot(s) passed today, "
+                f"but only {today_posted_startup} post(s) made. "
+                f"Will immediately catch up with {missed_posts} post(s)."
+            )
+            _pending_catchup_count = missed_posts
+            try:
+                from telegram_bot import notify_admin
+                notify_admin(
+                    f"⚡ Schedule Recovery Triggered\n"
+                    f"Bot restarted and detected {missed_posts} missed post(s) today.\n"
+                    f"Posted so far: {today_posted_startup}/{expected_posts_by_now} expected.\n"
+                    f"Catching up now — {missed_posts} pin(s) will post immediately."
                 )
-                _last_fired_slot = (h, m)  # mark it so we don't double-fire in normal loop
-                _pending_catchup = True     # signal the main loop to post NOW
-                break
+            except Exception:
+                pass
+        else:
+            if slots_passed_today > 0:
+                logger.info(
+                    f"[Scheduler] Schedule healthy on startup: "
+                    f"{today_posted_startup}/{slots_passed_today} expected post(s) completed. No catch-up needed."
+                )
+            else:
+                logger.info("[Scheduler] No slots have passed yet today. Schedule on track.")
+        # ─────────────────────────────────────────────────────────────────────
+
+        # Track when we last ran a 'live heartbeat' check (every 30 min)
+        _last_heartbeat_check = now_startup
 
         while self.is_running:
             now = datetime.datetime.utcnow()
             today_ist = _today_ist()
+
+            # ── Live heartbeat: check if schedule is behind every 30 min ──────
+            # Even without a restart, a slot can silently fail (Pinterest API
+            # timeout, image error, etc.) and the bot may not retry it.
+            # Every 30 minutes we compare posts made vs slots passed. If behind,
+            # we immediately trigger a recovery post. If on schedule, skip.
+            mins_since_heartbeat = (now - _last_heartbeat_check).total_seconds() / 60
+            if mins_since_heartbeat >= 30:
+                _last_heartbeat_check = now
+                today_posted_hb = count_posts_today(today_ist)
+                slots_passed_hb = sum(
+                    1 for (h, m) in _get_jittered_times_utc()
+                    if (now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds() > 360
+                )
+                expected_hb = min(slots_passed_hb, MAX_POSTS_PER_DAY)
+                missed_hb = max(0, expected_hb - today_posted_hb)
+                if missed_hb > 0 and _pending_catchup_count == 0:
+                    logger.warning(
+                        f"[Scheduler] LIVE RECOVERY: Schedule drifted — "
+                        f"{today_posted_hb}/{expected_hb} expected posts made. "
+                        f"Triggering {missed_hb} catch-up post(s)."
+                    )
+                    _pending_catchup_count = missed_hb
+                    try:
+                        from telegram_bot import notify_admin
+                        notify_admin(
+                            f"⚡ Live Schedule Recovery\n"
+                            f"Detected {missed_hb} missed post(s) mid-day.\n"
+                            f"Posted: {today_posted_hb} | Expected by now: {expected_hb}\n"
+                            f"Catching up immediately."
+                        )
+                    except Exception:
+                        pass
+                elif missed_hb == 0 and slots_passed_hb > 0:
+                    logger.info(
+                        f"[Scheduler] Heartbeat OK — schedule on track: "
+                        f"{today_posted_hb}/{expected_hb} posts. No action needed."
+                    )
+            # ─────────────────────────────────────────────────────────────────
 
             # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
@@ -381,9 +456,10 @@ class PinScheduler:
                     current_slot = (h, m)
                     break
 
-            # Trigger posting for: (a) normal slot OR (b) missed-slot catch-up on restart
-            if (current_slot and current_slot != _last_fired_slot) or _pending_catchup:
-                _pending_catchup = False  # consume the catch-up flag
+            # Trigger posting for: (a) normal slot OR (b) missed-slot catch-up
+            if (current_slot and current_slot != _last_fired_slot) or _pending_catchup_count > 0:
+                if _pending_catchup_count > 0:
+                    _pending_catchup_count -= 1  # consume one catch-up credit
                 if current_slot:
                     _last_fired_slot = current_slot
                 display_slot = current_slot or _last_fired_slot or (0, 0)
