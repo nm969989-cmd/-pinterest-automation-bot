@@ -22,6 +22,7 @@ Commands:
   /queue         - Show pending queue with per-date schedule breakdown
   /post_now      - Force-post next queued pin immediately (bypass time slot)
   /clearqueue    - Wipe all pending pins from the queue
+  /fixqueue      - Re-upload stale Telegram CDN URLs to permanent host
   /ping          - Check if bot responds
 """
 
@@ -191,7 +192,8 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/resume         - Resume posting\n"
         "/dryrun         - Toggle dry-run on/off\n"
         "/golive         - Enable real Pinterest posting\n"
-        "/clearqueue     - Clear pending queue\n\n"
+        "/clearqueue     - Clear pending queue\n"
+        "/fixqueue       - Re-upload stale CDN URLs to permanent host\n\n"
         "--- SETTINGS ---\n"
         "/addchannel @ch - Add source channel\n"
         "/removechannel @ch - Remove channel\n"
@@ -1000,6 +1002,107 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await update.message.reply_text(f"Error clearing queue: {e}")
         logger.error(f"[TG BOT] clearqueue error: {e}")
 
+
+async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    Re-upload all stale queue entries that still have expiring Telegram CDN
+    URLs (telesco.pe) to a permanent host (Cloudinary/Catbox) and update the
+    DB. Fixes the 'CDN expired' pin-drop bug for entries queued before the
+    permanent-host fix was deployed.
+    """
+    if not _is_admin(update): return
+    msg = update.effective_message
+    await msg.reply_text(
+        "🔧 Scanning queue for stale Telegram CDN URLs... This may take a moment."
+    )
+    try:
+        import sqlite3
+        from database import DB_PATH
+        from image_host import upload_image_to_host
+        import asyncio
+
+        def _fix_stale_entries():
+            results = {"fixed": 0, "failed": 0, "skipped": 0, "details": []}
+            with sqlite3.connect(DB_PATH) as conn:
+                rows = conn.execute(
+                    "SELECT id, title, image_path, image_url FROM pin_queue "
+                    "WHERE image_url LIKE '%telesco.pe%' OR image_url LIKE '%/t.me/%'"
+                ).fetchall()
+
+                if not rows:
+                    return results
+
+                for row_id, title, image_path, old_url in rows:
+                    # If local file still exists, re-upload it
+                    if image_path and os.path.exists(image_path):
+                        try:
+                            new_url = upload_image_to_host(image_path)
+                            if new_url:
+                                conn.execute(
+                                    "UPDATE pin_queue SET image_url=? WHERE id=?",
+                                    (new_url, row_id)
+                                )
+                                conn.commit()
+                                results["fixed"] += 1
+                                results["details"].append(
+                                    f"✅ '{title[:30]}' → {new_url[:40]}..."
+                                )
+                                logger.info(
+                                    f"[fixqueue] Re-uploaded '{title}' to permanent host: {new_url[:60]}"
+                                )
+                            else:
+                                results["failed"] += 1
+                                results["details"].append(
+                                    f"❌ '{title[:30]}' — upload failed (host down?)"
+                                )
+                        except Exception as e:
+                            results["failed"] += 1
+                            results["details"].append(
+                                f"❌ '{title[:30]}' — error: {str(e)[:40]}"
+                            )
+                    else:
+                        # Local file gone + CDN expired = unrecoverable
+                        results["skipped"] += 1
+                        results["details"].append(
+                            f"⚠️ '{title[:30]}' — file missing & CDN expired (unrecoverable)"
+                        )
+            return results
+
+        results = await asyncio.get_event_loop().run_in_executor(None, _fix_stale_entries)
+
+        if results["fixed"] == 0 and results["failed"] == 0 and results["skipped"] == 0:
+            await msg.reply_text(
+                "✅ No stale Telegram CDN URLs found in queue!\n"
+                "All entries already have permanent URLs."
+            )
+            return
+
+        detail_lines = "\n".join(results["details"][:15])  # cap at 15 to avoid long messages
+        if len(results["details"]) > 15:
+            detail_lines += f"\n... and {len(results['details']) - 15} more."
+
+        summary = (
+            f"🔧 Fix Queue Results:\n"
+            f"✅ Fixed: {results['fixed']} (permanent URL stored)\n"
+            f"❌ Failed: {results['failed']} (host upload failed)\n"
+            f"⚠️ Unrecoverable: {results['skipped']} (file missing + CDN expired)\n\n"
+            f"{detail_lines}\n\n"
+        )
+        if results["skipped"] > 0:
+            summary += (
+                f"Tip: For the {results['skipped']} unrecoverable pin(s), "
+                f"re-send the original image to the Telegram channel "
+                f"so it gets re-queued with a permanent URL."
+            )
+        await msg.reply_text(summary)
+        logger.info(
+            f"[TG BOT] /fixqueue complete: {results['fixed']} fixed, "
+            f"{results['failed']} failed, {results['skipped']} unrecoverable."
+        )
+    except Exception as e:
+        await msg.reply_text(f"Error running fixqueue: {e}")
+        logger.error(f"[TG BOT] fixqueue error: {e}", exc_info=True)
+
 async def cmd_scrape(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Manually trigger channel scraping & backlog fetch immediately."""
     if not _is_admin(update): return
@@ -1707,6 +1810,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("queue",         cmd_queue),
             ("schedule",      cmd_schedule),
             ("clearqueue",    cmd_clearqueue),
+            ("fixqueue",      cmd_fixqueue),
             ("scrape",        cmd_scrape),
             ("post_now",      cmd_postnow),
             ("clicks",        cmd_clicks),
@@ -1763,6 +1867,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("schedule",      "Today's posting schedule (Auto: 8 AM)"),
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
+                BotCommand("fixqueue",      "Re-upload stale CDN URLs to permanent host"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

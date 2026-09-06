@@ -33,8 +33,10 @@ logger = get_logger(__name__)
 def handle_new_image(filepath, caption, channel_name, image_url=""):
     """
     Callback fired when a new image is downloaded from Telegram.
-    image_url: the original Telegram CDN URL — stored in queue so we can
-               re-download the image if Render's ephemeral FS wipes local files.
+    image_url: the original Telegram CDN URL (may expire in ~1h). After
+               processing, we upload to a permanent host (Cloudinary/Catbox)
+               and store THAT URL in the queue instead, so the scheduler can
+               always resurrect the file after a Render restart/FS wipe.
     Wrapped in try/except so one bad image never crashes the whole bot.
     """
     try:
@@ -42,6 +44,24 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
 
         # 1. Process Image
         processed_path = process_image(filepath, channel_name)
+
+        # 1b. Upload to permanent host immediately so the queue stores a
+        #     permanent URL, not the expiring Telegram CDN URL.
+        #     If upload fails (Cloudinary/Catbox down), fall back to original
+        #     Telegram CDN URL — resurrection may fail later but won't crash now.
+        try:
+            from image_host import upload_image_to_host
+            permanent_url = upload_image_to_host(processed_path)
+            if permanent_url:
+                logger.info(f"[Main] Permanent image URL stored: {permanent_url[:60]}...")
+                image_url = permanent_url  # overwrite expiring Telegram CDN URL
+            else:
+                logger.warning(
+                    "[Main] Permanent host upload failed — falling back to Telegram CDN URL "
+                    "(may expire before posting slot)."
+                )
+        except Exception as _host_err:
+            logger.warning(f"[Main] Permanent host upload error (non-critical): {_host_err}")
 
         # 2. Generate Content (Vision AI via OpenRouter)
         anime_name, title, desc_template = generate_pin_content(

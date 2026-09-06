@@ -420,15 +420,26 @@ class PinScheduler:
                             # ── File resurrection (Render ephemeral FS fix) ───
                             # Render's free tier wipes the filesystem on every
                             # restart/spin-down. If the image file is gone but
-                            # the queue row has the original Telegram CDN URL,
-                            # re-download and re-process it automatically.
+                            # the queue row has a stored image_url, re-download
+                            # it automatically.
+                            # NEW IMAGES store a permanent Cloudinary/Catbox URL
+                            # so resurrection always works. Old queue entries
+                            # may still have Telegram CDN URLs (expire ~1h) —
+                            # use /fixqueue to re-upload those stale entries.
                             image_path = pin["image_path"]
                             if not os.path.exists(image_path):
                                 cdn_url = pin.get("image_url", "")
                                 if cdn_url and cdn_url.startswith("http"):
+                                    # Detect stale Telegram CDN URLs (expire in ~1h)
+                                    if "telesco.pe" in cdn_url or "/t.me/" in cdn_url:
+                                        logger.warning(
+                                            f"[Scheduler] ⚠️  image_url is a Telegram CDN link "
+                                            f"(likely expired). Use /fixqueue to re-upload "
+                                            f"stale entries. URL: {cdn_url[:80]}"
+                                        )
                                     logger.warning(
                                         f"[Scheduler] Image file missing (Render FS wipe?): {image_path}\n"
-                                        f"[Scheduler] Re-downloading from CDN: {cdn_url}"
+                                        f"[Scheduler] Re-downloading from: {cdn_url}"
                                     )
                                     try:
                                         from telegram_listener import download_image

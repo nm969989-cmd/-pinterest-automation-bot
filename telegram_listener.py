@@ -224,6 +224,24 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
 
             # Generate content
             processed_path = process_image(filepath, clean_channel)
+
+            # Upload to permanent host immediately — Telegram CDN URLs expire
+            # in ~1 hour. Store permanent URL so scheduler can resurrect the
+            # image after a Render restart without hitting a 404.
+            try:
+                from image_host import upload_image_to_host
+                permanent_url = upload_image_to_host(processed_path)
+                stored_image_url = permanent_url if permanent_url else img_url
+                if permanent_url:
+                    logger.info(f"[Backlog] Permanent image URL stored: {permanent_url[:60]}...")
+                else:
+                    logger.warning(
+                        "[Backlog] Permanent host upload failed — falling back to Telegram "
+                        "CDN URL (may expire before posting slot)."
+                    )
+            except Exception as _host_err:
+                logger.warning(f"[Backlog] Permanent host upload error (non-critical): {_host_err}")
+                stored_image_url = img_url
             anime_name, title, desc_template = generate_pin_content(
                 caption, clean_channel,
                 image_path=processed_path,
@@ -265,7 +283,7 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
                 description=description,
                 link=amazon_link,
                 anime_name=anime_name,
-                image_url=img_url,
+                image_url=stored_image_url,  # permanent URL (Cloudinary/Catbox) or CDN fallback
             )
             if added:
                 backlog_added += 1
