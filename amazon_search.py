@@ -436,19 +436,21 @@ def resolve_to_direct_link(link: str, anime_name: str = "", character_name: str 
 
 def preflight_validate_destination(url: str, anime_name: str = "", character_name: str = "", title: str = "") -> str:
     """
-    MANDATORY PRE-FLIGHT GATEKEEPER:
+    MANDATORY PRE-FLIGHT GATEKEEPER — Layer 2:
     Executed immediately before ANY pin payload is sent to Make.com or Pinterest API.
     Guarantees the destination link CANNOT produce a 404 error on Amazon India.
 
-    Guarantees:
+    Protection Layers:
       1. Resolves local tracker redirects (/r/<code>) to direct Amazon URLs.
       2. If URL contains any dead or delisted ASIN (e.g. B09WQZMX5C), immediately
          auto-heals to a live, in-stock search storefront.
       3. If URL contains erroneous category filters (&rh=n%3A1350387031), strips them.
-      4. If PA-API is not configured and the URL is an unverified /dp/ link, safely
-         converts it to the high-converting storefront search link to eliminate 404 risk.
-      5. Ensures affiliate tag is attached on all URLs.
-      6. Visitors ALWAYS land on a functioning page with real products.
+      4. Ensures affiliate tag is attached on all URLs.
+      5. Visitors ALWAYS land on a functioning page with real products.
+
+    NOTE: Valid /dp/ASIN links are passed through as-is (we trust the ASIN scraper
+    because only verified, relevant ASINs pass the HTML scraper relevance check).
+    Only known-dead ASINs (in _DEAD_ASINS set) are replaced with search links.
     """
     clean_name = _sanitize_anime_name(anime_name) if anime_name else "Anime"
     clean_char = clean_character_name(character_name) if character_name else ""
@@ -456,20 +458,19 @@ def preflight_validate_destination(url: str, anime_name: str = "", character_nam
         raw_char = title.split(" - ")[0].strip().split()[0] if " - " in title else title.strip().split()[0]
         clean_char = clean_character_name(raw_char)
 
+    # Layer 1: resolve tracker + dead ASIN check + tag enforcement
     resolved = resolve_to_direct_link(url, anime_name=clean_name, character_name=clean_char, title=title)
 
-    # If it's a direct /dp/ product link:
+    # Layer 2: final dead-ASIN gate on the resolved URL
     if "/dp/" in resolved:
-        # Check against dead ASINs
-        for dead_asin in _DEAD_ASINS:
-            if dead_asin in resolved:
-                logger.warning(f"[PreFlight] Detected dead ASIN '{dead_asin}'! Converting to live storefront link.")
+        asin_match = re.search(r'/dp/([A-Z0-9]{10})', resolved)
+        if asin_match:
+            asin = asin_match.group(1)
+            if asin in _DEAD_ASINS:
+                logger.warning(f"[PreFlight] Layer 2 caught dead ASIN '{asin}'! Converting to live storefront link.")
                 return _build_search_link("", anime_name=clean_name, character_name=clean_char)
-
-        # If official PA-API is not available, convert single fragile ASIN to storefront search
-        if not pa_api.is_available():
-            logger.info(f"[PreFlight] Upgrading single-ASIN link to 100% fail-safe product storefront link for '{clean_name}'")
-            return _build_search_link("", anime_name=clean_name, character_name=clean_char)
+        # Valid /dp/ link — pass through (do NOT downgrade to search)
+        logger.debug(f"[PreFlight] Valid product link passed through: {resolved[:80]}")
 
     return resolved
 

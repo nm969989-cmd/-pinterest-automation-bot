@@ -595,10 +595,9 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tu
                 pass
             return direct_product_url, "Anime", "Anime Product"
 
-        # Best-in-class fallback: Amazon India top-rated anime merchandise & posters
+        # Best-in-class fallback: clean anime merchandise search (NO broken category node)
         fallback_url = (
-            f"https://www.amazon.in/s?k=anime+action+figure+poster"
-            f"&rh=n%3A1350387031"
+            f"https://www.amazon.in/s?k=anime+merchandise+poster+figure"
             f"&tag={tag}&sort=review-rank"
         )
         return fallback_url, "Anime", "Anime Merch"

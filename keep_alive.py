@@ -83,8 +83,9 @@ def redirect_link(code):
     except Exception as e:
         from config import AMAZON_AFFILIATE_TAG
         tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+        # Layer 1 fallback: clean anime merchandise search (NO broken category node)
         return redirect(
-            f"https://www.amazon.in/s?k=anime+action+figure+poster&rh=n%3A1350387031&tag={tag}&sort=review-rank",
+            f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank",
             code=302
         )
 
