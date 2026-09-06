@@ -1749,43 +1749,49 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         global _app_ref, _loop_ref
         import time, requests as _req
 
-        # ── Self-heal: Force Telegram to release any stuck polling session ──
-        # Retries with backoff if rate-limited (429). Prevents Conflict errors.
-        # IMPORTANT: We cap the wait at 10s. If Telegram says wait longer,
-        # we skip /close and start immediately — a stuck session is less bad
-        # than being deaf to commands for 3+ minutes after every Render restart.
-        for attempt in range(3):
+        # ── Self-heal: Kill any existing polling session before we start ──────
+        # The CORRECT way to evict an old polling instance is to call getUpdates
+        # with timeout=0. Telegram immediately terminates any other bot that is
+        # currently long-polling on this token. /close does NOT achieve this.
+        #
+        # Step 1: deleteWebhook — clears stuck webhook state (harmless if none).
+        # Step 2: getUpdates(timeout=0) — forcefully kicks out any old poller.
+        # Step 3: Wait 3s for the old instance's connection to fully die.
+        # Step 4: One more getUpdates(timeout=0) to drain any queued updates and
+        #         confirm we now exclusively own the session.
+        BASE = f"https://api.telegram.org/bot{token}"
+        try:
+            _req.get(f"{BASE}/deleteWebhook", params={"drop_pending_updates": "true"}, timeout=8)
+            logger.info("[TG BOT] deleteWebhook called (clears any stuck webhook state).")
+        except Exception as e:
+            logger.warning(f"[TG BOT] deleteWebhook failed (non-critical): {e}")
+
+        for kick_attempt in range(3):
             try:
+                # timeout=0 → Telegram returns immediately AND kills any
+                # concurrent long-poll session on the same token.
                 r = _req.get(
-                    f"https://api.telegram.org/bot{token}/close",
-                    timeout=8
+                    f"{BASE}/getUpdates",
+                    params={"timeout": 0, "limit": 1},
+                    timeout=10
                 )
                 data = r.json()
                 if data.get("ok"):
-                    logger.info("[TG BOT] Session closed cleanly.")
-                    time.sleep(2)
+                    logger.info("[TG BOT] Session acquired via getUpdates — old poller evicted.")
+                    time.sleep(3)  # Let old instance's TCP conn fully close
                     break
                 elif r.status_code == 429:
-                    wait = data.get("parameters", {}).get("retry_after", 30)
-                    if wait > 10:
-                        # Don't block startup for a long rate-limit.
-                        # Telegram's getUpdates with drop_pending_updates=True
-                        # will handle any conflict at polling start.
-                        logger.warning(
-                            f"[TG BOT] Rate-limited on /close ({wait}s). "
-                            f"Skipping — proceeding with startup immediately."
-                        )
-                        break
-                    logger.warning(f"[TG BOT] Rate-limited on /close. Waiting {wait}s...")
-                    time.sleep(wait + 1)
+                    wait = data.get("parameters", {}).get("retry_after", 10)
+                    wait = min(wait, 15)  # cap so we don't block startup forever
+                    logger.warning(f"[TG BOT] Rate-limited on kick getUpdates. Waiting {wait}s...")
+                    time.sleep(wait)
                 else:
-                    # Already closed or not running — fine to proceed
-                    time.sleep(1)
+                    time.sleep(2)
                     break
             except Exception as e:
-                logger.warning(f"[TG BOT] /close attempt {attempt+1} failed: {e}")
+                logger.warning(f"[TG BOT] Kick getUpdates attempt {kick_attempt+1} failed: {e}")
                 time.sleep(2)
-        # ────────────────────────────────────────────────────────────────────
+        # ─────────────────────────────────────────────────────────────────────
 
 
         loop = asyncio.new_event_loop()
@@ -1891,9 +1897,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         # it tries to install Unix signal handlers (set_wakeup_fd) which only
         # work in the main thread. We use the low-level async API instead.
         async def _async_polling():
-            # Retry loop: if a Conflict error occurs (two instances polling
-            # simultaneously after a fast restart), wait 15s for the old
-            # instance to shut down, then retry up to 5 times.
+            # Retry loop: if a Conflict error still occurs despite the pre-start
+            # getUpdates kick above, we wait and re-kick via HTTP before retrying.
+            # Exponential backoff: 5s, 10s, 20s, 35s, 35s, 35s, 35s, 35s.
             #
             # nonlocal required: we reassign 'app' in the except block.
             # Without nonlocal, Python treats 'app' as local throughout the
@@ -1901,7 +1907,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             # NOTE: _app_ref is a module global, not local to _run(), so we
             # cannot use nonlocal for it — we use 'global _app_ref' inline below.
             nonlocal app
-            for poll_attempt in range(5):
+            import aiohttp
+            for poll_attempt in range(8):
                 try:
                     async with app:
                         # Register the command menu
@@ -1917,12 +1924,30 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                     break
                 except Exception as e:
                     err_str = str(e)
-                    if "Conflict" in err_str and poll_attempt < 4:
-                        wait_s = 15 * (poll_attempt + 1)
+                    if "Conflict" in err_str and poll_attempt < 7:
+                        # Exponential backoff capped at 35s
+                        wait_s = min(5 * (2 ** poll_attempt), 35)
                         logger.warning(
-                            f"[TG BOT] Conflict error (old instance still running?). "
-                            f"Retrying in {wait_s}s... (attempt {poll_attempt+1}/5)"
+                            f"[TG BOT] Conflict error — old instance still holds the session. "
+                            f"Re-kicking via getUpdates then retrying in {wait_s}s "
+                            f"(attempt {poll_attempt+1}/8)"
                         )
+                        # Async HTTP kick: evict old poller via getUpdates(timeout=0)
+                        try:
+                            async with aiohttp.ClientSession() as sess:
+                                async with sess.get(
+                                    f"https://api.telegram.org/bot{token}/getUpdates",
+                                    params={"timeout": 0, "limit": 1},
+                                    timeout=aiohttp.ClientTimeout(total=10)
+                                ) as resp:
+                                    kick_data = await resp.json()
+                                    if kick_data.get("ok"):
+                                        logger.info("[TG BOT] Async kick succeeded — old poller evicted.")
+                                    else:
+                                        logger.warning(f"[TG BOT] Async kick returned: {kick_data}")
+                        except Exception as kick_e:
+                            logger.warning(f"[TG BOT] Async kick error: {kick_e}")
+
                         await asyncio.sleep(wait_s)
                         # Re-build app with fresh connection for next attempt
                         app = Application.builder().token(token).build()
