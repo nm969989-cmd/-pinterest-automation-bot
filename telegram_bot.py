@@ -1007,8 +1007,8 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
     Re-upload all stale queue entries that still have expiring Telegram CDN
     URLs (telesco.pe) to a permanent host (Cloudinary/Catbox) and update the
-    DB. Fixes the 'CDN expired' pin-drop bug for entries queued before the
-    permanent-host fix was deployed.
+    DB. Unrecoverable entries (file missing AND CDN expired) are deleted from
+    the queue immediately so they don't waste future posting slots.
     """
     if not _is_admin(update): return
     msg = update.effective_message
@@ -1022,7 +1022,7 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         import asyncio
 
         def _fix_stale_entries():
-            results = {"fixed": 0, "failed": 0, "skipped": 0, "details": []}
+            results = {"fixed": 0, "failed": 0, "deleted": 0, "details": []}
             with sqlite3.connect(DB_PATH) as conn:
                 rows = conn.execute(
                     "SELECT id, title, image_path, image_url FROM pin_queue "
@@ -1033,7 +1033,7 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                     return results
 
                 for row_id, title, image_path, old_url in rows:
-                    # If local file still exists, re-upload it
+                    # If local file still exists, re-upload it to a permanent host
                     if image_path and os.path.exists(image_path):
                         try:
                             new_url = upload_image_to_host(image_path)
@@ -1045,7 +1045,7 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                                 conn.commit()
                                 results["fixed"] += 1
                                 results["details"].append(
-                                    f"✅ '{title[:30]}' → {new_url[:40]}..."
+                                    f"✅ '{title[:30]}' → permanent URL stored"
                                 )
                                 logger.info(
                                     f"[fixqueue] Re-uploaded '{title}' to permanent host: {new_url[:60]}"
@@ -1061,16 +1061,24 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                                 f"❌ '{title[:30]}' — error: {str(e)[:40]}"
                             )
                     else:
-                        # Local file gone + CDN expired = unrecoverable
-                        results["skipped"] += 1
+                        # Local file gone + CDN expired = unrecoverable.
+                        # DELETE immediately so the scheduler doesn't waste
+                        # 3 retry slots trying to re-download a dead URL.
+                        conn.execute("DELETE FROM pin_queue WHERE id=?", (row_id,))
+                        conn.commit()
+                        results["deleted"] += 1
                         results["details"].append(
-                            f"⚠️ '{title[:30]}' — file missing & CDN expired (unrecoverable)"
+                            f"🗑️ '{title[:30]}' — deleted (file missing & CDN expired)"
+                        )
+                        logger.warning(
+                            f"[fixqueue] Deleted unrecoverable pin '{title}' "
+                            f"(file missing + CDN expired)."
                         )
             return results
 
         results = await asyncio.get_event_loop().run_in_executor(None, _fix_stale_entries)
 
-        if results["fixed"] == 0 and results["failed"] == 0 and results["skipped"] == 0:
+        if results["fixed"] == 0 and results["failed"] == 0 and results["deleted"] == 0:
             await msg.reply_text(
                 "✅ No stale Telegram CDN URLs found in queue!\n"
                 "All entries already have permanent URLs."
@@ -1085,19 +1093,19 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"🔧 Fix Queue Results:\n"
             f"✅ Fixed: {results['fixed']} (permanent URL stored)\n"
             f"❌ Failed: {results['failed']} (host upload failed)\n"
-            f"⚠️ Unrecoverable: {results['skipped']} (file missing + CDN expired)\n\n"
+            f"🗑️ Deleted: {results['deleted']} (unrecoverable — file missing + CDN expired)\n\n"
             f"{detail_lines}\n\n"
         )
-        if results["skipped"] > 0:
+        if results["deleted"] > 0:
             summary += (
-                f"Tip: For the {results['skipped']} unrecoverable pin(s), "
-                f"re-send the original image to the Telegram channel "
-                f"so it gets re-queued with a permanent URL."
+                f"The {results['deleted']} deleted pin(s) were removed from the queue to avoid "
+                f"wasting posting slots. Re-send the original images to the Telegram channel "
+                f"so they get re-queued with a permanent URL."
             )
         await msg.reply_text(summary)
         logger.info(
             f"[TG BOT] /fixqueue complete: {results['fixed']} fixed, "
-            f"{results['failed']} failed, {results['skipped']} unrecoverable."
+            f"{results['failed']} failed, {results['deleted']} deleted (unrecoverable)."
         )
     except Exception as e:
         await msg.reply_text(f"Error running fixqueue: {e}")

@@ -430,58 +430,77 @@ class PinScheduler:
                             if not os.path.exists(image_path):
                                 cdn_url = pin.get("image_url", "")
                                 if cdn_url and cdn_url.startswith("http"):
-                                    # Detect stale Telegram CDN URLs (expire in ~1h)
-                                    if "telesco.pe" in cdn_url or "/t.me/" in cdn_url:
-                                        logger.warning(
-                                            f"[Scheduler] ⚠️  image_url is a Telegram CDN link "
-                                            f"(likely expired). Use /fixqueue to re-upload "
-                                            f"stale entries. URL: {cdn_url[:80]}"
-                                        )
-                                    logger.warning(
-                                        f"[Scheduler] Image file missing (Render FS wipe?): {image_path}\n"
-                                        f"[Scheduler] Re-downloading from: {cdn_url}"
+                                    # Detect stale Telegram CDN URLs — these expire
+                                    # in ~1h and CANNOT be re-downloaded. Drop
+                                    # immediately instead of wasting 3 retry slots.
+                                    is_stale_cdn = (
+                                        "telesco.pe" in cdn_url or "/t.me/" in cdn_url
                                     )
-                                    try:
-                                        from telegram_listener import download_image
-                                        from image_processor import process_image
-                                        safe_name = os.path.splitext(os.path.basename(image_path))[0]
-                                        dl_path = download_image(cdn_url, safe_name)
-                                        if dl_path:
-                                            image_path = process_image(dl_path)
-                                            update_pin_image_path(pin["id"], image_path)
-                                            logger.info(
-                                                f"[Scheduler] Re-download success: {image_path}"
-                                            )
-                                        else:
-                                            raise RuntimeError("download_image returned None")
-                                    except Exception as re_err:
+                                    if is_stale_cdn:
                                         logger.error(
-                                            f"[Scheduler] Re-download failed for '{pin['title']}': {re_err}"
+                                            f"[Scheduler] ❌ Dropping pin immediately — "
+                                            f"Telegram CDN URL is expired (cannot re-download): "
+                                            f"'{pin['title']}'. Use /fixqueue to prevent this."
                                         )
-                                        new_count = increment_retry_count(pin["id"])
-                                        if new_count >= 3:
-                                            remove_queued_pin(pin["id"])
-                                            logger.error(
-                                                f"[Scheduler] Dropped pin after 3 failed re-downloads: '{pin['title']}'"
+                                        remove_queued_pin(pin["id"])
+                                        try:
+                                            from telegram_bot import notify_admin
+                                            notify_admin(
+                                                f"⚠️ Pin dropped — Telegram CDN expired:\n"
+                                                f"'{pin['title']}'\n"
+                                                f"Anime: {pin['anime_name']}\n"
+                                                f"Re-send the original image to re-queue it with a "
+                                                f"permanent URL. Run /fixqueue after re-sending."
                                             )
-                                            try:
-                                                from telegram_bot import notify_admin
-                                                notify_admin(
-                                                    f"⚠️ Pin dropped — image lost & CDN expired:\n"
-                                                    f"'{pin['title']}'\n"
-                                                    f"Anime: {pin['anime_name']}\n"
-                                                    f"The Telegram CDN URL has expired. "
-                                                    f"Re-send the image to re-queue it."
-                                                )
-                                            except Exception:
-                                                pass
-                                        else:
-                                            logger.warning(
-                                                f"[Scheduler] Will retry re-download next slot "
-                                                f"(attempt {new_count}/3): '{pin['title']}'"
-                                            )
-                                        # Skip this slot — don't attempt upload with no file
+                                        except Exception:
+                                            pass
                                         image_path = None
+                                    else:
+                                        logger.warning(
+                                            f"[Scheduler] Image file missing (Render FS wipe?): {image_path}\n"
+                                            f"[Scheduler] Re-downloading from: {cdn_url}"
+                                        )
+                                        try:
+                                            from telegram_listener import download_image
+                                            from image_processor import process_image
+                                            safe_name = os.path.splitext(os.path.basename(image_path))[0]
+                                            dl_path = download_image(cdn_url, safe_name)
+                                            if dl_path:
+                                                image_path = process_image(dl_path)
+                                                update_pin_image_path(pin["id"], image_path)
+                                                logger.info(
+                                                    f"[Scheduler] Re-download success: {image_path}"
+                                                )
+                                            else:
+                                                raise RuntimeError("download_image returned None")
+                                        except Exception as re_err:
+                                            logger.error(
+                                                f"[Scheduler] Re-download failed for '{pin['title']}': {re_err}"
+                                            )
+                                            new_count = increment_retry_count(pin["id"])
+                                            if new_count >= 3:
+                                                remove_queued_pin(pin["id"])
+                                                logger.error(
+                                                    f"[Scheduler] Dropped pin after 3 failed re-downloads: '{pin['title']}'"
+                                                )
+                                                try:
+                                                    from telegram_bot import notify_admin
+                                                    notify_admin(
+                                                        f"⚠️ Pin dropped — image lost & CDN expired:\n"
+                                                        f"'{pin['title']}'\n"
+                                                        f"Anime: {pin['anime_name']}\n"
+                                                        f"The Telegram CDN URL has expired. "
+                                                        f"Re-send the image to re-queue it."
+                                                    )
+                                                except Exception:
+                                                    pass
+                                            else:
+                                                logger.warning(
+                                                    f"[Scheduler] Will retry re-download next slot "
+                                                    f"(attempt {new_count}/3): '{pin['title']}'"
+                                                )
+                                            # Skip this slot — don't attempt upload with no file
+                                            image_path = None
                                 else:
                                     logger.error(
                                         f"[Scheduler] Image file missing and no CDN URL stored. "
