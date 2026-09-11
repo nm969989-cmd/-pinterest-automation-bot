@@ -181,8 +181,24 @@ def _fetch_first_asin(search_query: str, anime_name: str = "", character_name: s
         query = search_query or f"{character_name} {anime_name}".strip()
         asin = pa_api.get_best_asin(query)
         if asin and asin not in _DEAD_ASINS:
-            return asin
-        logger.warning(f"[Amazon] PA-API returned no results for: '{query}'")
+            # Verify the ASIN is anime-relevant by checking title from PA-API results
+            results = pa_api.search_items(query, search_index="Toys", item_count=3)
+            relevant_asin = None
+            for r in results:
+                if r["asin"] == asin and _is_product_relevant(r.get("title", ""), anime_name=anime_name, search_query=search_query):
+                    relevant_asin = asin
+                    break
+            if not relevant_asin:
+                # Try All category results too
+                results_all = pa_api.search_items(query, search_index="All", item_count=3)
+                for r in results_all:
+                    if _is_product_relevant(r.get("title", ""), anime_name=anime_name, search_query=search_query):
+                        relevant_asin = r["asin"]
+                        break
+            if relevant_asin and relevant_asin not in _DEAD_ASINS:
+                logger.info(f"[Amazon] PA-API verified relevant ASIN: {relevant_asin}")
+                return relevant_asin
+        logger.warning(f"[Amazon] PA-API returned no relevant results for: '{query}'")
         # Fall through to HTML scraper as backup even with PA-API
 
     # ── Priority 2: HTML scraper with relevance & dead ASIN validation ───────
@@ -251,6 +267,8 @@ def _build_search_link(search_query: str = "", anime_name: str = "", character_n
     Returns an anime/character-specific Amazon India search storefront link.
     Guaranteed to load live, in-stock products on Amazon India with affiliate tag attached.
     NEVER 404s and never shows 'Looking for something? We're sorry'.
+    The 'i=toys' department filter narrows results to Toys & Games — where anime
+    figures, posters, and collectibles live — avoiding generic unrelated results.
     """
     clean_char = clean_character_name(character_name) if character_name else ""
     clean_anime = _sanitize_anime_name(anime_name) if anime_name else ""
@@ -271,6 +289,7 @@ def _build_search_link(search_query: str = "", anime_name: str = "", character_n
     encoded_query = urllib.parse.quote(query_str)
     return (
         f"https://www.amazon.in/s?k={encoded_query}"
+        f"&i=toys"                              # Toys & Games dept: anime figures/posters
         f"&tag={AMAZON_AFFILIATE_TAG}"
         f"&sort=review-rank"
         f"&utm_source=Pinterest&utm_medium=organic"

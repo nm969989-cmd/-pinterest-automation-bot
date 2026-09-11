@@ -196,15 +196,22 @@ def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "", ima
         conn.commit()
 
 
-def get_today_uploads() -> list:
-    """Returns all pins uploaded today as list of dicts."""
+def get_today_uploads(today_str: str = None) -> list:
+    """Returns all pins uploaded today (IST) as list of dicts.
+    Uses IST-adjusted date (same as count_posts_today) to avoid UTC/IST mismatch.
+    Accepts optional today_str (IST date 'YYYY-MM-DD') or auto-computes it.
+    """
+    if not today_str:
+        # Compute IST date inline to avoid circular imports
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
     with _get_conn() as conn:
         rows = conn.execute("""
             SELECT title, anime_name, image_url, uploaded_at
             FROM uploaded_files
-            WHERE date(uploaded_at) = date('now')
+            WHERE date(uploaded_at, '+5 hours', '+30 minutes') = ?
             ORDER BY uploaded_at DESC
-        """).fetchall()
+        """, (today_str,)).fetchall()
     return [
         {"title": r[0], "anime": r[1], "image_url": r[2], "uploaded_at": r[3]}
         for r in rows
@@ -326,6 +333,20 @@ def count_posts_today(today_str: str) -> int:
             "SELECT COUNT(*) FROM uploaded_files "
             "WHERE date(uploaded_at, '+5 hours', '+30 minutes') = ?",
             (today_str,)
+        ).fetchone()[0]
+
+
+def count_posts_on_utc_date(utc_date_str: str) -> int:
+    """Count how many pins were uploaded on a specific UTC calendar date.
+    Used by startup recovery to compare UTC slots vs UTC posts without
+    IST/UTC cross-midnight timezone mismatch.
+    utc_date_str: 'YYYY-MM-DD' in UTC.
+    """
+    with _get_conn() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM uploaded_files "
+            "WHERE date(uploaded_at) = ?",
+            (utc_date_str,)
         ).fetchone()[0]
 
 

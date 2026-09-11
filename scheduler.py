@@ -329,7 +329,8 @@ class PinScheduler:
         from database import (get_next_queued_pin, remove_queued_pin,
                                count_posts_today, mark_file_uploaded,
                                is_file_uploaded, is_image_url_uploaded,
-                               increment_retry_count, update_pin_image_path)
+                               increment_retry_count, update_pin_image_path,
+                               count_posts_on_utc_date)
         from pinterest_uploader import upload_to_pinterest
 
         self.is_running = True
@@ -359,13 +360,23 @@ class PinScheduler:
         now_startup = datetime.datetime.utcnow()
         today_ist_startup = _today_ist()
         jittered_startup = _get_jittered_times_utc()
-        today_posted_startup = count_posts_today(today_ist_startup)
 
-        # Count how many slots have fully passed today (beyond the 6-min fire window)
+        # Use UTC date for slot comparison AND post counting — both sides must use
+        # the same timezone to avoid the cross-midnight IST/UTC mismatch where
+        # IST midnight causes today_ist = new day (0 posts) while all UTC slots
+        # appear "passed" on yesterday UTC, producing a false 5-pin catch-up.
+        today_utc_date = now_startup.date()
+        today_utc_str  = today_utc_date.strftime("%Y-%m-%d")
+        today_posted_startup = count_posts_on_utc_date(today_utc_str)
+
+        # Count how many slots have fully passed today (beyond the 6-min fire window).
+        # Anchored to today's UTC date so slots and post counts are in the same timezone.
         slots_passed_today = 0
         for (h, m) in jittered_startup:
-            slot_start = now_startup.replace(hour=h, minute=m, second=0, microsecond=0)
-            secs_past = (now_startup - slot_start).total_seconds()
+            slot_utc_dt = datetime.datetime(
+                today_utc_date.year, today_utc_date.month, today_utc_date.day, h, m
+            )
+            secs_past = (now_startup - slot_utc_dt).total_seconds()
             if secs_past > 360:  # slot passed and outside normal 6-min fire window
                 slots_passed_today += 1
 
@@ -416,9 +427,17 @@ class PinScheduler:
             if mins_since_heartbeat >= 30:
                 _last_heartbeat_check = now
                 today_posted_hb = count_posts_today(today_ist)
+                # Use UTC date for both slot counting and post counting to stay in
+                # the same timezone — avoids cross-midnight IST/UTC false positives.
+                today_utc_date_hb = now.date()
+                today_utc_str_hb  = today_utc_date_hb.strftime("%Y-%m-%d")
+                today_posted_hb   = count_posts_on_utc_date(today_utc_str_hb)
                 slots_passed_hb = sum(
                     1 for (h, m) in _get_jittered_times_utc()
-                    if (now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds() > 360
+                    if (now - datetime.datetime(
+                        today_utc_date_hb.year, today_utc_date_hb.month,
+                        today_utc_date_hb.day, h, m
+                    )).total_seconds() > 360
                 )
                 expected_hb = min(slots_passed_hb, MAX_POSTS_PER_DAY)
                 missed_hb = max(0, expected_hb - today_posted_hb)

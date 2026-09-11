@@ -131,7 +131,13 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
     row1 = [InlineKeyboardButton("📌 View Pinterest Profile", url=p_url)]
 
     if amazon_url and amazon_url.startswith("http"):
-        row1.append(InlineKeyboardButton("🎯 View Amazon Product", url=amazon_url))
+        # Show different label depending on whether it's a direct product or search results
+        if "/dp/" in amazon_url:
+            amazon_label = "🎯 View Amazon Product"
+        else:
+            # Search link — honest label so user knows what to expect
+            amazon_label = "🔍 Browse Amazon Products"
+        row1.append(InlineKeyboardButton(amazon_label, url=amazon_url))
 
     return InlineKeyboardMarkup([
         row1,
@@ -398,14 +404,18 @@ async def _send_daily_report(chat_id):
         return
     try:
         from database import get_today_uploads, get_all_time_stats
-        pins   = get_today_uploads()
+        # Use IST date for consistent timezone-aware reporting
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_ist_str = now_ist.strftime("%Y-%m-%d")
+        today_display = now_ist.strftime("%d %b %Y")
+
+        pins   = get_today_uploads(today_ist_str)
         stats  = get_all_time_stats()
-        today  = datetime.date.today().strftime("%d %b %Y")
         count  = len(pins)
 
         if count == 0:
             msg = (
-                f"Daily Pinterest Report — {today}\n"
+                f"Daily Pinterest Report — {today_display}\n"
                 f"{'='*30}\n"
                 f"No pins were posted today.\n\n"
                 f"Total all-time: {stats['total']} pins"
@@ -425,7 +435,7 @@ async def _send_daily_report(chat_id):
             )
 
             msg = (
-                f"Daily Pinterest Report — {today}\n"
+                f"Daily Pinterest Report — {today_display}\n"
                 f"{'='*30}\n"
                 f"Pins posted today : {count}\n"
                 f"All-time total    : {stats['total']} pins\n\n"
@@ -544,12 +554,14 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                 else:
                     logger.warning("[TG BOT] 8 AM schedule skipped — admin chat ID not set yet.")
 
-            # 09:00 AM IST = 03:30 UTC -> Daily Summary Report
-            if now_utc.hour == 3 and now_utc.minute == 30 and now_utc.date() != sent_today:
+            # 09:00 PM IST = 15:30 UTC -> Daily Summary Report
+            # Moved from 9 AM IST to 9 PM IST: at 9 AM the first pin hasn't posted yet
+            # so the report always said "No pins today". At 9 PM all 5 pins are done.
+            if now_utc.hour == 15 and now_utc.minute == 30 and now_utc.date() != sent_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id:
                     sent_today = now_utc.date()
-                    logger.info(f"[TG BOT] Sending daily report to {chat_id} (9 AM IST)...")
+                    logger.info(f"[TG BOT] Sending daily report to {chat_id} (9 PM IST)...")
                     asyncio.run_coroutine_threadsafe(
                         _send_daily_report(chat_id), _loop_ref
                     )

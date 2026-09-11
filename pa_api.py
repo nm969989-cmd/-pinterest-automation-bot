@@ -241,13 +241,22 @@ def get_best_asin(keywords: str) -> str | None:
     """
     Returns the ASIN of the best matching product for the keywords,
     or None if not found / PA-API not configured.
+    Searches in 'Toys' category (anime figures, posters, collectibles).
     This is the main function called by amazon_search.py.
     """
-    results = search_items(keywords, item_count=1)
+    # Search in Toys first (anime figures, posters, collectibles)
+    results = search_items(keywords, search_index="Toys", item_count=3)
     if results:
         asin = results[0]["asin"]
         title = results[0]["title"]
-        logger.info(f"[PA-API] Best ASIN for '{keywords}': {asin} ({title[:50]})")
+        logger.info(f"[PA-API] Best ASIN (Toys) for '{keywords}': {asin} ({title[:50]})")
+        return asin
+    # Fallback: search All categories
+    results = search_items(keywords, search_index="All", item_count=3)
+    if results:
+        asin = results[0]["asin"]
+        title = results[0]["title"]
+        logger.info(f"[PA-API] Best ASIN (All) for '{keywords}': {asin} ({title[:50]})")
         return asin
     return None
 
