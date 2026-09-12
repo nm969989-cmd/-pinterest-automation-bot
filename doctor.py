@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 
 def run_full_system_diagnostic() -> dict:
     """
-    Runs a comprehensive 7-point diagnostic check across the entire bot stack.
+    Runs a comprehensive 8-point diagnostic check across the entire bot stack.
     Returns a structured dictionary of results and warnings.
     """
     import config
@@ -85,6 +85,53 @@ def run_full_system_diagnostic() -> dict:
     click_track_active = bool(config.APP_BASE_URL)
     tracker_status = "🟢 Tracking Active" if click_track_active else "⚪ Direct Amazon Links"
 
+    # 8. Are.na Cross-Post Status
+    arena_status = "⚪ Disabled"
+    try:
+        if config.ARENA_ENABLED and config.ARENA_ACCESS_TOKEN:
+            from arena_uploader import verify_arena_token, get_arena_channel_info
+            token_ok = verify_arena_token()
+            if token_ok:
+                info = get_arena_channel_info()
+                if info:
+                    used = info.get("length", 0)
+                    remaining = max(0, 200 - used)
+                    arena_status = f"🟢 Active ({used}/200 blocks, {remaining} free)"
+                    if remaining < 20:
+                        warnings.append(f"Are.na block quota low: only {remaining} blocks left (Guest plan, 200 max). Upgrade to Premium at $7/mo for unlimited.")
+                else:
+                    arena_status = "🟡 Token OK but channel not found"
+                    warnings.append("Are.na channel not found — check ARENA_CHANNEL_SLUG in .env")
+            else:
+                arena_status = "🔴 Token Invalid"
+                warnings.append("Are.na token is invalid — check ARENA_ACCESS_TOKEN in .env")
+        elif config.ARENA_ENABLED and not config.ARENA_ACCESS_TOKEN:
+            arena_status = "🔴 Token Missing"
+            warnings.append("ARENA_ENABLED=true but ARENA_ACCESS_TOKEN is empty in .env")
+    except Exception as _arena_e:
+        arena_status = f"🟡 Check failed ({_arena_e})"
+
+    # 9. Tumblr Cross-Post Status
+    tumblr_status = "⚪ Disabled"
+    try:
+        if config.TUMBLR_ENABLED and config.TUMBLR_ACCESS_TOKEN:
+            from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
+            tok_ok = verify_tumblr_token()
+            if tok_ok:
+                tinfo = get_tumblr_blog_info()
+                if tinfo:
+                    tumblr_status = f"🟢 Active ({tinfo['posts']:,} posts, {tinfo['followers']:,} followers)"
+                else:
+                    tumblr_status = "🟡 Token OK — blog info unavailable"
+            else:
+                tumblr_status = "🔴 Token Invalid"
+                warnings.append("Tumblr token is invalid — check TUMBLR_ACCESS_TOKEN in .env")
+        elif config.TUMBLR_ENABLED and not config.TUMBLR_ACCESS_TOKEN:
+            tumblr_status = "🔴 Token Missing"
+            warnings.append("TUMBLR_ENABLED=true but TUMBLR_ACCESS_TOKEN is empty in .env")
+    except Exception as _tmblr_e:
+        tumblr_status = f"🟡 Check failed ({_tmblr_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -114,6 +161,8 @@ def run_full_system_diagnostic() -> dict:
         "amazon_status": amazon_status,
         "pa_api_status": pa_api_status,
         "tracker_status": tracker_status,
+        "arena_status": arena_status,
+        "tumblr_status": tumblr_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -156,7 +205,9 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Clicks (3 Days)  : {stats['clicks_3d']} clicks\n"
         f"  • Est. 3-Day Rev   : {est_revenue}\n\n"
         f"🌐 Integrations & Webhooks:\n"
-        f"  • Make.com Webhook : {diag['webhook_status']}\n"
+        f"  • Make.com Webhook  : {diag['webhook_status']}\n"
+        f"  • Are.na Cross-Post : {diag.get('arena_status', 'N/A')}\n"
+        f"  • Tumblr Cross-Post : {diag.get('tumblr_status', 'N/A')}\n"
         f"  • Monitored Channels: {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )

@@ -7,3 +7,4 @@ gunicorn==22.0.0
 python-dotenv==1.0.1
 python-telegram-bot>=20.0
 openai>=1.0.0
+pytumblr>=0.1.2

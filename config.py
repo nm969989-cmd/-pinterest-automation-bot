@@ -62,6 +62,20 @@ TELEGRAM_ADMIN_CHAT_ID = os.getenv('TELEGRAM_ADMIN_CHAT_ID')  # Set after first 
 JSONBIN_API_KEY = os.getenv('JSONBIN_API_KEY', '')
 JSONBIN_BIN_ID  = os.getenv('JSONBIN_BIN_ID', '')
 
+# Are.na Visual Curation Platform
+ARENA_ACCESS_TOKEN = os.getenv('ARENA_ACCESS_TOKEN', '')
+ARENA_CHANNEL_SLUG = os.getenv('ARENA_CHANNEL_SLUG', 'aesthetic-inspiration')
+ARENA_ENABLED      = os.getenv('ARENA_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+# Tumblr Cross-Post
+TUMBLR_CONSUMER_KEY        = os.getenv('TUMBLR_CONSUMER_KEY', 'jISRSZLLpKhxd2XWNrkYuZ7l9RLpwxAFqwkskbkyOw45ZkQuDo')
+TUMBLR_CONSUMER_SECRET     = os.getenv('TUMBLR_CONSUMER_SECRET', 'C5dR8uw8i4cpogQNVxC0quGkc1TBVjAMsd4pBxQhuOjwlAxyFH')
+TUMBLR_ACCESS_TOKEN        = os.getenv('TUMBLR_ACCESS_TOKEN', '')
+TUMBLR_ACCESS_TOKEN_SECRET = os.getenv('TUMBLR_ACCESS_TOKEN_SECRET', '')
+TUMBLR_BLOG_NAME           = os.getenv('TUMBLR_BLOG_NAME', 'animeasthet07')
+TUMBLR_TAGS                = os.getenv('TUMBLR_TAGS', 'anime,aesthetic,animeart,wallpaper,pinterest,animeasthetic')
+TUMBLR_ENABLED             = os.getenv('TUMBLR_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))

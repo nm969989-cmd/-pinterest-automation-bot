@@ -171,6 +171,105 @@ def _assign_scheduled_date(queue_position: int) -> str:
     return target_date.strftime("%Y-%m-%d")
 
 
+def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str = ""):
+    """
+    Safely dispatches image upload to configured stock photo platforms in a background thread.
+    Zero impact on Pinterest posting. Skips platforms without credentials or if daily limit reached.
+    """
+    if not image_path or not os.path.isfile(image_path):
+        return
+
+    def _worker():
+        try:
+            from database import count_stock_posts_today, mark_stock_uploaded
+            max_posts = int(os.getenv("STOCK_MAX_POSTS_PER_DAY", "5"))
+            filename = os.path.basename(image_path)
+            logger.info(f"[Stock Dispatch] Checking stock platforms for {filename} (limit: {max_posts}/day)...")
+
+            # 1. Shutterstock
+            if os.getenv("SHUTTERSTOCK_MAKE_WEBHOOK_URL") or os.getenv("SHUTTERSTOCK_FTP_USER") or os.getenv("SHUTTERSTOCK_ACCESS_TOKEN"):
+                if count_stock_posts_today("shutterstock") < max_posts:
+                    try:
+                        from shutterstock_uploader import upload_to_shutterstock
+                        ok = upload_to_shutterstock(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("shutterstock", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] Shutterstock result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] Shutterstock error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] Shutterstock daily limit reached.")
+
+            # 2. Adobe Stock
+            if os.getenv("ADOBE_MAKE_WEBHOOK_URL") or os.getenv("ADOBE_FTP_USER"):
+                if count_stock_posts_today("adobe") < max_posts:
+                    try:
+                        from adobe_uploader import upload_to_adobe
+                        ok = upload_to_adobe(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("adobe", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] Adobe Stock result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] Adobe Stock error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] Adobe Stock daily limit reached.")
+
+            # 3. Freepik Contributor
+            if os.getenv("FREEPIK_FTP_USER") and os.getenv("FREEPIK_FTP_PASS"):
+                if count_stock_posts_today("freepik") < max_posts:
+                    try:
+                        from freepik_uploader import upload_to_freepik
+                        ok = upload_to_freepik(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("freepik", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] Freepik result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] Freepik error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] Freepik daily limit reached.")
+
+            # 4. Dreamstime
+            if os.getenv("DREAMSTIME_FTP_USER") and os.getenv("DREAMSTIME_FTP_PASS"):
+                if count_stock_posts_today("dreamstime") < max_posts:
+                    try:
+                        from dreamstime_uploader import upload_to_dreamstime
+                        ok = upload_to_dreamstime(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("dreamstime", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] Dreamstime result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] Dreamstime error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] Dreamstime daily limit reached.")
+
+            # 5. Depositphotos
+            if os.getenv("DEPOSITPHOTOS_FTP_USER") and os.getenv("DEPOSITPHOTOS_FTP_PASS"):
+                if count_stock_posts_today("depositphotos") < max_posts:
+                    try:
+                        from depositphotos_uploader import upload_to_depositphotos
+                        ok = upload_to_depositphotos(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("depositphotos", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] Depositphotos result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] Depositphotos error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] Depositphotos daily limit reached.")
+
+            # 6. 123RF
+            if os.getenv("RF123_FTP_USER") and os.getenv("RF123_FTP_PASS"):
+                if count_stock_posts_today("123rf") < max_posts:
+                    try:
+                        from rf123_uploader import upload_to_123rf
+                        ok = upload_to_123rf(image_path, title=title, caption=caption)
+                        mark_stock_uploaded("123rf", filename, title, "success" if ok else "failed")
+                        logger.info(f"[Stock Dispatch] 123RF result: {'SUCCESS' if ok else 'FAILED'}")
+                    except Exception as e:
+                        logger.warning(f"[Stock Dispatch] 123RF error: {e}")
+                else:
+                    logger.info("[Stock Dispatch] 123RF daily limit reached.")
+
+        except Exception as e:
+            logger.warning(f"[Stock Dispatch] Worker exception: {e}")
+
+    threading.Thread(target=_worker, name="StockDispatchThread", daemon=True).start()
+
+
 class PinScheduler:
     """
     Smart scheduler with priority queue and time-slot posting.
@@ -639,6 +738,55 @@ class PinScheduler:
                                         posted_today=counts_after,
                                         time_ist=now_ist,
                                     )
+                                    # Auto-dispatch to configured stock photography platforms
+                                    _dispatch_stock_uploads_async(
+                                        image_path=image_path,
+                                        title=pin["title"],
+                                        caption=pin["anime_name"],
+                                    )
+                                    # Cross-post to Are.na visual curation channel
+                                    # Uses the public image_url (CDN) for Are.na — no local file needed.
+                                    try:
+                                        from config import ARENA_ENABLED
+                                        if ARENA_ENABLED:
+                                            from arena_uploader import post_to_arena
+                                            from database import mark_arena_posted, is_arena_posted
+                                            _arena_img = pin.get("image_url", "")
+                                            _arena_fn  = (image_path or "").split("/")[-1].split("\\")[-1]
+                                            if _arena_img and not is_arena_posted(_arena_fn):
+                                                _arena_ok = post_to_arena(
+                                                    image_url=_arena_img,
+                                                    title=pin["title"],
+                                                    description=pin.get("description", ""),
+                                                    link=pin.get("link", ""),
+                                                )
+                                                if _arena_ok:
+                                                    mark_arena_posted(_arena_fn, title=pin["title"], image_url=_arena_img)
+                                    except Exception as _arena_err:
+                                        logger.warning(f"[Scheduler] Are.na cross-post failed (non-critical): {_arena_err}")
+
+                                    # ── Tumblr Cross-Post ────────────────────────────────────────────────
+                                    try:
+                                        from config import TUMBLR_ENABLED
+                                        if TUMBLR_ENABLED:
+                                            from tumblr_uploader import post_to_tumblr
+                                            from database import mark_tumblr_posted, is_tumblr_posted
+                                            _tmblr_img = pin.get("image_url", "")
+                                            _tmblr_fn  = (image_path or "").split("/")[-1].split("\\")[-1]
+                                            if not is_tumblr_posted(_tmblr_fn):
+                                                _tmblr_ok = post_to_tumblr(
+                                                    image_url  = _tmblr_img,
+                                                    title      = pin["title"],
+                                                    caption    = pin.get("description", ""),
+                                                    link       = pin.get("link", ""),
+                                                    image_path = image_path,   # direct binary upload
+                                                )
+                                                if _tmblr_ok:
+                                                    from config import TUMBLR_BLOG_NAME
+                                                    mark_tumblr_posted(_tmblr_fn, post_id=_tmblr_ok,
+                                                                        blog=TUMBLR_BLOG_NAME, image_url=_tmblr_img)
+                                    except Exception as _tmblr_err:
+                                        logger.warning(f"[Scheduler] Tumblr cross-post failed (non-critical): {_tmblr_err}")
                                 else:
                                     # Auto-retry: drop after 3 fails
                                     MAX_RETRIES = 3

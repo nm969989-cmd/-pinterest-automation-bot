@@ -24,6 +24,8 @@ Commands:
   /clearqueue    - Wipe all pending pins from the queue
   /fixqueue      - Re-upload stale Telegram CDN URLs to permanent host
   /ping          - Check if bot responds
+  /arena         - Show Are.na channel stats (block count, URL)
+  /arena_test    - Post a test block to Are.na to verify token
 """
 
 import os
@@ -179,15 +181,22 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/doctor         - System health report (Auto: runs every 3 days)\n"
         "/repairlinks    - Audit & repair dead Amazon links (Auto: 1st of month)\n"
         "/stats          - Pins count and queue\n"
+        "/summary        - Today's multi-platform report (Auto: 9 PM IST)\n"
+        "/dailyreport    - Detailed pin & cross-post report\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
         "/analytics      - 7-day pins & revenue report\n"
-        "/dailyreport    - Today's detailed pin report\n"
         "/preview        - Last pin with image\n"
         "/logs           - Recent log output\n"
         "/queue          - Pending queue breakdown\n"
         "/schedule       - Today's posting schedule (Auto: 8 AM IST)\n"
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
+        "--- CROSS-POSTING ---\n"
+        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr)\n"
+        "/arena          - Are.na channel stats & block count\n"
+        "/arena_test     - Post test block to Are.na channel\n"
+        "/tumblr         - Tumblr blog stats & follower count\n"
+        "/tumblr_test    - Post test photo to Tumblr blog\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -271,7 +280,13 @@ async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-    """Send today's detailed pin report on demand."""
+    """Send today's detailed multi-platform report on demand."""
+    if not _is_admin(update): return
+    await _send_daily_report(update.effective_chat.id)
+
+
+async def cmd_summary(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Send today's multi-platform summary on demand (alias for /dailyreport)."""
     if not _is_admin(update): return
     await _send_daily_report(update.effective_chat.id)
 
@@ -399,11 +414,18 @@ async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def _send_daily_report(chat_id):
-    """Build and send the daily summary to the given chat_id."""
+    """Build and send a comprehensive multi-platform daily summary to the given chat_id."""
     if not _app_ref:
         return
     try:
-        from database import get_today_uploads, get_all_time_stats
+        from database import (
+            get_today_uploads, get_all_time_stats,
+            get_arena_stats, get_tumblr_stats, get_click_stats
+        )
+        from config import (
+            ARENA_ENABLED, ARENA_CHANNEL_SLUG,
+            TUMBLR_ENABLED, TUMBLR_BLOG_NAME
+        )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         today_ist_str = now_ist.strftime("%Y-%m-%d")
@@ -413,43 +435,73 @@ async def _send_daily_report(chat_id):
         stats  = get_all_time_stats()
         count  = len(pins)
 
-        if count == 0:
-            msg = (
-                f"Daily Pinterest Report — {today_display}\n"
-                f"{'='*30}\n"
-                f"No pins were posted today.\n\n"
-                f"Total all-time: {stats['total']} pins"
-            )
-        else:
-            lines = []
-            for i, p in enumerate(pins, 1):
-                anime = p.get('anime') or 'Unknown'
-                title = p.get('title') or 'Untitled'
-                lines.append(f"{i}. [{anime}] {title}")
+        # Cross-platform stats
+        arena_st  = get_arena_stats(today_ist_str)
+        tumblr_st = get_tumblr_stats(today_ist_str)
 
-            # Top anime today
+        # Click & earnings stats
+        try:
+            clicks = get_click_stats(days=1)
+            clicks_today = clicks.get("total_clicks", 0)
+            earnings_today = clicks.get("estimated_revenue_inr", 0.0)
+        except Exception:
+            clicks_today = 0
+            earnings_today = 0.0
+
+        header = (
+            f"📊 Daily Multi-Platform Report — {today_display}\n"
+            f"{'═' * 38}\n\n"
+        )
+
+        arena_badge  = "🟢 ON" if ARENA_ENABLED else "⚪ OFF"
+        tumblr_badge = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
+
+        summary_section = (
+            f"🌐 Platform Breakdown:\n"
+            f"  📌 Pinterest : {count} posted today  |  {stats['total']} all-time\n"
+            f"  🔮 Are.na    : {arena_st['today']} posted today  |  {arena_st['total']} all-time  ({arena_badge})\n"
+            f"  🎨 Tumblr    : {tumblr_st['today']} posted today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n\n"
+        )
+
+        revenue_section = ""
+        if clicks_today > 0 or earnings_today > 0:
+            revenue_section = (
+                f"💰 Affiliate Performance (Today):\n"
+                f"  • Clicks: {clicks_today}  |  Est. Revenue: ₹{earnings_today:,.2f}\n\n"
+            )
+
+        if count == 0:
+            pin_section = "📌 Pinterest Activity:\n  (No pins posted today yet)\n\n"
+        else:
             from collections import Counter
             anime_counts = Counter(p.get('anime') or 'Unknown' for p in pins)
             top_today = "\n".join(
-                f"  • {a}: {c} pins" for a, c in anime_counts.most_common(5)
+                f"  • {a}: {c} pin(s)" for a, c in anime_counts.most_common(5)
+            )
+            lines = [f"  {i}. [{p.get('anime') or 'Unknown'}] {p.get('title') or 'Untitled'}" for i, p in enumerate(pins[:10], 1)]
+            more_pins = f"\n  ... and {count - 10} more" if count > 10 else ""
+            pin_section = (
+                f"📌 Pinterest Activity:\n"
+                f"Top Anime:\n{top_today}\n\n"
+                f"Recent Pins:\n" + "\n".join(lines) + more_pins + "\n\n"
             )
 
-            msg = (
-                f"Daily Pinterest Report — {today_display}\n"
-                f"{'='*30}\n"
-                f"Pins posted today : {count}\n"
-                f"All-time total    : {stats['total']} pins\n\n"
-                f"Today's Anime Breakdown:\n{top_today}\n\n"
-                f"Today's Pins:\n"
-                + "\n".join(lines)
-            )
+        crosspost_section = "🌐 Connected Channels:\n"
+        if ARENA_ENABLED:
+            crosspost_section += f"  • Are.na: are.na/manoj-muthelyrics/{ARENA_CHANNEL_SLUG}\n"
+        if TUMBLR_ENABLED:
+            crosspost_section += f"  • Tumblr: https://{TUMBLR_BLOG_NAME}.tumblr.com\n"
+        crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
+
+        msg = header + summary_section + revenue_section + pin_section + crosspost_section
 
         for chunk in [msg[i:i+4000] for i in range(0, len(msg), 4000)]:
             await _app_ref.bot.send_message(chat_id=chat_id, text=chunk)
-        logger.info(f"[TG BOT] Daily report sent to {chat_id}")
+        logger.info(f"[TG BOT] Multi-platform daily report sent to {chat_id}")
 
     except Exception as e:
-        logger.error(f"[TG BOT] Daily report error: {e}")
+        logger.error(f"[TG BOT] Daily report error: {e}", exc_info=True)
+
 
 
 async def _send_daily_morning_schedule(chat_id: str):
@@ -1766,6 +1818,230 @@ def send_pin_approval_request(image_path: str, title: str, description: str, lin
     logger.info(f"[TG BOT] Approval request sent for: {title}")
 
 
+# -- Are.na Cross-Post Commands -----------------------------------------------
+
+async def cmd_arena(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show Are.na channel stats: block count, remaining quota, channel URL."""
+    if not _is_admin(update):
+        return
+    try:
+        from arena_uploader import get_arena_channel_info, verify_arena_token
+        from config import ARENA_ENABLED, ARENA_CHANNEL_SLUG
+
+        enabled_str = "ENABLED" if ARENA_ENABLED else "DISABLED (set ARENA_ENABLED=true)"
+        token_ok    = verify_arena_token()
+        info        = get_arena_channel_info() if token_ok else None
+
+        if info:
+            used      = info["length"]
+            remaining = max(0, 200 - used)  # Guest plan: 200 blocks
+            bar_filled = min(20, int(used / 200 * 20))
+            bar = "[" + "+" * bar_filled + "-" * (20 - bar_filled) + "]"
+            msg = (
+                f"Are.na Channel Status\n"
+                f"{'='*30}\n"
+                f"Channel   : {info['title']}\n"
+                f"Status    : {info['status'].capitalize()}\n"
+                f"Blocks    : {used}/200 used (Guest plan)\n"
+                f"Remaining : {remaining} blocks free\n"
+                f"{bar} {used/200*100:.0f}%\n"
+                f"URL       : {info['url']}\n"
+                f"Token     : Valid\n"
+                f"Auto-post : {enabled_str}"
+            )
+        elif token_ok:
+            msg = (
+                f"Are.na connected but channel not found.\n"
+                f"Check ARENA_CHANNEL_SLUG={ARENA_CHANNEL_SLUG} in .env"
+            )
+        else:
+            msg = (
+                f"Are.na token is INVALID or not set.\n"
+                f"Check ARENA_ACCESS_TOKEN in .env"
+            )
+    except Exception as e:
+        msg = f"Are.na error: {e}"
+
+    await update.message.reply_text(msg)
+
+
+async def cmd_arena_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Post a test block to Are.na channel to verify the token and channel work."""
+    if not _is_admin(update):
+        return
+    await update.message.reply_text("Posting test block to Are.na...")
+    try:
+        from arena_uploader import post_to_arena
+        ok = post_to_arena(
+            image_url   = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Biwa_catfish.jpg/640px-Biwa_catfish.jpg",
+            title       = "Test Block - Pinterest Bot",
+            description = "Automated test block from your Pinterest Bot's Are.na integration. If you see this, it's working!",
+            link        = "https://amazon.in",
+        )
+        if ok:
+            await update.message.reply_text(
+                "Test block posted to Are.na successfully!\n"
+                "Check your channel: https://www.are.na/manoj-muthelyrics/aesthetic-inspiration"
+            )
+        else:
+            await update.message.reply_text(
+                "Test block FAILED. Check:\n"
+                "1. ARENA_ACCESS_TOKEN is correct in .env\n"
+                "2. ARENA_CHANNEL_SLUG matches your channel URL\n"
+                "3. ARENA_ENABLED=true in .env\n"
+                "Run /logs for details."
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Are.na test error: {e}")
+
+
+async def cmd_tumblr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show Tumblr blog stats: post count, followers, blog URL."""
+    if not _is_admin(update):
+        return
+    try:
+        from tumblr_uploader import get_tumblr_blog_info, verify_tumblr_token
+        from config import TUMBLR_ENABLED, TUMBLR_BLOG_NAME
+        enabled_str = "ENABLED" if TUMBLR_ENABLED else "DISABLED (set TUMBLR_ENABLED=true)"
+        token_ok    = verify_tumblr_token()
+        info        = get_tumblr_blog_info() if token_ok else None
+        if info:
+            await update.message.reply_text(
+                f"Tumblr Cross-Post: {enabled_str}\n"
+                f"Blog    : {info['title']} ({info['name']})\n"
+                f"Posts   : {info['posts']:,}\n"
+                f"Followers: {info['followers']:,}\n"
+                f"URL     : {info['url']}\n"
+                f"Token   : OK"
+            )
+        elif token_ok:
+            await update.message.reply_text(
+                f"Tumblr: {enabled_str}\n"
+                f"Blog: {TUMBLR_BLOG_NAME}\n"
+                f"Token: OK (could not fetch blog info)\n"
+                f"Check TUMBLR_BLOG_NAME in .env"
+            )
+        else:
+            await update.message.reply_text(
+                f"Tumblr: {enabled_str}\n"
+                f"Token : INVALID\n"
+                f"Set TUMBLR_ACCESS_TOKEN + TUMBLR_ACCESS_TOKEN_SECRET in .env\n"
+                f"Run: python get_tumblr_token.py"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Tumblr error: {e}")
+
+
+async def cmd_tumblr_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Post a test photo to Tumblr to verify the token and blog work."""
+    if not _is_admin(update):
+        return
+    await update.message.reply_text("Posting test photo to Tumblr...")
+    try:
+        from tumblr_uploader import post_to_tumblr
+        from config import TUMBLR_BLOG_NAME
+        pid = post_to_tumblr(
+            image_url = "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+            title     = "Test Post - Pinterest Bot",
+            caption   = "Automated test from your Pinterest Bot Tumblr integration. Working!",
+            link      = "https://amazon.in",
+            tags      = ["test", "bot", "pinterest", "anime"],
+        )
+        if pid:
+            await update.message.reply_text(
+                f"Test photo posted to Tumblr! Post ID: {pid}\n"
+                f"Check: https://{TUMBLR_BLOG_NAME}.tumblr.com"
+            )
+        else:
+            await update.message.reply_text(
+                "Tumblr test FAILED. Check:\n"
+                "1. TUMBLR_ACCESS_TOKEN is correct in .env\n"
+                "2. TUMBLR_ACCESS_TOKEN_SECRET is set\n"
+                "3. TUMBLR_ENABLED=true in .env\n"
+                "Run /logs for details."
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Tumblr test error: {e}")
+
+
+async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show real-time multi-platform status (Pinterest, Are.na, Tumblr) with quick links."""
+    if not _is_admin(update):
+        return
+    try:
+        from config import (
+            ARENA_ENABLED, ARENA_CHANNEL_SLUG,
+            TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
+            DRY_RUN
+        )
+        from database import get_arena_stats, get_tumblr_stats, get_today_uploads, get_all_time_stats
+        from arena_uploader import verify_arena_token, get_arena_channel_info
+        from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        # Pinterest status
+        pins_today = len(get_today_uploads(today_str))
+        all_time = get_all_time_stats().get("total", 0)
+        pin_mode = "LIVE (Make.com Webhook)" if not DRY_RUN else "DRY-RUN (Simulated)"
+
+        # Are.na status
+        arena_status = "DISABLED (ARENA_ENABLED=false)"
+        arena_blocks_str = ""
+        if ARENA_ENABLED:
+            arena_token_ok = verify_arena_token()
+            if arena_token_ok:
+                ch = get_arena_channel_info()
+                blocks = ch.get("length", 0) if ch else "?"
+                arena_status = "🟢 ACTIVE"
+                arena_blocks_str = f" ({blocks}/200 blocks used)"
+            else:
+                arena_status = "🔴 AUTH ERROR (Check token)"
+        arena_st = get_arena_stats(today_str)
+
+        # Tumblr status
+        tumblr_status = "DISABLED (TUMBLR_ENABLED=false)"
+        tumblr_posts_str = ""
+        if TUMBLR_ENABLED:
+            tmblr_token_ok = verify_tumblr_token()
+            if tmblr_token_ok:
+                tb = get_tumblr_blog_info()
+                posts_cnt = tb.get("posts", 0) if tb else "?"
+                tumblr_status = "🟢 ACTIVE"
+                tumblr_posts_str = f" ({posts_cnt} blog posts)"
+            else:
+                tumblr_status = "🔴 AUTH ERROR (Check token)"
+        tumblr_st = get_tumblr_stats(today_str)
+
+        msg = (
+            f"🌐 Multi-Platform Cross-Post Hub\n"
+            f"{'═' * 38}\n\n"
+            f"📌 Pinterest:\n"
+            f"  • Mode: {pin_mode}\n"
+            f"  • Posts Today: {pins_today}  |  All-time: {all_time}\n\n"
+            f"🔮 Are.na:\n"
+            f"  • Status: {arena_status}{arena_blocks_str}\n"
+            f"  • Channel: {ARENA_CHANNEL_SLUG}\n"
+            f"  • Posts: {arena_st['today']} today  |  {arena_st['total']} all-time\n"
+            f"  • Link: https://www.are.na/manoj-muthelyrics/{ARENA_CHANNEL_SLUG}\n\n"
+            f"🎨 Tumblr:\n"
+            f"  • Status: {tumblr_status}{tumblr_posts_str}\n"
+            f"  • Blog: {TUMBLR_BLOG_NAME}\n"
+            f"  • Posts: {tumblr_st['today']} today  |  {tumblr_st['total']} all-time\n"
+            f"  • Link: https://{TUMBLR_BLOG_NAME}.tumblr.com\n\n"
+            f"🚀 Quick Commands:\n"
+            f"  /summary — Today's multi-platform report\n"
+            f"  /arena_test — Test Are.na block upload\n"
+            f"  /tumblr_test — Test Tumblr photo upload\n"
+            f"  /testpost — Test Pinterest webhook"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_crosspost error: {e}", exc_info=True)
+        await update.message.reply_text(f"Cross-post status error: {e}")
+
+
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
               dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
@@ -1859,6 +2135,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("status",        cmd_status),
             ("stats",         cmd_stats),
             ("dailyreport",   cmd_dailyreport),
+            ("summary",       cmd_summary),
+            ("daily",         cmd_summary),
+            ("crosspost",     cmd_crosspost),
+            ("platforms",     cmd_crosspost),
             ("preview",       cmd_preview),
             ("logs",          cmd_logs),
             ("channels",      cmd_channels),
@@ -1885,6 +2165,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("healthcheck",   cmd_doctor),
             ("repairlinks",   cmd_repairlinks),
             ("checklinks",    cmd_repairlinks),
+            ("arena",         cmd_arena),
+            ("arena_test",    cmd_arena_test),
+            ("tumblr",        cmd_tumblr),
+            ("tumblr_test",   cmd_tumblr_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -1908,12 +2192,14 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             await application.bot.set_my_commands([
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
+                BotCommand("summary",       "Today's multi-platform report (Auto: 9 PM)"),
+                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr)"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
                 BotCommand("analytics",     "7-day pins & revenue report"),
-                BotCommand("dailyreport",   "Today's detailed Pinterest report"),
+                BotCommand("dailyreport",   "Today's detailed pin report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),
                 BotCommand("queue",         "Show queue with per-date breakdown"),
@@ -1933,6 +2219,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("fixqueue",      "Re-upload stale CDN URLs to permanent host"),
+                BotCommand("arena",         "Are.na channel stats & block count"),
+                BotCommand("arena_test",    "Post test block to Are.na channel"),
+                BotCommand("tumblr",        "Tumblr blog stats & follower count"),
+                BotCommand("tumblr_test",   "Post test photo to Tumblr blog"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

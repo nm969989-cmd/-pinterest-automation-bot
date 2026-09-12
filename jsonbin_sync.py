@@ -121,6 +121,20 @@ def save_cloud_state() -> bool:
                     "SELECT code, target_url, anime_name, title, created_at FROM tracked_links ORDER BY created_at DESC LIMIT 500"
                 ).fetchall()
             ]
+            # Are.na posts (last 500 to keep JSON size reasonable)
+            arena = [
+                {"filename": r[0], "block_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+            # Tumblr posts (last 500 to keep JSON size reasonable)
+            tumblr = [
+                {"filename": r[0], "post_id": r[1], "blog": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_id, blog, image_url, posted_at FROM tumblr_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
@@ -128,6 +142,8 @@ def save_cloud_state() -> bool:
             "pin_queue":       queue,
             "bot_metadata":    metadata,
             "tracked_links":   tracked,
+            "arena_posts":     arena,
+            "tumblr_posts":    tumblr,
         }
 
         r = requests.put(
@@ -138,8 +154,9 @@ def save_cloud_state() -> bool:
         )
         if r.status_code == 200:
             logger.info(
-                f"[JSONBin] Synced: {len(posts)} posts, "
-                f"{len(uploads)} uploads, {len(queue)} queued, {len(tracked)} tracked links"
+                f"[JSONBin] Synced: {len(posts)} posts, {len(uploads)} uploads, "
+                f"{len(queue)} queued, {len(tracked)} tracked links, "
+                f"{len(arena)} arena, {len(tumblr)} tumblr"
             )
             return True
         else:
@@ -219,6 +236,30 @@ def restore_db_from_cloud():
                       l.get("anime_name",""), l.get("title",""),
                       l.get("created_at") or "2000-01-01 00:00:00")
                      for l in links if l.get("code") and l.get("target_url")]
+                )
+
+            # Restore Are.na posts
+            arena_posts = state.get("arena_posts", [])
+            if arena_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO arena_posts "
+                    "(filename, block_id, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(a.get("filename",""), a.get("block_id", 0),
+                      a.get("title",""), a.get("image_url",""),
+                      a.get("posted_at") or "2000-01-01 00:00:00")
+                     for a in arena_posts if a.get("filename")]
+                )
+
+            # Restore Tumblr posts
+            tumblr_posts = state.get("tumblr_posts", [])
+            if tumblr_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO tumblr_posts "
+                    "(filename, post_id, blog, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(t.get("filename",""), t.get("post_id",""),
+                      t.get("blog",""), t.get("image_url",""),
+                      t.get("posted_at") or "2000-01-01 00:00:00")
+                     for t in tumblr_posts if t.get("filename")]
                 )
             conn.commit()
 

@@ -38,3 +38,26 @@ services:
         value: "10"
       - key: MAX_POSTS_PER_DAY
         value: "3"
+      # Are.na Cross-Posting
+      - key: ARENA_ACCESS_TOKEN
+        sync: false
+      - key: ARENA_CHANNEL_SLUG
+        sync: false
+      - key: ARENA_ENABLED
+        value: "true"
+      # Tumblr Cross-Posting
+      - key: TUMBLR_CONSUMER_KEY
+        sync: false
+      - key: TUMBLR_CONSUMER_SECRET
+        sync: false
+      - key: TUMBLR_ACCESS_TOKEN
+        sync: false
+      - key: TUMBLR_ACCESS_TOKEN_SECRET
+        sync: false
+      - key: TUMBLR_BLOG_NAME
+        sync: false
+      - key: TUMBLR_TAGS
+        value: "anime,aesthetic,animeart,wallpaper,pinterest"
+      - key: TUMBLR_ENABLED
+        value: "true"
+

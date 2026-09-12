@@ -98,6 +98,30 @@ def init_db():
             )
         """)
 
+        # ── Stock Uploads Tracking Table ─────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stock_uploads (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform    TEXT,
+                filename    TEXT,
+                title       TEXT,
+                status      TEXT DEFAULT 'success',
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ── Are.na Cross-Post Tracking ────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS arena_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                block_id    INTEGER,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # ── Performance indexes (makes scheduler 100x faster) ───────────────
         # Scheduler queries pin_queue every 30s — 2,880 times/day — needs an index
         conn.execute("""
@@ -117,8 +141,158 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_clicks_time
             ON link_clicks (clicked_at)
         """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_stock_plat_date
+            ON stock_uploads (platform, uploaded_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_arena_filename
+            ON arena_posts (filename)
+        """)
+
+        # ── Tumblr Cross-Post Tracking ────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tumblr_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_id     TEXT,
+                blog        TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tumblr_filename
+            ON tumblr_posts (filename)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
+
+
+# ── Are.na Cross-Post Tracking ───────────────────────────────────────────────
+
+def is_arena_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Are.na (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM arena_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_arena_posted(filename: str, block_id: int = 0,
+                      title: str = "", image_url: str = "") -> None:
+    """Records a successful Are.na post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO arena_posts (filename, block_id, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, block_id, title, image_url)
+        )
+        conn.commit()
+
+
+# ── Tumblr Cross-Post Tracking ────────────────────────────────────────────────
+
+def is_tumblr_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Tumblr (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM tumblr_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_tumblr_posted(filename: str, post_id: str = "",
+                       blog: str = "", image_url: str = "") -> None:
+    """Records a successful Tumblr post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO tumblr_posts (filename, post_id, blog, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_id, blog, image_url)
+        )
+        conn.commit()
+
+
+def get_arena_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Are.na posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM arena_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM arena_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, image_url, posted_at
+            FROM arena_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "image_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
+
+def get_tumblr_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Tumblr posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM tumblr_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM tumblr_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, post_id, blog, image_url, posted_at
+            FROM tumblr_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "post_id": r[1], "blog": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in recent
+        ]
+    }
+
+
+def get_multi_platform_stats(today_str: str = None) -> dict:
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr)."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    
+    pins_today = get_today_uploads(today_str)
+    all_time_pins = get_all_time_stats()
+    arena_stats = get_arena_stats(today_str)
+    tumblr_stats = get_tumblr_stats(today_str)
+
+    return {
+        "date": today_str,
+        "pinterest": {
+            "today": len(pins_today),
+            "total": all_time_pins.get("total", 0),
+            "pins": pins_today,
+        },
+        "arena": arena_stats,
+        "tumblr": tumblr_stats,
+    }
+
 
 
 # ── Processed Posts (Telegram) ──────────────────────────────────────────────
@@ -801,6 +975,50 @@ def get_tracked_target_url(link_or_code: str) -> str:
     with _get_conn() as conn:
         row = conn.execute("SELECT target_url FROM tracked_links WHERE code = ?", (code,)).fetchone()
         return row[0] if row else link_or_code
+
+
+# ── Multi-Stock Upload Tracking ──────────────────────────────────────────────
+
+def mark_stock_uploaded(platform: str, filename: str, title: str = "", status: str = "success"):
+    """Record an upload attempt/success for a stock photography platform."""
+    with _get_conn() as conn:
+        conn.execute("""
+            INSERT INTO stock_uploads (platform, filename, title, status)
+            VALUES (?, ?, ?, ?)
+        """, (platform.lower().strip(), filename, title, status))
+        conn.commit()
+
+
+def is_stock_uploaded(platform: str, filename: str) -> bool:
+    """Check if a file was already successfully uploaded to a given platform."""
+    if not filename:
+        return False
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT 1 FROM stock_uploads
+            WHERE platform = ? AND filename = ? AND status = 'success'
+        """, (platform.lower().strip(), filename)).fetchone()
+        return row is not None
+
+
+def count_stock_posts_today(platform: str, today_str: str = "") -> int:
+    """Count how many items were uploaded to a given platform today (IST)."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) FROM stock_uploads
+            WHERE platform = ? AND status = 'success'
+              AND date(uploaded_at, '+5 hours', '+30 minutes') = ?
+        """, (platform.lower().strip(), today_str)).fetchone()
+        return row[0] if row else 0
+
+
+def get_stock_stats_today(today_str: str = "") -> dict:
+    """Returns today's upload count for each stock platform."""
+    platforms = ["shutterstock", "adobe", "freepik", "depositphotos", "dreamstime", "123rf"]
+    return {p: count_stock_posts_today(p, today_str) for p in platforms}
 
 
 # Initialize on import
