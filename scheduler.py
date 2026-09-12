@@ -787,6 +787,27 @@ class PinScheduler:
                                                                         blog=TUMBLR_BLOG_NAME, image_url=_tmblr_img)
                                     except Exception as _tmblr_err:
                                         logger.warning(f"[Scheduler] Tumblr cross-post failed (non-critical): {_tmblr_err}")
+
+                                    # ── Bluesky Cross-Post ───────────────────────────────────────────────
+                                    try:
+                                        from config import BLUESKY_ENABLED
+                                        if BLUESKY_ENABLED:
+                                            from bluesky_uploader import post_to_bluesky
+                                            from database import mark_bluesky_posted, is_bluesky_posted
+                                            _bsky_img = pin.get("image_url", "")
+                                            _bsky_fn  = (image_path or "").split("/")[-1].split("\\")[-1]
+                                            if not is_bluesky_posted(_bsky_fn):
+                                                _bsky_uri = post_to_bluesky(
+                                                    image_url  = _bsky_img,
+                                                    title      = pin["title"],
+                                                    caption    = pin.get("description", ""),
+                                                    link       = pin.get("link", ""),
+                                                    image_path = image_path,
+                                                )
+                                                if _bsky_uri:
+                                                    mark_bluesky_posted(_bsky_fn, post_uri=_bsky_uri, image_url=_bsky_img)
+                                    except Exception as _bsky_err:
+                                        logger.warning(f"[Scheduler] Bluesky cross-post failed (non-critical): {_bsky_err}")
                                 else:
                                     # Auto-retry: drop after 3 fails
                                     MAX_RETRIES = 3

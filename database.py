@@ -165,6 +165,22 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_tumblr_filename
             ON tumblr_posts (filename)
         """)
+
+        # ── Bluesky Cross-Post Tracking ───────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bluesky_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_uri    TEXT,
+                post_cid    TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bluesky_filename
+            ON bluesky_posts (filename)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -271,8 +287,57 @@ def get_tumblr_stats(today_str: str = None) -> dict:
     }
 
 
+def get_bluesky_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Bluesky posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM bluesky_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM bluesky_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, post_uri, post_cid, image_url, posted_at
+            FROM bluesky_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in recent
+        ]
+    }
+
+
+def is_bluesky_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Bluesky (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM bluesky_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_bluesky_posted(filename: str, post_uri: str = "", post_cid: str = "",
+                        image_url: str = "") -> None:
+    """Records a successful Bluesky post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO bluesky_posts (filename, post_uri, post_cid, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_uri, post_cid, image_url)
+        )
+        conn.commit()
+
+
 def get_multi_platform_stats(today_str: str = None) -> dict:
-    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr)."""
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky)."""
     if not today_str:
         import datetime as _dt
         today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
@@ -281,6 +346,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     all_time_pins = get_all_time_stats()
     arena_stats = get_arena_stats(today_str)
     tumblr_stats = get_tumblr_stats(today_str)
+    bluesky_stats = get_bluesky_stats(today_str)
 
     return {
         "date": today_str,
@@ -291,6 +357,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         },
         "arena": arena_stats,
         "tumblr": tumblr_stats,
+        "bluesky": bluesky_stats,
     }
 
 

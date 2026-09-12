@@ -135,6 +135,13 @@ def save_cloud_state() -> bool:
                     "SELECT filename, post_id, blog, image_url, posted_at FROM tumblr_posts ORDER BY id DESC LIMIT 500"
                 ).fetchall()
             ]
+            # Bluesky posts (last 500 to keep JSON size reasonable)
+            bluesky = [
+                {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
@@ -144,6 +151,7 @@ def save_cloud_state() -> bool:
             "tracked_links":   tracked,
             "arena_posts":     arena,
             "tumblr_posts":    tumblr,
+            "bluesky_posts":   bluesky,
         }
 
         r = requests.put(
@@ -156,7 +164,7 @@ def save_cloud_state() -> bool:
             logger.info(
                 f"[JSONBin] Synced: {len(posts)} posts, {len(uploads)} uploads, "
                 f"{len(queue)} queued, {len(tracked)} tracked links, "
-                f"{len(arena)} arena, {len(tumblr)} tumblr"
+                f"{len(arena)} arena, {len(tumblr)} tumblr, {len(bluesky)} bluesky"
             )
             return True
         else:
@@ -260,6 +268,18 @@ def restore_db_from_cloud():
                       t.get("blog",""), t.get("image_url",""),
                       t.get("posted_at") or "2000-01-01 00:00:00")
                      for t in tumblr_posts if t.get("filename")]
+                )
+
+            # Restore Bluesky posts
+            bluesky_posts = state.get("bluesky_posts", [])
+            if bluesky_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO bluesky_posts "
+                    "(filename, post_uri, post_cid, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(b.get("filename",""), b.get("post_uri",""),
+                      b.get("post_cid",""), b.get("image_url",""),
+                      b.get("posted_at") or "2000-01-01 00:00:00")
+                     for b in bluesky_posts if b.get("filename")]
                 )
             conn.commit()
 

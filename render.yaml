@@ -60,4 +60,12 @@ services:
         value: "anime,aesthetic,animeart,wallpaper,pinterest"
       - key: TUMBLR_ENABLED
         value: "true"
+      # Bluesky Cross-Posting
+      - key: BLUESKY_HANDLE
+        sync: false
+      - key: BLUESKY_APP_PASSWORD
+        sync: false
+      - key: BLUESKY_ENABLED
+        value: "true"
+
 

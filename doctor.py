@@ -132,6 +132,27 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _tmblr_e:
         tumblr_status = f"🟡 Check failed ({_tmblr_e})"
 
+    # 10. Bluesky Cross-Post Status
+    bluesky_status = "⚪ Disabled"
+    try:
+        if config.BLUESKY_ENABLED and config.BLUESKY_HANDLE and config.BLUESKY_APP_PASSWORD:
+            from bluesky_uploader import verify_bluesky_credentials, get_bluesky_profile_info
+            bsky_ok = verify_bluesky_credentials()
+            if bsky_ok:
+                binfo = get_bluesky_profile_info()
+                if binfo:
+                    bluesky_status = f"🟢 Active (@{binfo['handle']}, {binfo['posts']:,} posts)"
+                else:
+                    bluesky_status = "🟡 Session OK — profile info unavailable"
+            else:
+                bluesky_status = "🔴 Credentials Invalid"
+                warnings.append("Bluesky login failed — check BLUESKY_HANDLE / BLUESKY_APP_PASSWORD in .env")
+        elif config.BLUESKY_ENABLED and (not config.BLUESKY_HANDLE or not config.BLUESKY_APP_PASSWORD):
+            bluesky_status = "🔴 Credentials Missing"
+            warnings.append("BLUESKY_ENABLED=true but BLUESKY credentials are missing in .env")
+    except Exception as _bsky_e:
+        bluesky_status = f"🟡 Check failed ({_bsky_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -163,6 +184,7 @@ def run_full_system_diagnostic() -> dict:
         "tracker_status": tracker_status,
         "arena_status": arena_status,
         "tumblr_status": tumblr_status,
+        "bluesky_status": bluesky_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -205,10 +227,11 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Clicks (3 Days)  : {stats['clicks_3d']} clicks\n"
         f"  • Est. 3-Day Rev   : {est_revenue}\n\n"
         f"🌐 Integrations & Webhooks:\n"
-        f"  • Make.com Webhook  : {diag['webhook_status']}\n"
-        f"  • Are.na Cross-Post : {diag.get('arena_status', 'N/A')}\n"
-        f"  • Tumblr Cross-Post : {diag.get('tumblr_status', 'N/A')}\n"
-        f"  • Monitored Channels: {diag['monitored_channels']} channel(s)\n\n"
+        f"  • Make.com Webhook   : {diag['webhook_status']}\n"
+        f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"
+        f"  • Tumblr Cross-Post  : {diag.get('tumblr_status', 'N/A')}\n"
+        f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
+        f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )
     return report

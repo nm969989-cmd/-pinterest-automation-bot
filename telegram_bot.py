@@ -192,11 +192,13 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- CROSS-POSTING ---\n"
-        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr)\n"
+        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky)\n"
         "/arena          - Are.na channel stats & block count\n"
         "/arena_test     - Post test block to Are.na channel\n"
         "/tumblr         - Tumblr blog stats & follower count\n"
-        "/tumblr_test    - Post test photo to Tumblr blog\n\n"
+        "/tumblr_test    - Post test photo to Tumblr blog\n"
+        "/bluesky        - Bluesky profile stats & follower count\n"
+        "/bluesky_test   - Post test image to Bluesky feed\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -420,11 +422,12 @@ async def _send_daily_report(chat_id):
     try:
         from database import (
             get_today_uploads, get_all_time_stats,
-            get_arena_stats, get_tumblr_stats, get_click_stats
+            get_arena_stats, get_tumblr_stats, get_bluesky_stats, get_click_stats
         )
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
-            TUMBLR_ENABLED, TUMBLR_BLOG_NAME
+            TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
+            BLUESKY_ENABLED, BLUESKY_HANDLE
         )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -436,8 +439,9 @@ async def _send_daily_report(chat_id):
         count  = len(pins)
 
         # Cross-platform stats
-        arena_st  = get_arena_stats(today_ist_str)
-        tumblr_st = get_tumblr_stats(today_ist_str)
+        arena_st   = get_arena_stats(today_ist_str)
+        tumblr_st  = get_tumblr_stats(today_ist_str)
+        bluesky_st = get_bluesky_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -453,14 +457,16 @@ async def _send_daily_report(chat_id):
             f"{'═' * 38}\n\n"
         )
 
-        arena_badge  = "🟢 ON" if ARENA_ENABLED else "⚪ OFF"
-        tumblr_badge = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
+        arena_badge   = "🟢 ON" if ARENA_ENABLED else "⚪ OFF"
+        tumblr_badge  = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
+        bluesky_badge = "🟢 ON" if BLUESKY_ENABLED else "⚪ OFF"
 
         summary_section = (
             f"🌐 Platform Breakdown:\n"
             f"  📌 Pinterest : {count} posted today  |  {stats['total']} all-time\n"
             f"  🔮 Are.na    : {arena_st['today']} posted today  |  {arena_st['total']} all-time  ({arena_badge})\n"
-            f"  🎨 Tumblr    : {tumblr_st['today']} posted today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n\n"
+            f"  🎨 Tumblr    : {tumblr_st['today']} posted today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n"
+            f"  🦋 Bluesky   : {bluesky_st['today']} posted today  |  {bluesky_st['total']} all-time  ({bluesky_badge})\n\n"
         )
 
         revenue_section = ""
@@ -491,6 +497,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += f"  • Are.na: are.na/manoj-muthelyrics/{ARENA_CHANNEL_SLUG}\n"
         if TUMBLR_ENABLED:
             crosspost_section += f"  • Tumblr: https://{TUMBLR_BLOG_NAME}.tumblr.com\n"
+        if BLUESKY_ENABLED:
+            crosspost_section += f"  • Bluesky: https://bsky.app/profile/{BLUESKY_HANDLE}\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -1972,9 +1980,13 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
+            BLUESKY_ENABLED, BLUESKY_HANDLE,
             DRY_RUN
         )
-        from database import get_arena_stats, get_tumblr_stats, get_today_uploads, get_all_time_stats
+        from database import (
+            get_arena_stats, get_tumblr_stats, get_bluesky_stats,
+            get_today_uploads, get_all_time_stats
+        )
         from arena_uploader import verify_arena_token, get_arena_channel_info
         from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
 
@@ -2014,6 +2026,21 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 tumblr_status = "🔴 AUTH ERROR (Check token)"
         tumblr_st = get_tumblr_stats(today_str)
 
+        # Bluesky status
+        bluesky_status = "DISABLED (BLUESKY_ENABLED=false)"
+        bluesky_posts_str = ""
+        if BLUESKY_ENABLED:
+            from bluesky_uploader import verify_bluesky_credentials, get_bluesky_profile_info
+            bsky_token_ok = verify_bluesky_credentials()
+            if bsky_token_ok:
+                bp = get_bluesky_profile_info()
+                posts_cnt = bp.get("posts", 0) if bp else "?"
+                bluesky_status = "🟢 ACTIVE"
+                bluesky_posts_str = f" ({posts_cnt} posts)"
+            else:
+                bluesky_status = "🔴 AUTH ERROR (Check credentials)"
+        bluesky_st = get_bluesky_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -2030,16 +2057,93 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Blog: {TUMBLR_BLOG_NAME}\n"
             f"  • Posts: {tumblr_st['today']} today  |  {tumblr_st['total']} all-time\n"
             f"  • Link: https://{TUMBLR_BLOG_NAME}.tumblr.com\n\n"
+            f"🦋 Bluesky:\n"
+            f"  • Status: {bluesky_status}{bluesky_posts_str}\n"
+            f"  • Handle: @{BLUESKY_HANDLE or 'NOT SET'}\n"
+            f"  • Posts: {bluesky_st['today']} today  |  {bluesky_st['total']} all-time\n"
+            f"  • Link: https://bsky.app/profile/{BLUESKY_HANDLE}\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /arena_test — Test Are.na block upload\n"
             f"  /tumblr_test — Test Tumblr photo upload\n"
+            f"  /bluesky_test — Test Bluesky image post\n"
             f"  /testpost — Test Pinterest webhook"
         )
         await update.message.reply_text(msg)
     except Exception as e:
         logger.error(f"[TG BOT] cmd_crosspost error: {e}", exc_info=True)
         await update.message.reply_text(f"Cross-post status error: {e}")
+
+
+async def cmd_bluesky(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Bluesky profile stats: handle, followers, post count."""
+    if not _is_admin(update): return
+    try:
+        from bluesky_uploader import get_bluesky_profile_info, verify_bluesky_credentials
+        from config import BLUESKY_ENABLED, BLUESKY_HANDLE
+        enabled_str = "ENABLED" if BLUESKY_ENABLED else "DISABLED (set BLUESKY_ENABLED=true)"
+        valid = verify_bluesky_credentials()
+        info = get_bluesky_profile_info() if valid else None
+        if info:
+            msg = (
+                f"🦋 Bluesky Status: {enabled_str}\n"
+                f"{'═' * 30}\n"
+                f"Handle    : @{info['handle']}\n"
+                f"Name      : {info['display_name']}\n"
+                f"Followers : {info['followers']}\n"
+                f"Posts     : {info['posts']}\n"
+                f"Profile   : {info['url']}"
+            )
+        elif valid:
+            msg = (
+                f"🦋 Bluesky: {enabled_str}\n"
+                f"Handle: @{BLUESKY_HANDLE}\n"
+                f"Credentials valid, but profile info could not be fetched."
+            )
+        else:
+            msg = (
+                f"🦋 Bluesky: {enabled_str}\n"
+                f"Handle: @{BLUESKY_HANDLE or 'NOT SET'}\n"
+                f"Status: 🔴 Authentication failed.\n"
+                f"Check BLUESKY_HANDLE & BLUESKY_APP_PASSWORD in .env"
+            )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_bluesky error: {e}", exc_info=True)
+        await update.message.reply_text(f"Bluesky error: {e}")
+
+
+async def cmd_bluesky_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Post a test photo to Bluesky to verify credentials."""
+    if not _is_admin(update): return
+    await update.message.reply_text("Posting test image to Bluesky...")
+    try:
+        from bluesky_uploader import post_to_bluesky
+        from config import BLUESKY_HANDLE
+        uri = post_to_bluesky(
+            image_url="https://res.cloudinary.com/demo/image/upload/sample.jpg",
+            title="Anime Aesthetic — Pinterest Bot Test",
+            caption="Automated test post from Pinterest Bot Bluesky integration! #anime #aesthetic",
+            link="https://amazon.in",
+            tags=["anime", "aesthetic", "bot", "test"],
+        )
+        if uri:
+            await update.message.reply_text(
+                f"✅ Test image posted to Bluesky!\n"
+                f"Post URI: {uri}\n"
+                f"Check: https://bsky.app/profile/{BLUESKY_HANDLE}"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Bluesky test FAILED. Check:\n"
+                "1. BLUESKY_HANDLE is correct in .env\n"
+                "2. BLUESKY_APP_PASSWORD is valid\n"
+                "3. BLUESKY_ENABLED=true in .env\n"
+                "Run /logs for details."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_bluesky_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"Bluesky test error: {e}")
 
 
 # -- Start bot in background thread -------------------------------------------
@@ -2169,6 +2273,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("arena_test",    cmd_arena_test),
             ("tumblr",        cmd_tumblr),
             ("tumblr_test",   cmd_tumblr_test),
+            ("bluesky",       cmd_bluesky),
+            ("bluesky_test",  cmd_bluesky_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -2193,7 +2299,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("summary",       "Today's multi-platform report (Auto: 9 PM)"),
-                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr)"),
+                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky)"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
@@ -2223,6 +2329,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("arena_test",    "Post test block to Are.na channel"),
                 BotCommand("tumblr",        "Tumblr blog stats & follower count"),
                 BotCommand("tumblr_test",   "Post test photo to Tumblr blog"),
+                BotCommand("bluesky",       "Bluesky profile stats & follower count"),
+                BotCommand("bluesky_test",  "Post test photo to Bluesky feed"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

@@ -76,6 +76,12 @@ TUMBLR_BLOG_NAME           = os.getenv('TUMBLR_BLOG_NAME', 'animeasthet07')
 TUMBLR_TAGS                = os.getenv('TUMBLR_TAGS', 'anime,aesthetic,animeart,wallpaper,pinterest,animeasthetic')
 TUMBLR_ENABLED             = os.getenv('TUMBLR_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
+# Bluesky Cross-Post (AT Protocol)
+BLUESKY_HANDLE       = os.getenv('BLUESKY_HANDLE', '')
+BLUESKY_APP_PASSWORD = os.getenv('BLUESKY_APP_PASSWORD', '')
+BLUESKY_ENABLED      = os.getenv('BLUESKY_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))
