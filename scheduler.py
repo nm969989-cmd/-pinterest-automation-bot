@@ -748,28 +748,46 @@ class PinScheduler:
                                     _cross_fn = (image_path or "").split("/")[-1].split("\\")[-1]
                                     _cross_img = pin.get("image_url", "")
 
+                                    # ── Get a public CDN URL for cross-posting ────────────────────────────
+                                    # Pinterest CDN (i.pinimg.com) blocks third-party fetches with HTTP 403.
+                                    # Are.na's server tries to download the image itself (server-side fetch)
+                                    # so it MUST have a publicly accessible URL — not Pinterest CDN.
+                                    # Upload to Cloudinary/Catbox to get a permanently public URL.
+                                    _public_img = _cross_img  # fallback to original Pinterest URL
+                                    if image_path and os.path.exists(image_path):
+                                        try:
+                                            from image_host import upload_image_to_host
+                                            _hosted = upload_image_to_host(image_path)
+                                            if _hosted:
+                                                _public_img = _hosted
+                                                logger.info(f"[Scheduler] Public CDN URL for cross-posts: {_hosted[:80]}")
+                                        except Exception as _host_err:
+                                            logger.warning(f"[Scheduler] CDN upload for cross-post failed (using original URL): {_host_err}")
+
                                     # Cross-post to Are.na visual curation channel
-                                    # Uses the public image_url (CDN) for Are.na — no local file needed.
+                                    # Are.na's server fetches the image — must use a public URL (not Pinterest CDN)
                                     try:
                                         from config import ARENA_ENABLED
                                         if ARENA_ENABLED:
                                             from arena_uploader import post_to_arena
                                             from database import mark_arena_posted, is_arena_posted
-                                            if _cross_img and not is_arena_posted(_cross_fn):
+                                            if _public_img and not is_arena_posted(_cross_fn):
                                                 _arena_ok = post_to_arena(
-                                                    image_url=_cross_img,
+                                                    image_url=_public_img,
                                                     title=pin["title"],
                                                     description=pin.get("description", ""),
                                                     link=pin.get("link", ""),
                                                 )
                                                 _arena_result = bool(_arena_ok)
                                                 if _arena_ok:
-                                                    mark_arena_posted(_cross_fn, title=pin["title"], image_url=_cross_img)
+                                                    mark_arena_posted(_cross_fn, title=pin["title"], image_url=_public_img)
                                             else:
                                                 _arena_result = True  # already posted / no image = skip quietly
                                     except Exception as _arena_err:
                                         _arena_result = False
                                         logger.warning(f"[Scheduler] Are.na cross-post failed (non-critical): {_arena_err}")
+
+
 
                                     # ── Tumblr Cross-Post ────────────────────────────────────────────────
                                     try:
@@ -804,7 +822,7 @@ class PinScheduler:
                                             from database import mark_bluesky_posted, is_bluesky_posted
                                             if not is_bluesky_posted(_cross_fn):
                                                 _bsky_uri = post_to_bluesky(
-                                                    image_url  = _cross_img,
+                                                    image_url  = _public_img,   # public CDN, not Pinterest CDN
                                                     title      = pin["title"],
                                                     caption    = pin.get("description", ""),
                                                     link       = pin.get("link", ""),
@@ -812,7 +830,7 @@ class PinScheduler:
                                                 )
                                                 _bsky_result = bool(_bsky_uri)
                                                 if _bsky_uri:
-                                                    mark_bluesky_posted(_cross_fn, post_uri=_bsky_uri, image_url=_cross_img)
+                                                    mark_bluesky_posted(_cross_fn, post_uri=_bsky_uri, image_url=_public_img)
                                             else:
                                                 _bsky_result = True  # already posted
                                     except Exception as _bsky_err:
@@ -850,7 +868,7 @@ class PinScheduler:
                                             from database import mark_mastodon_posted, is_mastodon_posted
                                             if not is_mastodon_posted(_cross_fn):
                                                 _masto_url = post_to_mastodon(
-                                                    image_url   = _cross_img,
+                                                    image_url   = _public_img,   # public CDN, not Pinterest CDN
                                                     title       = pin["title"],
                                                     description = pin.get("description", ""),
                                                     link        = pin.get("link", ""),
@@ -859,7 +877,7 @@ class PinScheduler:
                                                 _mastodon_result = bool(_masto_url)
                                                 if _masto_url:
                                                     mark_mastodon_posted(_cross_fn, post_url=_masto_url,
-                                                                         title=pin["title"], image_url=_cross_img)
+                                                                         title=pin["title"], image_url=_public_img)
                                             else:
                                                 _mastodon_result = True  # already posted
                                     except Exception as _masto_err:

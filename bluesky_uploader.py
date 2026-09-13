@@ -129,7 +129,11 @@ def _download_image(image_url: str) -> str:
         r = requests.get(
             image_url,
             timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 Pinterest-Bot-Bluesky/1.0"}
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.pinterest.com/",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            }
         )
         if r.status_code == 200 and len(r.content) > 100:
             suffix = ".jpg"
