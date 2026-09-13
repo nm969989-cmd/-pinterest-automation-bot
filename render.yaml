@@ -74,6 +74,14 @@ services:
         sync: false
       - key: RAINDROP_ENABLED
         value: "true"
+      # Mastodon Cross-Posting
+      - key: MASTODON_INSTANCE_URL
+        value: "https://mastodon.social"
+      - key: MASTODON_ACCESS_TOKEN
+        sync: false
+      - key: MASTODON_ENABLED
+        value: "true"
+
 
 
 
