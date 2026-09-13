@@ -67,5 +67,13 @@ services:
         sync: false
       - key: BLUESKY_ENABLED
         value: "true"
+      # Raindrop.io Cross-Posting
+      - key: RAINDROP_ACCESS_TOKEN
+        sync: false
+      - key: RAINDROP_COLLECTION_ID
+        sync: false
+      - key: RAINDROP_ENABLED
+        value: "true"
+
 
 

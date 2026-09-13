@@ -181,6 +181,22 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_bluesky_filename
             ON bluesky_posts (filename)
         """)
+
+        # ── Raindrop.io Cross-Post Tracking ──────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS raindrop_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                drop_id     INTEGER,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raindrop_filename
+            ON raindrop_posts (filename)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -336,8 +352,59 @@ def mark_bluesky_posted(filename: str, post_uri: str = "", post_cid: str = "",
         conn.commit()
 
 
+# ── Raindrop.io Cross-Post Tracking ──────────────────────────────────────────
+
+def is_raindrop_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Raindrop.io (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM raindrop_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_raindrop_posted(filename: str, drop_id: int = 0,
+                         title: str = "", image_url: str = "") -> None:
+    """Records a successful Raindrop.io post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO raindrop_posts (filename, drop_id, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, drop_id, title, image_url)
+        )
+        conn.commit()
+
+
+def get_raindrop_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Raindrop.io posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM raindrop_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM raindrop_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, image_url, posted_at
+            FROM raindrop_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "image_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
+
 def get_multi_platform_stats(today_str: str = None) -> dict:
-    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky)."""
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop)."""
     if not today_str:
         import datetime as _dt
         today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
@@ -347,6 +414,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     arena_stats = get_arena_stats(today_str)
     tumblr_stats = get_tumblr_stats(today_str)
     bluesky_stats = get_bluesky_stats(today_str)
+    raindrop_stats = get_raindrop_stats(today_str)
 
     return {
         "date": today_str,
@@ -358,6 +426,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         "arena": arena_stats,
         "tumblr": tumblr_stats,
         "bluesky": bluesky_stats,
+        "raindrop": raindrop_stats,
     }
 
 

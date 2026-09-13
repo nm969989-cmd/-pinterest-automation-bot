@@ -81,6 +81,12 @@ BLUESKY_HANDLE       = os.getenv('BLUESKY_HANDLE', '')
 BLUESKY_APP_PASSWORD = os.getenv('BLUESKY_APP_PASSWORD', '')
 BLUESKY_ENABLED      = os.getenv('BLUESKY_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
+# Raindrop.io Visual Bookmarking (Pinterest-like collections & boards)
+RAINDROP_ACCESS_TOKEN  = os.getenv('RAINDROP_ACCESS_TOKEN', '')
+RAINDROP_COLLECTION_ID = int(os.getenv('RAINDROP_COLLECTION_ID', '0') or '0')
+RAINDROP_ENABLED       = os.getenv('RAINDROP_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+
 
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))

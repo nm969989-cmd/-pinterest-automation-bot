@@ -192,13 +192,15 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- CROSS-POSTING ---\n"
-        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky)\n"
+        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop)\n"
         "/arena          - Are.na channel stats & block count\n"
         "/arena_test     - Post test block to Are.na channel\n"
         "/tumblr         - Tumblr blog stats & follower count\n"
         "/tumblr_test    - Post test photo to Tumblr blog\n"
         "/bluesky        - Bluesky profile stats & follower count\n"
-        "/bluesky_test   - Post test image to Bluesky feed\n\n"
+        "/bluesky_test   - Post test image to Bluesky feed\n"
+        "/raindrop       - Raindrop collection stats & public link\n"
+        "/raindrop_test  - Post test bookmark to Raindrop collection\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -1708,10 +1710,13 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
 def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              image_path: str, pin_type: str,
                              posted_today: int, max_today: int,
-                             time_ist: str):
+                             time_ist: str,
+                             arena_ok=None, tumblr_ok=None, bluesky_ok=None,
+                             raindrop_ok=None):
     """
     Send a rich Telegram notification after every successful Pinterest post.
     Sends the actual image + details. FREE — no limits at 3 messages/day.
+    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok: True=posted, False=failed, None=disabled
     """
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -1731,11 +1736,27 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     target_url  = get_tracked_target_url(link)
     amazon_line = f"\n🎯 Amazon     : {target_url}" if target_url != link else ""
 
+    def _platform_icon(result):
+        if result is True:   return "✅"
+        if result is False:  return "❌"
+        return "—"            # None = disabled
+
+    cross_lines = ""
+    if arena_ok is not None or tumblr_ok is not None or bluesky_ok is not None or raindrop_ok is not None:
+        cross_lines = (
+            f"\n{'─' * 26}\n"
+            f"🔮 Are.na  {_platform_icon(arena_ok)}  "
+            f"🎨 Tumblr  {_platform_icon(tumblr_ok)}\n"
+            f"🦋 Bluesky {_platform_icon(bluesky_ok)}  "
+            f"💧 Raindrop {_platform_icon(raindrop_ok)}"
+        )
+
     caption = (
         f"📌 Pin Posted! ({bar} {posted_today}/{actual_max})\n"
         f"{'─' * 26}\n"
         f"📝 {title}\n"
         f"🎌 {anime_name} • {time_ist} IST"
+        f"{cross_lines}"
     )
 
 
@@ -1765,6 +1786,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
     except Exception as e:
         logger.warning(f"[TG BOT] Could not schedule pin notification: {e}")
+
+
 
 
 
@@ -1981,14 +2004,17 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
             BLUESKY_ENABLED, BLUESKY_HANDLE,
+            RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
             DRY_RUN
         )
         from database import (
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
+            get_raindrop_stats,
             get_today_uploads, get_all_time_stats
         )
         from arena_uploader import verify_arena_token, get_arena_channel_info
         from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
+        from raindrop_uploader import verify_raindrop_token, get_raindrop_collection_info
 
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         today_str = now_ist.strftime("%Y-%m-%d")
@@ -2041,6 +2067,23 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 bluesky_status = "🔴 AUTH ERROR (Check credentials)"
         bluesky_st = get_bluesky_stats(today_str)
 
+        # Raindrop.io status
+        raindrop_status = "DISABLED (RAINDROP_ENABLED=false)"
+        raindrop_drops_str = ""
+        raindrop_link = "https://app.raindrop.io"
+        if RAINDROP_ENABLED:
+            drop_token_ok = verify_raindrop_token()
+            if drop_token_ok:
+                rc = get_raindrop_collection_info()
+                cnt = rc.get("count", 0) if rc else "?"
+                raindrop_status = "🟢 ACTIVE"
+                raindrop_drops_str = f" ({cnt} bookmarks)"
+                if rc and rc.get("url"):
+                    raindrop_link = rc["url"]
+            else:
+                raindrop_status = "🔴 AUTH ERROR (Check token)"
+        raindrop_st = get_raindrop_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -2062,11 +2105,17 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Handle: @{BLUESKY_HANDLE or 'NOT SET'}\n"
             f"  • Posts: {bluesky_st['today']} today  |  {bluesky_st['total']} all-time\n"
             f"  • Link: https://bsky.app/profile/{BLUESKY_HANDLE}\n\n"
+            f"💧 Raindrop.io:\n"
+            f"  • Status: {raindrop_status}{raindrop_drops_str}\n"
+            f"  • Collection ID: {RAINDROP_COLLECTION_ID}\n"
+            f"  • Posts: {raindrop_st['today']} today  |  {raindrop_st['total']} all-time\n"
+            f"  • Link: {raindrop_link}\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /arena_test — Test Are.na block upload\n"
             f"  /tumblr_test — Test Tumblr photo upload\n"
             f"  /bluesky_test — Test Bluesky image post\n"
+            f"  /raindrop_test — Test Raindrop bookmark upload\n"
             f"  /testpost — Test Pinterest webhook"
         )
         await update.message.reply_text(msg)
@@ -2144,6 +2193,64 @@ async def cmd_bluesky_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"[TG BOT] cmd_bluesky_test error: {e}", exc_info=True)
         await update.message.reply_text(f"Bluesky test error: {e}")
+
+
+async def cmd_raindrop(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Raindrop.io collection stats and public URL."""
+    if not _is_admin(update): return
+    try:
+        from raindrop_uploader import get_raindrop_collection_info, verify_raindrop_token
+        from config import RAINDROP_ENABLED, RAINDROP_COLLECTION_ID
+        enabled_str = "ENABLED" if RAINDROP_ENABLED else "DISABLED (set RAINDROP_ENABLED=true)"
+        valid = verify_raindrop_token()
+        info = get_raindrop_collection_info() if valid else None
+        if info:
+            msg = (
+                f"💧 Raindrop.io Status: {enabled_str}\n"
+                f"{'═' * 30}\n"
+                f"Collection : {info['title']}\n"
+                f"Bookmarks  : {info['count']}\n"
+                f"Public URL : {info['url']}"
+            )
+        elif valid:
+            msg = (
+                f"💧 Raindrop.io: {enabled_str}\n"
+                f"Token: Valid ✅\n"
+                f"Collection ID: {RAINDROP_COLLECTION_ID}"
+            )
+        else:
+            msg = "💧 Raindrop.io: 🔴 Token invalid or not configured. Check RAINDROP_ACCESS_TOKEN in .env"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_raindrop error: {e}", exc_info=True)
+        await update.message.reply_text(f"Raindrop error: {e}")
+
+
+async def cmd_raindrop_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Post a test bookmark to Raindrop.io."""
+    if not _is_admin(update): return
+    await update.message.reply_text("⏳ Posting test bookmark to Raindrop.io...")
+    try:
+        from raindrop_uploader import post_to_raindrop, get_raindrop_collection_info
+        test_url = "https://i.pinimg.com/originals/26/5d/2a/265d2a939f50e82c5f11cb7596ff1f7c.jpg"
+        ok = post_to_raindrop(
+            image_url=test_url,
+            title="[Test] Raindrop Integration - Anime Poster",
+            description="Test visual bookmark posted from Telegram bot.",
+            link="https://www.pinterest.com",
+        )
+        if ok:
+            info = get_raindrop_collection_info()
+            url_str = f"\nCollection: {info['url']}" if info else ""
+            await update.message.reply_text(f"✅ Raindrop.io test bookmark created successfully!{url_str}")
+        else:
+            await update.message.reply_text(
+                "❌ Raindrop test bookmark failed.\n"
+                "Check that RAINDROP_ACCESS_TOKEN and RAINDROP_COLLECTION_ID are set in .env."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_raindrop_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"Raindrop test error: {e}")
 
 
 # -- Start bot in background thread -------------------------------------------
@@ -2275,6 +2382,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("tumblr_test",   cmd_tumblr_test),
             ("bluesky",       cmd_bluesky),
             ("bluesky_test",  cmd_bluesky_test),
+            ("raindrop",      cmd_raindrop),
+            ("raindrop_test", cmd_raindrop_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -2299,7 +2408,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("summary",       "Today's multi-platform report (Auto: 9 PM)"),
-                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky)"),
+                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop)"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
@@ -2331,6 +2440,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("tumblr_test",   "Post test photo to Tumblr blog"),
                 BotCommand("bluesky",       "Bluesky profile stats & follower count"),
                 BotCommand("bluesky_test",  "Post test photo to Bluesky feed"),
+                BotCommand("raindrop",      "Raindrop collection stats & link"),
+                BotCommand("raindrop_test", "Post test bookmark to Raindrop collection"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")
