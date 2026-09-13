@@ -86,6 +86,12 @@ RAINDROP_ACCESS_TOKEN  = os.getenv('RAINDROP_ACCESS_TOKEN', '')
 RAINDROP_COLLECTION_ID = int(os.getenv('RAINDROP_COLLECTION_ID', '0') or '0')
 RAINDROP_ENABLED       = os.getenv('RAINDROP_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
+# Mastodon (Fediverse) Social Microblogging
+MASTODON_INSTANCE_URL  = os.getenv('MASTODON_INSTANCE_URL', 'https://mastodon.social').strip().rstrip('/')
+MASTODON_ACCESS_TOKEN  = os.getenv('MASTODON_ACCESS_TOKEN', '').strip()
+MASTODON_ENABLED       = os.getenv('MASTODON_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(MASTODON_ACCESS_TOKEN)
+
+
 
 
 # Scheduler Config

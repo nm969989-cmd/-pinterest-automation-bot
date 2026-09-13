@@ -153,6 +153,44 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _bsky_e:
         bluesky_status = f"🟡 Check failed ({_bsky_e})"
 
+    # 11. Raindrop.io Cross-Post Status
+    raindrop_status = "⚪ Disabled"
+    try:
+        if config.RAINDROP_ENABLED and config.RAINDROP_ACCESS_TOKEN:
+            from raindrop_uploader import verify_raindrop_token, get_raindrop_collection_info
+            drop_ok = verify_raindrop_token()
+            if drop_ok:
+                rinfo = get_raindrop_collection_info()
+                cnt = rinfo.get("count", 0) if rinfo else "?"
+                raindrop_status = f"🟢 Active ({cnt} bookmarks, Collection {config.RAINDROP_COLLECTION_ID})"
+            else:
+                raindrop_status = "🔴 Token Invalid"
+                warnings.append("Raindrop token is invalid — check RAINDROP_ACCESS_TOKEN in .env")
+        elif config.RAINDROP_ENABLED and not config.RAINDROP_ACCESS_TOKEN:
+            raindrop_status = "🔴 Token Missing"
+            warnings.append("RAINDROP_ENABLED=true but RAINDROP_ACCESS_TOKEN is missing in .env")
+    except Exception as _drop_e:
+        raindrop_status = f"🟡 Check failed ({_drop_e})"
+
+    # 12. Mastodon Cross-Post Status
+    mastodon_status = "⚪ Disabled"
+    try:
+        if config.MASTODON_ENABLED and config.MASTODON_ACCESS_TOKEN:
+            from mastodon_uploader import verify_mastodon_token, get_mastodon_profile_info
+            masto_ok = verify_mastodon_token()
+            if masto_ok:
+                minfo = get_mastodon_profile_info()
+                statuses = minfo.get("statuses_count", 0) if minfo else "?"
+                mastodon_status = f"🟢 Active (@{minfo.get('username', 'user')}, {statuses} toots)"
+            else:
+                mastodon_status = "🔴 Token Invalid"
+                warnings.append("Mastodon token is invalid — check MASTODON_ACCESS_TOKEN in .env")
+        elif config.MASTODON_ENABLED and not config.MASTODON_ACCESS_TOKEN:
+            mastodon_status = "🔴 Token Missing"
+            warnings.append("MASTODON_ENABLED=true but MASTODON_ACCESS_TOKEN is missing in .env")
+    except Exception as _masto_e:
+        mastodon_status = f"🟡 Check failed ({_masto_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -185,6 +223,8 @@ def run_full_system_diagnostic() -> dict:
         "arena_status": arena_status,
         "tumblr_status": tumblr_status,
         "bluesky_status": bluesky_status,
+        "raindrop_status": raindrop_status,
+        "mastodon_status": mastodon_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -231,6 +271,8 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"
         f"  • Tumblr Cross-Post  : {diag.get('tumblr_status', 'N/A')}\n"
         f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
+        f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}\n"
+        f"  • Mastodon           : {diag.get('mastodon_status', 'N/A')}\n"
         f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )

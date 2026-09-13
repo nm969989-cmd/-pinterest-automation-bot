@@ -425,13 +425,14 @@ async def _send_daily_report(chat_id):
         from database import (
             get_today_uploads, get_all_time_stats,
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
-            get_raindrop_stats, get_click_stats
+            get_raindrop_stats, get_mastodon_stats, get_click_stats
         )
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
             BLUESKY_ENABLED, BLUESKY_HANDLE,
-            RAINDROP_ENABLED, RAINDROP_COLLECTION_ID
+            RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
+            MASTODON_ENABLED, MASTODON_INSTANCE_URL
         )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -447,6 +448,7 @@ async def _send_daily_report(chat_id):
         tumblr_st   = get_tumblr_stats(today_ist_str)
         bluesky_st  = get_bluesky_stats(today_ist_str)
         raindrop_st = get_raindrop_stats(today_ist_str)
+        mastodon_st = get_mastodon_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -467,6 +469,7 @@ async def _send_daily_report(chat_id):
         tumblr_badge   = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
         bluesky_badge  = "🟢 ON" if BLUESKY_ENABLED else "⚪ OFF"
         raindrop_badge = "🟢 ON" if RAINDROP_ENABLED else "⚪ OFF"
+        masto_badge    = "🟢 ON" if MASTODON_ENABLED else "⚪ OFF"
 
         summary_section = (
             f"📊 Platform Posting Summary:\n"
@@ -475,7 +478,8 @@ async def _send_daily_report(chat_id):
             f"  🔮 Are.na    : {arena_st['today']} today  |  {arena_st['total']} all-time  ({arena_badge})\n"
             f"  🎨 Tumblr    : {tumblr_st['today']} today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n"
             f"  🦋 Bluesky   : {bluesky_st['today']} today  |  {bluesky_st['total']} all-time  ({bluesky_badge})\n"
-            f"  💧 Raindrop  : {raindrop_st['today']} today  |  {raindrop_st['total']} all-time  ({raindrop_badge})\n\n"
+            f"  💧 Raindrop  : {raindrop_st['today']} today  |  {raindrop_st['total']} all-time  ({raindrop_badge})\n"
+            f"  🐘 Mastodon  : {mastodon_st['today']} today  |  {mastodon_st['total']} all-time  ({masto_badge})\n\n"
         )
 
         revenue_section = ""
@@ -510,6 +514,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += f"  • Bluesky: https://bsky.app/profile/{BLUESKY_HANDLE}\n"
         if RAINDROP_ENABLED:
             crosspost_section += f"  • Raindrop: https://raindrop.io/muthelyrics/anime-posters-{RAINDROP_COLLECTION_ID}\n"
+        if MASTODON_ENABLED:
+            crosspost_section += f"  • Mastodon: {MASTODON_INSTANCE_URL}/@muthelyrics\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -1720,11 +1726,11 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              posted_today: int, max_today: int,
                              time_ist: str,
                              arena_ok=None, tumblr_ok=None, bluesky_ok=None,
-                             raindrop_ok=None):
+                             raindrop_ok=None, mastodon_ok=None):
     """
     Send a rich Telegram notification after every successful Pinterest post.
     Sends the actual image + details. FREE — no limits at 3 messages/day.
-    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok: True=posted, False=failed, None=disabled
+    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok: True=posted, False=failed, None=disabled
     """
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -1750,13 +1756,15 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         return "—"            # None = disabled
 
     cross_lines = ""
-    if arena_ok is not None or tumblr_ok is not None or bluesky_ok is not None or raindrop_ok is not None:
+    if (arena_ok is not None or tumblr_ok is not None or bluesky_ok is not None
+            or raindrop_ok is not None or mastodon_ok is not None):
         cross_lines = (
             f"\n{'─' * 26}\n"
-            f"🔮 Are.na  {_platform_icon(arena_ok)}  "
-            f"🎨 Tumblr  {_platform_icon(tumblr_ok)}\n"
-            f"🦋 Bluesky {_platform_icon(bluesky_ok)}  "
-            f"💧 Raindrop {_platform_icon(raindrop_ok)}"
+            f"🔮 Are.na    {_platform_icon(arena_ok)}  "
+            f"🎨 Tumblr   {_platform_icon(tumblr_ok)}\n"
+            f"🦋 Bluesky  {_platform_icon(bluesky_ok)}  "
+            f"💧 Raindrop {_platform_icon(raindrop_ok)}\n"
+            f"🐘 Mastodon {_platform_icon(mastodon_ok)}"
         )
 
     caption = (
@@ -2013,16 +2021,18 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
             BLUESKY_ENABLED, BLUESKY_HANDLE,
             RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
+            MASTODON_ENABLED, MASTODON_INSTANCE_URL,
             DRY_RUN
         )
         from database import (
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
-            get_raindrop_stats,
+            get_raindrop_stats, get_mastodon_stats,
             get_today_uploads, get_all_time_stats
         )
         from arena_uploader import verify_arena_token, get_arena_channel_info
         from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
         from raindrop_uploader import verify_raindrop_token, get_raindrop_collection_info
+        from mastodon_uploader import verify_mastodon_token, get_mastodon_profile_info
 
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         today_str = now_ist.strftime("%Y-%m-%d")
@@ -2092,6 +2102,23 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 raindrop_status = "🔴 AUTH ERROR (Check token)"
         raindrop_st = get_raindrop_stats(today_str)
 
+        # Mastodon status
+        mastodon_status = "DISABLED (MASTODON_ENABLED=false)"
+        mastodon_posts_str = ""
+        mastodon_link = f"{MASTODON_INSTANCE_URL}/@muthelyrics"
+        if MASTODON_ENABLED:
+            masto_token_ok = verify_mastodon_token()
+            if masto_token_ok:
+                mp = get_mastodon_profile_info()
+                cnt = mp.get("statuses_count", 0) if mp else "?"
+                mastodon_status = "🟢 ACTIVE"
+                mastodon_posts_str = f" ({cnt} toots/posts)"
+                if mp and mp.get("url"):
+                    mastodon_link = mp["url"]
+            else:
+                mastodon_status = "🔴 AUTH ERROR (Check token)"
+        mastodon_st = get_mastodon_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -2118,12 +2145,17 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Collection ID: {RAINDROP_COLLECTION_ID}\n"
             f"  • Posts: {raindrop_st['today']} today  |  {raindrop_st['total']} all-time\n"
             f"  • Link: {raindrop_link}\n\n"
+            f"🐘 Mastodon:\n"
+            f"  • Status: {mastodon_status}{mastodon_posts_str}\n"
+            f"  • Posts: {mastodon_st['today']} today  |  {mastodon_st['total']} all-time\n"
+            f"  • Link: {mastodon_link}\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /arena_test — Test Are.na block upload\n"
             f"  /tumblr_test — Test Tumblr photo upload\n"
             f"  /bluesky_test — Test Bluesky image post\n"
             f"  /raindrop_test — Test Raindrop bookmark upload\n"
+            f"  /mastodon_test — Test Mastodon status & image post\n"
             f"  /testpost — Test Pinterest webhook"
         )
         await update.message.reply_text(msg)
@@ -2261,6 +2293,64 @@ async def cmd_raindrop_test(update: "Update", context: "ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"Raindrop test error: {e}")
 
 
+async def cmd_mastodon(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Mastodon account stats and profile URL."""
+    if not _is_admin(update): return
+    try:
+        from mastodon_uploader import get_mastodon_profile_info, verify_mastodon_token
+        from config import MASTODON_ENABLED, MASTODON_INSTANCE_URL
+        enabled_str = "ENABLED" if MASTODON_ENABLED else "DISABLED (set MASTODON_ENABLED=true)"
+        valid = verify_mastodon_token()
+        info = get_mastodon_profile_info() if valid else None
+        if info:
+            msg = (
+                f"🐘 Mastodon Status: {enabled_str}\n"
+                f"{'═' * 30}\n"
+                f"Username  : @{info['username']}\n"
+                f"Instance  : {MASTODON_INSTANCE_URL}\n"
+                f"Followers : {info['followers_count']}\n"
+                f"Toots     : {info['statuses_count']}\n"
+                f"Profile   : {info['url']}"
+            )
+        elif valid:
+            msg = (
+                f"🐘 Mastodon: {enabled_str}\n"
+                f"Token: Valid ✅\n"
+                f"Instance: {MASTODON_INSTANCE_URL}"
+            )
+        else:
+            msg = "🐘 Mastodon: 🔴 Token invalid or not configured. Check MASTODON_ACCESS_TOKEN in .env"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_mastodon error: {e}", exc_info=True)
+        await update.message.reply_text(f"Mastodon error: {e}")
+
+
+async def cmd_mastodon_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Post a test status with image to Mastodon."""
+    if not _is_admin(update): return
+    await update.message.reply_text("⏳ Posting test image & status to Mastodon...")
+    try:
+        from mastodon_uploader import post_to_mastodon
+        test_url = "https://i.pinimg.com/originals/26/5d/2a/265d2a939f50e82c5f11cb7596ff1f7c.jpg"
+        post_url = post_to_mastodon(
+            image_url=test_url,
+            title="[Test] Anime Aesthetic Poster - Mastodon Integration",
+            description="Testing automated multi-platform cross-posting from Telegram Bot.",
+            link="https://www.pinterest.com",
+        )
+        if post_url:
+            await update.message.reply_text(f"✅ Mastodon test post created successfully!\nLink: {post_url}")
+        else:
+            await update.message.reply_text(
+                "❌ Mastodon test post failed.\n"
+                "Check that MASTODON_ACCESS_TOKEN is set in .env."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_mastodon_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"Mastodon test error: {e}")
+
+
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
               dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
@@ -2392,6 +2482,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("bluesky_test",  cmd_bluesky_test),
             ("raindrop",      cmd_raindrop),
             ("raindrop_test", cmd_raindrop_test),
+            ("mastodon",      cmd_mastodon),
+            ("mastodontest",  cmd_mastodon_test),
+            ("mastodon_test", cmd_mastodon_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -2415,8 +2508,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             await application.bot.set_my_commands([
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
-                BotCommand("summary",       "Today's multi-platform report (Auto: 9 PM)"),
-                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop)"),
+                BotCommand("summary",       "Today's multi-platform report (Auto: 10 PM)"),
+                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon)"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
@@ -2450,6 +2543,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("bluesky_test",  "Post test photo to Bluesky feed"),
                 BotCommand("raindrop",      "Raindrop collection stats & link"),
                 BotCommand("raindrop_test", "Post test bookmark to Raindrop collection"),
+                BotCommand("mastodon",      "Mastodon profile stats & link"),
+                BotCommand("mastodon_test", "Post test anime to Mastodon feed"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

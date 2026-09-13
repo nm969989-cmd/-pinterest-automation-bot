@@ -406,11 +406,11 @@ class PinScheduler:
                             image_path: str, pin_type: str,
                             posted_today: int, time_ist: str,
                             arena_ok=None, tumblr_ok=None, bluesky_ok=None,
-                            raindrop_ok=None):
+                            raindrop_ok=None, mastodon_ok=None):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
         Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
-        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok: True=posted, False=failed, None=disabled
+        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok: True=posted, False=failed, None=disabled
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -427,6 +427,7 @@ class PinScheduler:
                 tumblr_ok=tumblr_ok,
                 bluesky_ok=bluesky_ok,
                 raindrop_ok=raindrop_ok,
+                mastodon_ok=mastodon_ok,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -743,6 +744,7 @@ class PinScheduler:
                                     _tumblr_result   = None
                                     _bsky_result     = None
                                     _raindrop_result = None
+                                    _mastodon_result = None
                                     _cross_fn = (image_path or "").split("/")[-1].split("\\")[-1]
                                     _cross_img = pin.get("image_url", "")
 
@@ -840,6 +842,30 @@ class PinScheduler:
                                         _raindrop_result = False
                                         logger.warning(f"[Scheduler] Raindrop cross-post failed (non-critical): {_drop_err}")
 
+                                    # ── Mastodon Cross-Post ─────────────────────────────────────────────
+                                    try:
+                                        from config import MASTODON_ENABLED
+                                        if MASTODON_ENABLED:
+                                            from mastodon_uploader import post_to_mastodon
+                                            from database import mark_mastodon_posted, is_mastodon_posted
+                                            if not is_mastodon_posted(_cross_fn):
+                                                _masto_url = post_to_mastodon(
+                                                    image_url   = _cross_img,
+                                                    title       = pin["title"],
+                                                    description = pin.get("description", ""),
+                                                    link        = pin.get("link", ""),
+                                                    image_path  = image_path,
+                                                )
+                                                _mastodon_result = bool(_masto_url)
+                                                if _masto_url:
+                                                    mark_mastodon_posted(_cross_fn, post_url=_masto_url,
+                                                                         title=pin["title"], image_url=_cross_img)
+                                            else:
+                                                _mastodon_result = True  # already posted
+                                    except Exception as _masto_err:
+                                        _mastodon_result = False
+                                        logger.warning(f"[Scheduler] Mastodon cross-post failed (non-critical): {_masto_err}")
+
                                     # ── Notify admin (after cross-posts so results are known) ────────────
                                     self._notify_pin_posted(
                                         title=pin["title"],
@@ -853,6 +879,7 @@ class PinScheduler:
                                         tumblr_ok=_tumblr_result,
                                         bluesky_ok=_bsky_result,
                                         raindrop_ok=_raindrop_result,
+                                        mastodon_ok=_mastodon_result,
                                     )
 
                                     # Auto-dispatch to configured stock photography platforms
