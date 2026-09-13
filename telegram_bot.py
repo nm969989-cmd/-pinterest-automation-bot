@@ -1663,6 +1663,104 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             status_header = "📌 Live on Pinterest! (Uploaded Successfully)"
             action_note = "Your pin is live on Pinterest right now."
+
+            # ── Cross-post to all enabled platforms (same as scheduler) ──────────
+            _arena_result = _tumblr_result = _bsky_result = _raindrop_result = _mastodon_result = None
+            _cross_fn = os.path.basename(processed_path)
+            _cross_img = ""  # no public CDN URL yet for manual uploads
+
+            # Upload to public CDN first so Are.na server can fetch the image
+            _public_img = _cross_img
+            try:
+                from image_host import upload_image_to_host
+                _hosted = upload_image_to_host(processed_path)
+                if _hosted:
+                    _public_img = _hosted
+                    logger.info(f"[TG BOT] Public CDN URL for cross-posts: {_hosted[:80]}")
+            except Exception as _host_err:
+                logger.warning(f"[TG BOT] CDN upload failed (cross-post image): {_host_err}")
+
+            try:
+                from config import ARENA_ENABLED
+                if ARENA_ENABLED:
+                    from arena_uploader import post_to_arena
+                    from database import mark_arena_posted, is_arena_posted
+                    if _public_img and not is_arena_posted(_cross_fn):
+                        _ok = post_to_arena(image_url=_public_img, title=title, description=description, link=amazon_link)
+                        _arena_result = bool(_ok)
+                        if _ok: mark_arena_posted(_cross_fn, title=title, image_url=_public_img)
+                    else:
+                        _arena_result = True
+            except Exception as e:
+                _arena_result = False; logger.warning(f"[TG BOT] Are.na cross-post error: {e}")
+
+            try:
+                from config import TUMBLR_ENABLED
+                if TUMBLR_ENABLED:
+                    from tumblr_uploader import post_to_tumblr
+                    from database import mark_tumblr_posted, is_tumblr_posted
+                    if not is_tumblr_posted(_cross_fn):
+                        _ok = post_to_tumblr(image_url=_public_img, title=title, caption=description, link=amazon_link, image_path=processed_path)
+                        _tumblr_result = bool(_ok)
+                        if _ok:
+                            from config import TUMBLR_BLOG_NAME
+                            mark_tumblr_posted(_cross_fn, post_id=_ok, blog=TUMBLR_BLOG_NAME, image_url=_public_img)
+                    else:
+                        _tumblr_result = True
+            except Exception as e:
+                _tumblr_result = False; logger.warning(f"[TG BOT] Tumblr cross-post error: {e}")
+
+            try:
+                from config import BLUESKY_ENABLED
+                if BLUESKY_ENABLED:
+                    from bluesky_uploader import post_to_bluesky
+                    from database import mark_bluesky_posted, is_bluesky_posted
+                    if not is_bluesky_posted(_cross_fn):
+                        _uri = post_to_bluesky(image_url=_public_img, title=title, caption=description, link=amazon_link, image_path=processed_path)
+                        _bsky_result = bool(_uri)
+                        if _uri: mark_bluesky_posted(_cross_fn, post_uri=_uri, image_url=_public_img)
+                    else:
+                        _bsky_result = True
+            except Exception as e:
+                _bsky_result = False; logger.warning(f"[TG BOT] Bluesky cross-post error: {e}")
+
+            try:
+                from config import RAINDROP_ENABLED
+                if RAINDROP_ENABLED:
+                    from raindrop_uploader import post_to_raindrop
+                    from database import mark_raindrop_posted, is_raindrop_posted
+                    if not is_raindrop_posted(_cross_fn):
+                        _ok = post_to_raindrop(image_url=_public_img, title=title, description=description, link=amazon_link, image_path=processed_path)
+                        _raindrop_result = bool(_ok)
+                        if _ok: mark_raindrop_posted(_cross_fn, title=title, image_url=_public_img)
+                    else:
+                        _raindrop_result = True
+            except Exception as e:
+                _raindrop_result = False; logger.warning(f"[TG BOT] Raindrop cross-post error: {e}")
+
+            try:
+                from config import MASTODON_ENABLED
+                if MASTODON_ENABLED:
+                    from mastodon_uploader import post_to_mastodon
+                    from database import mark_mastodon_posted, is_mastodon_posted
+                    if not is_mastodon_posted(_cross_fn):
+                        _url = post_to_mastodon(image_url=_public_img, title=title, description=description, link=amazon_link, image_path=processed_path)
+                        _mastodon_result = bool(_url)
+                        if _url: mark_mastodon_posted(_cross_fn, post_url=_url, title=title, image_url=_public_img)
+                    else:
+                        _mastodon_result = True
+            except Exception as e:
+                _mastodon_result = False; logger.warning(f"[TG BOT] Mastodon cross-post error: {e}")
+
+            def _icon(r): return "✅" if r is True else ("❌" if r is False else "—")
+            _cross_lines = (
+                f"\n{'─' * 26}\n"
+                f"🔮 Are.na  {_icon(_arena_result)}  🎨 Tumblr  {_icon(_tumblr_result)}\n"
+                f"🦋 Bluesky {_icon(_bsky_result)}  💧 Raindrop {_icon(_raindrop_result)}\n"
+                f"🐘 Mastodon {_icon(_mastodon_result)}"
+            )
+
+
         else:
             # Enqueue if upload failed or dry-run
             import datetime as _dt
@@ -1674,6 +1772,8 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             )
             status_header = "📥 Queued for Posting (#1 in line)"
             action_note = "Queued! Tap [ 🚀 Post Now ] below to publish immediately."
+            _cross_lines = ""  # No cross-post for queued items
+
 
         board_label = f" • {genre.title()}" if genre else ""
         char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
@@ -1684,6 +1784,7 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 f"{'─' * 26}\n"
                 f"📝 {title}\n"
                 f"🎌 {anime_name}{char_label}{board_label}"
+                f"{_cross_lines}"
             )
         else:
             confirm_text = (
