@@ -424,12 +424,14 @@ async def _send_daily_report(chat_id):
     try:
         from database import (
             get_today_uploads, get_all_time_stats,
-            get_arena_stats, get_tumblr_stats, get_bluesky_stats, get_click_stats
+            get_arena_stats, get_tumblr_stats, get_bluesky_stats,
+            get_raindrop_stats, get_click_stats
         )
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,
-            BLUESKY_ENABLED, BLUESKY_HANDLE
+            BLUESKY_ENABLED, BLUESKY_HANDLE,
+            RAINDROP_ENABLED, RAINDROP_COLLECTION_ID
         )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -441,9 +443,10 @@ async def _send_daily_report(chat_id):
         count  = len(pins)
 
         # Cross-platform stats
-        arena_st   = get_arena_stats(today_ist_str)
-        tumblr_st  = get_tumblr_stats(today_ist_str)
-        bluesky_st = get_bluesky_stats(today_ist_str)
+        arena_st    = get_arena_stats(today_ist_str)
+        tumblr_st   = get_tumblr_stats(today_ist_str)
+        bluesky_st  = get_bluesky_stats(today_ist_str)
+        raindrop_st = get_raindrop_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -455,20 +458,24 @@ async def _send_daily_report(chat_id):
             earnings_today = 0.0
 
         header = (
-            f"📊 Daily Multi-Platform Report — {today_display}\n"
+            f"🌙 Good Night! Daily Report — {today_display}\n"
+            f"⏰ 10:00 PM IST Auto-Report\n"
             f"{'═' * 38}\n\n"
         )
 
-        arena_badge   = "🟢 ON" if ARENA_ENABLED else "⚪ OFF"
-        tumblr_badge  = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
-        bluesky_badge = "🟢 ON" if BLUESKY_ENABLED else "⚪ OFF"
+        arena_badge    = "🟢 ON" if ARENA_ENABLED else "⚪ OFF"
+        tumblr_badge   = "🟢 ON" if TUMBLR_ENABLED else "⚪ OFF"
+        bluesky_badge  = "🟢 ON" if BLUESKY_ENABLED else "⚪ OFF"
+        raindrop_badge = "🟢 ON" if RAINDROP_ENABLED else "⚪ OFF"
 
         summary_section = (
-            f"🌐 Platform Breakdown:\n"
-            f"  📌 Pinterest : {count} posted today  |  {stats['total']} all-time\n"
-            f"  🔮 Are.na    : {arena_st['today']} posted today  |  {arena_st['total']} all-time  ({arena_badge})\n"
-            f"  🎨 Tumblr    : {tumblr_st['today']} posted today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n"
-            f"  🦋 Bluesky   : {bluesky_st['today']} posted today  |  {bluesky_st['total']} all-time  ({bluesky_badge})\n\n"
+            f"📊 Platform Posting Summary:\n"
+            f"{'─' * 34}\n"
+            f"  📌 Pinterest : {count} today  |  {stats['total']} all-time\n"
+            f"  🔮 Are.na    : {arena_st['today']} today  |  {arena_st['total']} all-time  ({arena_badge})\n"
+            f"  🎨 Tumblr    : {tumblr_st['today']} today  |  {tumblr_st['total']} all-time  ({tumblr_badge})\n"
+            f"  🦋 Bluesky   : {bluesky_st['today']} today  |  {bluesky_st['total']} all-time  ({bluesky_badge})\n"
+            f"  💧 Raindrop  : {raindrop_st['today']} today  |  {raindrop_st['total']} all-time  ({raindrop_badge})\n\n"
         )
 
         revenue_section = ""
@@ -479,7 +486,7 @@ async def _send_daily_report(chat_id):
             )
 
         if count == 0:
-            pin_section = "📌 Pinterest Activity:\n  (No pins posted today yet)\n\n"
+            pin_section = "📌 Pinterest Activity:\n  (No pins posted today — queue may be empty)\n\n"
         else:
             from collections import Counter
             anime_counts = Counter(p.get('anime') or 'Unknown' for p in pins)
@@ -494,13 +501,15 @@ async def _send_daily_report(chat_id):
                 f"Recent Pins:\n" + "\n".join(lines) + more_pins + "\n\n"
             )
 
-        crosspost_section = "🌐 Connected Channels:\n"
+        crosspost_section = "🌐 Connected Platforms:\n"
         if ARENA_ENABLED:
             crosspost_section += f"  • Are.na: are.na/manoj-muthelyrics/{ARENA_CHANNEL_SLUG}\n"
         if TUMBLR_ENABLED:
             crosspost_section += f"  • Tumblr: https://{TUMBLR_BLOG_NAME}.tumblr.com\n"
         if BLUESKY_ENABLED:
             crosspost_section += f"  • Bluesky: https://bsky.app/profile/{BLUESKY_HANDLE}\n"
+        if RAINDROP_ENABLED:
+            crosspost_section += f"  • Raindrop: https://raindrop.io/muthelyrics/anime-posters-{RAINDROP_COLLECTION_ID}\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -584,9 +593,9 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
     """
     Background thread that sends:
       • 8:00 AM IST (02:30 UTC): Today's Schedule & upcoming pins
-      • 9:00 AM IST (03:30 UTC): Daily summary report
       • 10:00 AM IST (04:30 UTC): Automated 3-Day Health Check
       • 10:30 AM IST (05:00 UTC): Monthly Self-Healing Link Audit
+      • 10:00 PM IST (16:30 UTC): Nightly daily summary (all 5 platforms)
     Dynamically reads admin_chat_id from _state so it always finds the correct chat.
     """
     def _get_chat_id():
@@ -616,19 +625,18 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                 else:
                     logger.warning("[TG BOT] 8 AM schedule skipped — admin chat ID not set yet.")
 
-            # 09:00 PM IST = 15:30 UTC -> Daily Summary Report
-            # Moved from 9 AM IST to 9 PM IST: at 9 AM the first pin hasn't posted yet
-            # so the report always said "No pins today". At 9 PM all 5 pins are done.
-            if now_utc.hour == 15 and now_utc.minute == 30 and now_utc.date() != sent_today:
+            # 10:00 PM IST = 16:30 UTC -> Daily Nightly Summary Report
+            # At 10 PM IST all 5 posting slots (9AM/1PM/4PM/6PM/8PM IST) are fully done.
+            if now_utc.hour == 16 and now_utc.minute == 30 and now_utc.date() != sent_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id:
                     sent_today = now_utc.date()
-                    logger.info(f"[TG BOT] Sending daily report to {chat_id} (9 PM IST)...")
+                    logger.info(f"[TG BOT] Sending nightly daily report to {chat_id} (10 PM IST)...")
                     asyncio.run_coroutine_threadsafe(
                         _send_daily_report(chat_id), _loop_ref
                     )
                 else:
-                    logger.warning("[TG BOT] Daily report skipped — admin chat ID not set yet.")
+                    logger.warning("[TG BOT] Nightly report skipped — admin chat ID not set yet.")
 
 
             # 10:00 AM IST = 04:30 UTC -> Automated 3-Day Health Check
