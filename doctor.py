@@ -88,7 +88,11 @@ def run_full_system_diagnostic() -> dict:
     # 8. Are.na Cross-Post Status
     arena_status = "⚪ Disabled"
     try:
-        if config.ARENA_ENABLED and config.ARENA_ACCESS_TOKEN:
+        from circuit_breaker import is_cooling_down, get_all_cooldowns
+        cooling, c_reason, c_rem = is_cooling_down("arena")
+        if cooling:
+            arena_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.ARENA_ENABLED and config.ARENA_ACCESS_TOKEN:
             from arena_uploader import verify_arena_token, get_arena_channel_info
             token_ok = verify_arena_token()
             if token_ok:
@@ -114,7 +118,10 @@ def run_full_system_diagnostic() -> dict:
     # 9. Tumblr Cross-Post Status
     tumblr_status = "⚪ Disabled"
     try:
-        if config.TUMBLR_ENABLED and config.TUMBLR_ACCESS_TOKEN:
+        cooling, c_reason, c_rem = is_cooling_down("tumblr")
+        if cooling:
+            tumblr_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.TUMBLR_ENABLED and config.TUMBLR_ACCESS_TOKEN:
             from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
             tok_ok = verify_tumblr_token()
             if tok_ok:
@@ -135,7 +142,10 @@ def run_full_system_diagnostic() -> dict:
     # 10. Bluesky Cross-Post Status
     bluesky_status = "⚪ Disabled"
     try:
-        if config.BLUESKY_ENABLED and config.BLUESKY_HANDLE and config.BLUESKY_APP_PASSWORD:
+        cooling, c_reason, c_rem = is_cooling_down("bluesky")
+        if cooling:
+            bluesky_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.BLUESKY_ENABLED and config.BLUESKY_HANDLE and config.BLUESKY_APP_PASSWORD:
             from bluesky_uploader import verify_bluesky_credentials, get_bluesky_profile_info
             bsky_ok = verify_bluesky_credentials()
             if bsky_ok:
@@ -156,7 +166,10 @@ def run_full_system_diagnostic() -> dict:
     # 11. Raindrop.io Cross-Post Status
     raindrop_status = "⚪ Disabled"
     try:
-        if config.RAINDROP_ENABLED and config.RAINDROP_ACCESS_TOKEN:
+        cooling, c_reason, c_rem = is_cooling_down("raindrop")
+        if cooling:
+            raindrop_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.RAINDROP_ENABLED and config.RAINDROP_ACCESS_TOKEN:
             from raindrop_uploader import verify_raindrop_token, get_raindrop_collection_info
             drop_ok = verify_raindrop_token()
             if drop_ok:
@@ -175,7 +188,10 @@ def run_full_system_diagnostic() -> dict:
     # 12. Mastodon Cross-Post Status
     mastodon_status = "⚪ Disabled"
     try:
-        if config.MASTODON_ENABLED and config.MASTODON_ACCESS_TOKEN:
+        cooling, c_reason, c_rem = is_cooling_down("mastodon")
+        if cooling:
+            mastodon_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.MASTODON_ENABLED and config.MASTODON_ACCESS_TOKEN:
             from mastodon_uploader import verify_mastodon_token, get_mastodon_profile_info
             masto_ok = verify_mastodon_token()
             if masto_ok:
@@ -194,7 +210,10 @@ def run_full_system_diagnostic() -> dict:
     # 13. DeviantArt Cross-Post Status
     deviantart_status = "⚪ Disabled"
     try:
-        if config.DEVIANTART_ENABLED and (config.DEVIANTART_ACCESS_TOKEN or config.DEVIANTART_REFRESH_TOKEN):
+        cooling, c_reason, c_rem = is_cooling_down("deviantart")
+        if cooling:
+            deviantart_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.DEVIANTART_ENABLED and (config.DEVIANTART_ACCESS_TOKEN or config.DEVIANTART_REFRESH_TOKEN):
             from deviantart_uploader import verify_deviantart_token, get_deviantart_user_info
             da_ok = verify_deviantart_token()
             if da_ok:
@@ -213,7 +232,10 @@ def run_full_system_diagnostic() -> dict:
     # 14. Pixelfed Cross-Post Status
     pixelfed_status = "⚪ Disabled"
     try:
-        if config.PIXELFED_ENABLED and config.PIXELFED_ACCESS_TOKEN:
+        cooling, c_reason, c_rem = is_cooling_down("pixelfed")
+        if cooling:
+            pixelfed_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif config.PIXELFED_ENABLED and config.PIXELFED_ACCESS_TOKEN:
             from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
             pix_ok = verify_pixelfed_token()
             if pix_ok:
@@ -232,7 +254,10 @@ def run_full_system_diagnostic() -> dict:
     # 15. Freeimage.host Cross-Post Status
     freeimage_status = "⚪ Disabled"
     try:
-        if getattr(config, "FREEIMAGE_ENABLED", False):
+        cooling, c_reason, c_rem = is_cooling_down("freeimage")
+        if cooling:
+            freeimage_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif getattr(config, "FREEIMAGE_ENABLED", False):
             from freeimage_uploader import verify_freeimage_token
             fi_ok = verify_freeimage_token()
             if fi_ok:
@@ -245,7 +270,10 @@ def run_full_system_diagnostic() -> dict:
     # 16. ImgBB Cross-Post Status
     imgbb_status = "⚪ Disabled"
     try:
-        if getattr(config, "IMGBB_ENABLED", False):
+        cooling, c_reason, c_rem = is_cooling_down("imgbb")
+        if cooling:
+            imgbb_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif getattr(config, "IMGBB_ENABLED", False):
             from imgbb_uploader import verify_imgbb_token
             ibb_ok = verify_imgbb_token()
             if ibb_ok:
@@ -258,7 +286,10 @@ def run_full_system_diagnostic() -> dict:
     # 17. Imghippo Cross-Post Status
     imghippo_status = "⚪ Disabled"
     try:
-        if getattr(config, "IMGHIPPO_ENABLED", False):
+        cooling, c_reason, c_rem = is_cooling_down("imghippo")
+        if cooling:
+            imghippo_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+        elif getattr(config, "IMGHIPPO_ENABLED", False):
             from imghippo_uploader import verify_imghippo_token
             hippo_ok = verify_imghippo_token()
             if hippo_ok:
@@ -267,6 +298,8 @@ def run_full_system_diagnostic() -> dict:
                 imghippo_status = "🟡 Reachable"
     except Exception as _hip_e:
         imghippo_status = f"🟡 Check failed ({_hip_e})"
+
+    all_cooldowns = get_all_cooldowns()
 
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
@@ -308,6 +341,7 @@ def run_full_system_diagnostic() -> dict:
         "imgbb_status": imgbb_status,
         "imghippo_status": imghippo_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
+        "all_cooldowns": all_cooldowns,
     }
 
 
@@ -323,6 +357,14 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         warnings_block = "\n⚠️ System Notes:\n" + "\n".join(f"  • {w}" for w in diag["warnings"]) + "\n"
 
     est_revenue = f"₹{stats['est_rev_min']} - ₹{stats['est_rev_max']}"
+
+    # Circuit breaker summary
+    all_cooldowns = diag.get("all_cooldowns", {})
+    if all_cooldowns:
+        cb_lines = [f"  • {p.capitalize()}: 🟡 Cooldown Active ({info['remaining_hours']}h left — {info['reason']})" for p, info in all_cooldowns.items()]
+        cb_section = "🛡️ Platform Circuit Breakers (Cooldown Active):\n" + "\n".join(cb_lines) + "\n\n"
+    else:
+        cb_section = "🛡️ Platform Circuit Breakers:\n  • Status: 🟢 All Clear (All 10 platforms active & protected)\n\n"
 
     report = (
         f"{header_title}\n"
@@ -341,13 +383,13 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • All-Time Total Pins      : {stats['total_pins']} pins\n"
         f"  • Queue Remaining          : {stats['queue']['total']} pins (~{diag['days_buffer']} days buffer)\n"
         f"  • Failed Upload Retries    : {stats['failed_retries']}\n\n"
-
         f"💰 Affiliate & Earnings Health:\n"
         f"  • Amazon Store Tag : {diag['amazon_status']}\n"
         f"  • Product Engine   : {diag['pa_api_status']}\n"
         f"  • Click Tracker    : {diag['tracker_status']}\n"
         f"  • Clicks (3 Days)  : {stats['clicks_3d']} clicks\n"
         f"  • Est. 3-Day Rev   : {est_revenue}\n\n"
+        f"{cb_section}"
         f"🌐 Integrations & Webhooks:\n"
         f"  • Make.com Webhook   : {diag['webhook_status']}\n"
         f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"

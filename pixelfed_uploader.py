@@ -167,6 +167,12 @@ def _upload_media(image_path: str = None, image_url: str = None, description: st
             logger.info(f"[Pixelfed] Media uploaded successfully: ID={media_id}")
             return str(media_id)
         else:
+            if res.status_code == 429:
+                from circuit_breaker import trip_breaker
+                trip_breaker("pixelfed", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
+            elif res.status_code == 403:
+                from circuit_breaker import trip_breaker
+                trip_breaker("pixelfed", f"HTTP 403 Forbidden: {res.text[:80]}", cooldown_hours=12.0)
             logger.error(f"[Pixelfed] Media upload failed: HTTP {res.status_code} — {res.text[:200]}")
             return None
     except Exception as e:
@@ -218,6 +224,7 @@ def post_to_pixelfed(image_url: str, title: str, description: str = "",
             post_text_parts.append(f"🛍️ Get This Poster / Merch:\n{link}")
         else:
             post_text_parts.append(f"🔗 View & Details:\n{link}")
+
     hashtags = _clean_tags(title)
     if hashtags:
         post_text_parts.append(hashtags)
@@ -241,6 +248,12 @@ def post_to_pixelfed(image_url: str, title: str, description: str = "",
                 logger.info(f"[Pixelfed] Successfully posted: {public_url}")
                 return public_url
             else:
+                if res.status_code == 429:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("pixelfed", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
+                elif res.status_code == 403:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("pixelfed", f"HTTP 403 Forbidden: {res.text[:80]}", cooldown_hours=12.0)
                 logger.warning(f"[Pixelfed] Attempt {attempt} failed ({res.status_code}): {res.text[:150]}")
         except Exception as e:
             logger.warning(f"[Pixelfed] Attempt {attempt} error: {e}")

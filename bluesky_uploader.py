@@ -315,6 +315,12 @@ def post_to_bluesky(image_url: str = "", title: str = "", caption: str = "",
                     _SESSION_CACHE["expires_at"] = 0
                     logger.warning("[Bluesky] Session expired, refreshing...")
                 else:
+                    if res.status_code == 429:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("bluesky", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
+                    elif res.status_code == 403:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("bluesky", f"HTTP 403 Forbidden: {res.text[:80]}", cooldown_hours=12.0)
                     logger.warning(f"[Bluesky] createRecord attempt {attempt} failed: HTTP {res.status_code} {res.text[:120]}")
             except Exception as e:
                 logger.warning(f"[Bluesky] Attempt {attempt} error: {e}")

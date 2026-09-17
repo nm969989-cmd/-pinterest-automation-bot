@@ -475,17 +475,21 @@ class PinScheduler:
             f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
-        _pending_catchup_count = 0  # How many missed slots to immediately post
+        _pending_catchup_count = 0  # How many missed slots to post with safe anti-burst pacing
+        _last_pin_post_time: float = 0.0  # Epoch timestamp of last post (for human pacing)
+        _next_catchup_delay: float = 15 * 60 + random.randint(-180, 180)  # Safe 12-18 min interval
 
         # ── Full startup schedule recovery ────────────────────────────────────
         # On every restart (Render deploy, spin-down, crash), we check ALL slots
         # that were scheduled for today and count how many posts were actually made.
-        # If the bot missed N slots while offline, we queue N immediate catch-up posts.
+        # If the bot missed N slots while offline, we queue N catch-up posts with
+        # safe 12–18 min spacing to protect accounts from burst detection.
         #
         # Guards:
         #   - Only fires for slots > 6 min in the past (outside normal fire window)
         #   - Counts today's actual DB posts vs expected posts by now
         #   - Never exceeds MAX_POSTS_PER_DAY cap
+        #   - Spaced by 12–18 minutes (anti-burst catch-up pacing)
         now_startup = datetime.datetime.utcnow()
         today_ist_startup = _today_ist()
         jittered_startup = _get_jittered_times_utc()
@@ -517,16 +521,16 @@ class PinScheduler:
             logger.warning(
                 f"[Scheduler] RECOVERY: {slots_passed_today} slot(s) passed today, "
                 f"but only {today_posted_startup} post(s) made. "
-                f"Will immediately catch up with {missed_posts} post(s)."
+                f"Queuing {missed_posts} catch-up post(s) with anti-burst pacing (12-18 min intervals)."
             )
             _pending_catchup_count = missed_posts
             try:
                 from telegram_bot import notify_admin
                 notify_admin(
-                    f"⚡ Schedule Recovery Triggered\n"
+                    f"⚡ *Schedule Recovery Triggered*\n"
                     f"Bot restarted and detected {missed_posts} missed post(s) today.\n"
                     f"Posted so far: {today_posted_startup}/{expected_posts_by_now} expected.\n"
-                    f"Catching up now — {missed_posts} pin(s) will post immediately."
+                    f"🛡️ *Anti-Burst Pacing Active*: {missed_posts} pin(s) will post safely spaced 12–18 mins apart to protect accounts."
                 )
             except Exception:
                 pass
@@ -583,16 +587,16 @@ class PinScheduler:
                     logger.warning(
                         f"[Scheduler] LIVE RECOVERY: Schedule drifted — "
                         f"{today_posted_hb}/{expected_hb} expected posts made. "
-                        f"Triggering {missed_hb} catch-up post(s)."
+                        f"Queuing {missed_hb} catch-up post(s) with anti-burst pacing (12-18 min intervals)."
                     )
                     _pending_catchup_count = missed_hb
                     try:
                         from telegram_bot import notify_admin
                         notify_admin(
-                            f"⚡ Live Schedule Recovery\n"
+                            f"⚡ *Live Schedule Recovery*\n"
                             f"Detected {missed_hb} missed post(s) mid-day.\n"
                             f"Posted: {today_posted_hb} | Expected by now: {expected_hb}\n"
-                            f"Catching up immediately."
+                            f"🛡️ *Anti-Burst Pacing Active*: Catch-up pins spaced 12–18 mins apart."
                         )
                     except Exception:
                         pass
@@ -613,12 +617,36 @@ class PinScheduler:
                     current_slot = (h, m)
                     break
 
-            # Trigger posting for: (a) normal slot OR (b) missed-slot catch-up
-            if (current_slot and current_slot != _last_fired_slot) or _pending_catchup_count > 0:
-                if _pending_catchup_count > 0:
-                    _pending_catchup_count -= 1  # consume one catch-up credit
-                if current_slot:
-                    _last_fired_slot = current_slot
+            is_regular_slot = bool(current_slot and current_slot != _last_fired_slot)
+            should_post = False
+            now_ts = time.time()
+            elapsed_since_last_post = (now_ts - _last_pin_post_time) if _last_pin_post_time > 0 else 999999.0
+
+            if is_regular_slot:
+                should_post = True
+                _last_fired_slot = current_slot
+            elif _pending_catchup_count > 0:
+                # Catch-up post: enforce 12–18 min interval since last post to prevent rapid-fire burst bans
+                if elapsed_since_last_post >= _next_catchup_delay:
+                    should_post = True
+                    _pending_catchup_count -= 1
+                    # Choose a new randomized delay for subsequent catch-up posts (12-18 min)
+                    _next_catchup_delay = 15 * 60 + random.randint(-180, 180)
+                    logger.info(
+                        f"[Scheduler] Anti-burst catch-up pacing cleared ({int(elapsed_since_last_post/60)}m elapsed). "
+                        f"Posting 1 recovery pin ({_pending_catchup_count} remaining in recovery queue)."
+                    )
+                else:
+                    rem_mins = max(1, int((_next_catchup_delay - elapsed_since_last_post) / 60))
+                    # Log periodically (approx every 3 min) to keep logs informative but clean
+                    if int(elapsed_since_last_post) % 180 < 35:
+                        logger.info(
+                            f"[Scheduler] Anti-burst pacing active: {rem_mins}m remaining before next catch-up pin "
+                            f"({_pending_catchup_count} remaining in recovery queue)."
+                        )
+
+            # Trigger posting for: (a) normal slot OR (b) paced catch-up slot
+            if should_post:
                 display_slot = current_slot or _last_fired_slot or (0, 0)
                 today_posted = count_posts_today(today_ist)
 
@@ -810,6 +838,7 @@ class PinScheduler:
                                         title=pin["title"],
                                         caption=pin["anime_name"],
                                     )
+                                    _last_pin_post_time = time.time()
                                 else:
                                     # Auto-retry: drop after 3 fails
                                     MAX_RETRIES = 3
@@ -835,6 +864,7 @@ class PinScheduler:
                                             f"[Scheduler] Upload failed (attempt {new_count}/{MAX_RETRIES}). "
                                             f"Pin stays in queue: '{pin['title']}'"
                                         )
+                                    _last_pin_post_time = time.time()
 
                     elif self._mem_queue:
                         # Fallback: in-memory queue (approval mode)
@@ -842,6 +872,7 @@ class PinScheduler:
                             task_func, kwargs = self._mem_queue.popleft()
                         try:
                             task_func(**kwargs)
+                            _last_pin_post_time = time.time()
                         except Exception as e:
                             logger.error(f"[Scheduler] In-memory task error: {e}")
                     else:

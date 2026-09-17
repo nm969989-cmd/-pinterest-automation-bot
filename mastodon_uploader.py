@@ -154,6 +154,12 @@ def _upload_media(image_path: str = None, image_url: str = None, description: st
         logger.info(f"[Mastodon] Media uploaded successfully: ID={media_id}")
         return str(media_id)
     else:
+        if res.status_code == 429:
+            from circuit_breaker import trip_breaker
+            trip_breaker("mastodon", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
+        elif res.status_code == 403:
+            from circuit_breaker import trip_breaker
+            trip_breaker("mastodon", f"HTTP 403 Forbidden: {res.text[:80]}", cooldown_hours=12.0)
         logger.error(f"[Mastodon] Media upload failed ({res.status_code}): {res.text}")
         return None
 
@@ -223,9 +229,15 @@ def post_to_mastodon(image_url: str, title: str, description: str = "",
                 logger.info(f"[Mastodon] Successfully posted: {post_url}")
                 return post_url
             elif res.status_code == 429:
+                from circuit_breaker import trip_breaker
+                trip_breaker("mastodon", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
                 wait_sec = int(res.headers.get("Retry-After", 10))
-                logger.warning(f"[Mastodon] Rate limited. Waiting {wait_sec}s...")
+                logger.warning(f"[Mastodon] Rate limited. Breaker tripped. Waiting {wait_sec}s...")
                 time.sleep(wait_sec)
+            elif res.status_code == 403:
+                from circuit_breaker import trip_breaker
+                trip_breaker("mastodon", f"HTTP 403 Forbidden: {res.text[:80]}", cooldown_hours=12.0)
+                logger.warning(f"[Mastodon] Attempt {attempt} failed (403): {res.text}")
             else:
                 logger.warning(f"[Mastodon] Attempt {attempt} failed ({res.status_code}): {res.text}")
         except Exception as e:

@@ -257,6 +257,12 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
                     continue
 
             if r.status_code != 200:
+                if r.status_code == 429:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("deviantart", f"HTTP 429 Rate Limit: {r.text[:80]}", cooldown_hours=6.0)
+                elif r.status_code == 403:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("deviantart", f"HTTP 403 Forbidden: {r.text[:80]}", cooldown_hours=12.0)
                 logger.warning(f"[DeviantArt] Sta.sh submit failed (attempt {attempt}): HTTP {r.status_code} - {r.text}")
                 continue
 
@@ -291,6 +297,12 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
                 success = True
                 break
             else:
+                if pr.status_code == 429:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("deviantart", f"HTTP 429 Rate Limit: {pr.text[:80]}", cooldown_hours=6.0)
+                elif pr.status_code == 403:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("deviantart", f"HTTP 403 Forbidden: {pr.text[:80]}", cooldown_hours=12.0)
                 logger.warning(f"[DeviantArt] Publish failed (attempt {attempt}): HTTP {pr.status_code} - {pr.text}")
 
     finally:

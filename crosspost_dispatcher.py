@@ -24,8 +24,29 @@ import random
 import requests
 from logger import get_logger
 from hashtag_optimizer import format_platform_caption, get_platform_tags
+from circuit_breaker import is_cooling_down, trip_breaker
 
 logger = get_logger(__name__)
+
+
+def _check_breaker(platform: str, results: dict) -> bool:
+    """Checks if platform is cooling down. If so, records skip status and returns False."""
+    cooling, reason, rem = is_cooling_down(platform)
+    if cooling:
+        logger.info(f"[Crosspost] Skipping {platform.capitalize()} -- Circuit Breaker active ({rem}h left: {reason})")
+        results[f"{platform}_ok"] = None
+        results[f"{platform}_url"] = f"Cooling down ({rem}h left)"
+        return False
+    return True
+
+
+def _handle_platform_error(platform: str, err: Exception):
+    """Detects HTTP 429 rate limits, 403 blocks, or suspensions and trips circuit breaker."""
+    err_str = str(err).lower()
+    if any(k in err_str for k in ["429", "too many requests", "rate limit", "ratelimit"]):
+        trip_breaker(platform, f"HTTP 429 Rate Limit: {str(err)[:80]}", cooldown_hours=6.0)
+    elif any(k in err_str for k in ["403", "forbidden", "suspended", "account terminated", "blocked"]):
+        trip_breaker(platform, f"HTTP 403 / Access Blocked: {str(err)[:80]}", cooldown_hours=12.0)
 
 
 def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
@@ -101,7 +122,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         logger.info("[Crosspost] Stealth / Art Appreciation Mode ACTIVE for this cycle (omitting commercial CTA on social feeds)")
 
     # ── 1. Are.na ────────────────────────────────────────────────────────────
-    if getattr(config, "ARENA_ENABLED", False):
+    if getattr(config, "ARENA_ENABLED", False) and _check_breaker("arena", results):
         try:
             from arena_uploader import post_to_arena
             from database import mark_arena_posted, is_arena_posted
@@ -123,9 +144,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["arena_ok"] = False
             logger.warning(f"[Crosspost] Are.na error: {e}")
+            _handle_platform_error("arena", e)
 
     # ── 2. Tumblr ────────────────────────────────────────────────────────────
-    if getattr(config, "TUMBLR_ENABLED", False):
+    if getattr(config, "TUMBLR_ENABLED", False) and _check_breaker("tumblr", results):
         try:
             from tumblr_uploader import post_to_tumblr
             from database import mark_tumblr_posted, is_tumblr_posted
@@ -151,9 +173,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["tumblr_ok"] = False
             logger.warning(f"[Crosspost] Tumblr error: {e}")
+            _handle_platform_error("tumblr", e)
 
     # ── 3. Bluesky ───────────────────────────────────────────────────────────
-    if getattr(config, "BLUESKY_ENABLED", False):
+    if getattr(config, "BLUESKY_ENABLED", False) and _check_breaker("bluesky", results):
         try:
             from bluesky_uploader import post_to_bluesky
             from database import mark_bluesky_posted, is_bluesky_posted
@@ -181,9 +204,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["bluesky_ok"] = False
             logger.warning(f"[Crosspost] Bluesky error: {e}")
+            _handle_platform_error("bluesky", e)
 
     # ── 4. Raindrop.io ───────────────────────────────────────────────────────
-    if getattr(config, "RAINDROP_ENABLED", False):
+    if getattr(config, "RAINDROP_ENABLED", False) and _check_breaker("raindrop", results):
         try:
             from raindrop_uploader import post_to_raindrop
             from database import mark_raindrop_posted, is_raindrop_posted
@@ -206,9 +230,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["raindrop_ok"] = False
             logger.warning(f"[Crosspost] Raindrop error: {e}")
+            _handle_platform_error("raindrop", e)
 
     # ── 5. Mastodon ──────────────────────────────────────────────────────────
-    if getattr(config, "MASTODON_ENABLED", False):
+    if getattr(config, "MASTODON_ENABLED", False) and _check_breaker("mastodon", results):
         try:
             from mastodon_uploader import post_to_mastodon
             from database import mark_mastodon_posted, is_mastodon_posted
@@ -234,9 +259,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["mastodon_ok"] = False
             logger.warning(f"[Crosspost] Mastodon error: {e}")
+            _handle_platform_error("mastodon", e)
 
     # ── 6. DeviantArt ────────────────────────────────────────────────────────
-    if getattr(config, "DEVIANTART_ENABLED", False):
+    if getattr(config, "DEVIANTART_ENABLED", False) and _check_breaker("deviantart", results):
         try:
             from deviantart_uploader import post_to_deviantart
             from database import mark_deviantart_posted, is_deviantart_posted
@@ -261,9 +287,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["deviantart_ok"] = False
             logger.warning(f"[Crosspost] DeviantArt error: {e}")
+            _handle_platform_error("deviantart", e)
 
     # ── 7. Pixelfed ──────────────────────────────────────────────────────────
-    if getattr(config, "PIXELFED_ENABLED", False):
+    if getattr(config, "PIXELFED_ENABLED", False) and _check_breaker("pixelfed", results):
         try:
             from pixelfed_uploader import post_to_pixelfed
             from database import mark_pixelfed_posted, is_pixelfed_posted
@@ -290,9 +317,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["pixelfed_ok"] = False
             logger.warning(f"[Crosspost] Pixelfed error: {e}")
+            _handle_platform_error("pixelfed", e)
 
     # ── 8. Freeimage.host ────────────────────────────────────────────────────
-    if getattr(config, "FREEIMAGE_ENABLED", False):
+    if getattr(config, "FREEIMAGE_ENABLED", False) and _check_breaker("freeimage", results):
         try:
             from freeimage_uploader import post_to_freeimage
             from database import mark_freeimage_posted, is_freeimage_posted
@@ -315,9 +343,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["freeimage_ok"] = False
             logger.warning(f"[Crosspost] Freeimage error: {e}")
+            _handle_platform_error("freeimage", e)
 
     # ── 9. ImgBB ─────────────────────────────────────────────────────────────
-    if getattr(config, "IMGBB_ENABLED", False):
+    if getattr(config, "IMGBB_ENABLED", False) and _check_breaker("imgbb", results):
         try:
             from imgbb_uploader import post_to_imgbb
             from database import mark_imgbb_posted, is_imgbb_posted
@@ -340,9 +369,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["imgbb_ok"] = False
             logger.warning(f"[Crosspost] ImgBB error: {e}")
+            _handle_platform_error("imgbb", e)
 
     # ── 10. Imghippo ─────────────────────────────────────────────────────────
-    if getattr(config, "IMGHIPPO_ENABLED", False):
+    if getattr(config, "IMGHIPPO_ENABLED", False) and _check_breaker("imghippo", results):
         try:
             from imghippo_uploader import post_to_imghippo
             from database import mark_imghippo_posted, is_imghippo_posted
@@ -365,6 +395,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["imghippo_ok"] = False
             logger.warning(f"[Crosspost] Imghippo error: {e}")
+            _handle_platform_error("imghippo", e)
 
     if temp_downloaded_file and os.path.exists(temp_downloaded_file):
         try:
