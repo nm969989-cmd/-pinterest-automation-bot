@@ -32,6 +32,7 @@ _cached_access_token = ""
 def _get_access_token(force_refresh: bool = False) -> str:
     """
     Returns valid access token, auto-refreshing via refresh_token if needed.
+    Checks database bot_metadata first, falls back to config / environment.
     """
     global _cached_access_token
     from config import (
@@ -44,9 +45,21 @@ def _get_access_token(force_refresh: bool = False) -> str:
     if not force_refresh and _cached_access_token:
         return _cached_access_token
 
-    token = "" if force_refresh else DEVIANTART_ACCESS_TOKEN
-    if not token and DEVIANTART_REFRESH_TOKEN:
-        token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, DEVIANTART_REFRESH_TOKEN)
+    # 1. Try reading latest persisted tokens from SQLite bot_metadata
+    db_access = ""
+    db_refresh = ""
+    try:
+        from database import get_metadata
+        db_access = get_metadata("deviantart_access_token", "").strip()
+        db_refresh = get_metadata("deviantart_refresh_token", "").strip()
+    except Exception as e:
+        logger.debug(f"[DeviantArt] Metadata lookup failed: {e}")
+
+    token = "" if force_refresh else (db_access or DEVIANTART_ACCESS_TOKEN or os.getenv("DEVIANTART_ACCESS_TOKEN", "").strip())
+    refresh_tok = db_refresh or DEVIANTART_REFRESH_TOKEN or os.getenv("DEVIANTART_REFRESH_TOKEN", "").strip()
+
+    if not token and refresh_tok and DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET:
+        token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, refresh_tok)
 
     if token:
         _cached_access_token = token
@@ -77,10 +90,26 @@ def _save_token_to_env(key: str, value: str):
         logger.warning(f"[DeviantArt] Failed to update {key} in .env: {e}")
 
 
-def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") -> str:
     """
-    Refreshes the OAuth2 token, saves rotated tokens to .env, and returns new access_token.
+    Refreshes the OAuth2 token, saves rotated tokens to bot_metadata and .env, and returns new access_token.
     """
+    global _cached_access_token
+
+    if not refresh_token:
+        try:
+            from database import get_metadata
+            refresh_token = get_metadata("deviantart_refresh_token", "").strip()
+        except Exception:
+            pass
+    if not refresh_token:
+        from config import DEVIANTART_REFRESH_TOKEN
+        refresh_token = DEVIANTART_REFRESH_TOKEN or os.getenv("DEVIANTART_REFRESH_TOKEN", "").strip()
+
+    if not refresh_token:
+        logger.error("[DeviantArt] Cannot refresh token: No refresh_token available.")
+        return ""
+
     url = "https://www.deviantart.com/oauth2/token"
     payload = {
         "grant_type": "refresh_token",
@@ -92,13 +121,29 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> st
         r = requests.post(url, data=payload, timeout=20)
         if r.status_code == 200:
             data = r.json()
-            new_access = data.get("access_token", "")
-            new_refresh = data.get("refresh_token", "")
+            new_access = data.get("access_token", "").strip()
+            new_refresh = data.get("refresh_token", "").strip()
+
             if new_access:
+                _cached_access_token = new_access
+                os.environ["DEVIANTART_ACCESS_TOKEN"] = new_access
                 _save_token_to_env("DEVIANTART_ACCESS_TOKEN", new_access)
+                try:
+                    from database import set_metadata
+                    set_metadata("deviantart_access_token", new_access)
+                except Exception as e:
+                    logger.debug(f"[DeviantArt] Could not save access token to metadata: {e}")
+
             if new_refresh:
+                os.environ["DEVIANTART_REFRESH_TOKEN"] = new_refresh
                 _save_token_to_env("DEVIANTART_REFRESH_TOKEN", new_refresh)
-            logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
+                try:
+                    from database import set_metadata
+                    set_metadata("deviantart_refresh_token", new_refresh)
+                except Exception as e:
+                    logger.debug(f"[DeviantArt] Could not save refresh token to metadata: {e}")
+
+            logger.info("[DeviantArt] Successfully refreshed and persisted OAuth2 tokens.")
             return new_access
         else:
             logger.error(f"[DeviantArt] Token refresh failed: HTTP {r.status_code} - {r.text}")
@@ -204,9 +249,9 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
                 r = requests.post(stash_url, headers=headers, data=stash_data, files=files, timeout=40)
 
             # Token expired check (401)
-            if r.status_code == 401 and DEVIANTART_REFRESH_TOKEN:
-                logger.info("[DeviantArt] 401 Unauthorized — attempting token refresh...")
-                access_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, DEVIANTART_REFRESH_TOKEN)
+            if r.status_code == 401:
+                logger.info("[DeviantArt] 401 Unauthorized on Sta.sh submit — attempting token refresh...")
+                access_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET)
                 if access_token:
                     headers["Authorization"] = f"Bearer {access_token}"
                     continue
@@ -232,6 +277,13 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
             }
 
             pr = requests.post(publish_url, headers=headers, data=publish_data, timeout=30)
+            if pr.status_code == 401:
+                logger.info("[DeviantArt] 401 Unauthorized on publish — refreshing token and retrying...")
+                access_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET)
+                if access_token:
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    pr = requests.post(publish_url, headers=headers, data=publish_data, timeout=30)
+
             if pr.status_code == 200:
                 p_json = pr.json()
                 dev_url = p_json.get("url", f"https://deviantart.com (id: {p_json.get('deviationid')})")
