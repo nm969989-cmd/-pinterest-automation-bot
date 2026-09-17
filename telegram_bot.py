@@ -262,7 +262,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- CROSS-POSTING ---\n"
-        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, ImgBB)\n"
+        "/crosspost      - Multi-platform status (All 10 connected platforms)\n"
         "/arena          - Are.na channel stats & block count\n"
         "/arena_test     - Post test block to Are.na channel\n"
         "/tumblr         - Tumblr blog stats & follower count\n"
@@ -273,12 +273,16 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/raindrop_test  - Post test bookmark to Raindrop collection\n"
         "/mastodon       - Mastodon account stats & profile link\n"
         "/mastodon_test  - Post test anime to Mastodon feed\n"
+        "/deviantart     - DeviantArt gallery stats & link\n"
+        "/deviantart_test- Post test artwork to DeviantArt\n"
         "/pixelfed       - Pixelfed account stats & profile link\n"
         "/pixelfed_test  - Post test photo to Pixelfed feed\n"
         "/freeimage      - Freeimage.host API stats & link\n"
         "/freeimage_test - Post test photo to Freeimage.host\n"
         "/imgbb          - ImgBB API stats & link\n"
-        "/imgbb_test     - Post test photo to ImgBB\n\n"
+        "/imgbb_test     - Post test photo to ImgBB\n"
+        "/imghippo       - Imghippo API stats & link\n"
+        "/imghippo_test  - Post test photo to Imghippo\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -503,7 +507,9 @@ async def _send_daily_report(chat_id):
         from database import (
             get_today_uploads, get_all_time_stats,
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
-            get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats, get_freeimage_stats, get_imgbb_stats, get_click_stats
+            get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats,
+            get_freeimage_stats, get_imgbb_stats, get_imghippo_stats,
+            get_deviantart_stats, get_click_stats
         )
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
@@ -512,7 +518,8 @@ async def _send_daily_report(chat_id):
             RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
             MASTODON_ENABLED, MASTODON_INSTANCE_URL,
             PIXELFED_ENABLED, PIXELFED_INSTANCE_URL,
-            FREEIMAGE_ENABLED, IMGBB_ENABLED
+            FREEIMAGE_ENABLED, IMGBB_ENABLED,
+            DEVIANTART_ENABLED
         )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -524,15 +531,16 @@ async def _send_daily_report(chat_id):
         count  = len(pins)
 
         # Cross-platform stats
-        arena_st     = get_arena_stats(today_ist_str)
-        tumblr_st    = get_tumblr_stats(today_ist_str)
-        bluesky_st   = get_bluesky_stats(today_ist_str)
-        raindrop_st  = get_raindrop_stats(today_ist_str)
-        mastodon_st  = get_mastodon_stats(today_ist_str)
-        pixelfed_st  = get_pixelfed_stats(today_ist_str)
-        freeimage_st = get_freeimage_stats(today_ist_str)
-        imgbb_st     = get_imgbb_stats(today_ist_str)
-        imghippo_st  = get_imghippo_stats(today_ist_str)
+        arena_st       = get_arena_stats(today_ist_str)
+        tumblr_st      = get_tumblr_stats(today_ist_str)
+        bluesky_st     = get_bluesky_stats(today_ist_str)
+        raindrop_st    = get_raindrop_stats(today_ist_str)
+        mastodon_st    = get_mastodon_stats(today_ist_str)
+        deviantart_st  = get_deviantart_stats(today_ist_str)
+        pixelfed_st    = get_pixelfed_stats(today_ist_str)
+        freeimage_st   = get_freeimage_stats(today_ist_str)
+        imgbb_st       = get_imgbb_stats(today_ist_str)
+        imghippo_st    = get_imghippo_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -554,6 +562,7 @@ async def _send_daily_report(chat_id):
         bluesky_badge   = "🟢 ON" if BLUESKY_ENABLED else "⚪ OFF"
         raindrop_badge  = "🟢 ON" if RAINDROP_ENABLED else "⚪ OFF"
         masto_badge     = "🟢 ON" if MASTODON_ENABLED else "⚪ OFF"
+        da_badge        = "🟢 ON" if DEVIANTART_ENABLED else "⚪ OFF"
         pixelfed_badge  = "🟢 ON" if PIXELFED_ENABLED else "⚪ OFF"
         freeimage_badge = "🟢 ON" if FREEIMAGE_ENABLED else "⚪ OFF"
         imgbb_badge     = "🟢 ON" if IMGBB_ENABLED else "⚪ OFF"
@@ -568,6 +577,7 @@ async def _send_daily_report(chat_id):
             f"  🦋 Bluesky   : {bluesky_st['today']} today  |  {bluesky_st['total']} all-time  ({bluesky_badge})\n"
             f"  💧 Raindrop  : {raindrop_st['today']} today  |  {raindrop_st['total']} all-time  ({raindrop_badge})\n"
             f"  🐘 Mastodon  : {mastodon_st['today']} today  |  {mastodon_st['total']} all-time  ({masto_badge})\n"
+            f"  🎭 DeviantArt: {deviantart_st['today']} today  |  {deviantart_st['total']} all-time  ({da_badge})\n"
             f"  📷 Pixelfed  : {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time  ({pixelfed_badge})\n"
             f"  🖼️ Freeimage : {freeimage_st['today']} today  |  {freeimage_st['total']} all-time  ({freeimage_badge})\n"
             f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n"
@@ -608,6 +618,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += f"  • Raindrop: https://raindrop.io/muthelyrics/anime-posters-{RAINDROP_COLLECTION_ID}\n"
         if MASTODON_ENABLED:
             crosspost_section += f"  • Mastodon: {MASTODON_INSTANCE_URL}/@muthelyrics\n"
+        if DEVIANTART_ENABLED:
+            crosspost_section += f"  • DeviantArt: https://www.deviantart.com/muthelyrics\n"
         if PIXELFED_ENABLED:
             crosspost_section += f"  • Pixelfed: {PIXELFED_INSTANCE_URL}\n"
         if FREEIMAGE_ENABLED:
@@ -2424,11 +2436,15 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
             MASTODON_ENABLED, MASTODON_INSTANCE_URL,
             PIXELFED_ENABLED, PIXELFED_INSTANCE_URL,
+            FREEIMAGE_ENABLED, IMGBB_ENABLED,
+            DEVIANTART_ENABLED,
             DRY_RUN
         )
         from database import (
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
             get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats,
+            get_freeimage_stats, get_imgbb_stats, get_imghippo_stats,
+            get_deviantart_stats,
             get_today_uploads, get_all_time_stats
         )
         from arena_uploader import verify_arena_token, get_arena_channel_info
@@ -2521,6 +2537,19 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 mastodon_status = "🔴 AUTH ERROR (Check token)"
         mastodon_st = get_mastodon_stats(today_str)
 
+        # DeviantArt status
+        deviantart_status = "DISABLED (DEVIANTART_ENABLED=false)"
+        if DEVIANTART_ENABLED:
+            from deviantart_uploader import verify_deviantart_token, get_deviantart_user_info
+            da_token_ok = verify_deviantart_token()
+            if da_token_ok:
+                da_info = get_deviantart_user_info()
+                da_user = da_info.get("username", "muthelyrics")
+                deviantart_status = f"🟢 ACTIVE (@{da_user})"
+            else:
+                deviantart_status = "🔴 AUTH ERROR (Check token)"
+        deviantart_st = get_deviantart_stats(today_str)
+
         # Pixelfed status
         pixelfed_status = "DISABLED (PIXELFED_ENABLED=false)"
         pixelfed_posts_str = ""
@@ -2593,6 +2622,10 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {mastodon_status}{mastodon_posts_str}\n"
             f"  • Posts: {mastodon_st['today']} today  |  {mastodon_st['total']} all-time\n"
             f"  • Link: {mastodon_link}\n\n"
+            f"🎭 DeviantArt:\n"
+            f"  • Status: {deviantart_status}\n"
+            f"  • Posts: {deviantart_st['today']} today  |  {deviantart_st['total']} all-time\n"
+            f"  • Link: https://www.deviantart.com/muthelyrics\n\n"
             f"📷 Pixelfed:\n"
             f"  • Status: {pixelfed_status}{pixelfed_posts_str}\n"
             f"  • Posts: {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time\n"
@@ -2616,6 +2649,7 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  /bluesky_test — Test Bluesky image post\n"
             f"  /raindrop_test — Test Raindrop bookmark upload\n"
             f"  /mastodon_test — Test Mastodon status & image post\n"
+            f"  /deviantart_test — Test DeviantArt submission\n"
             f"  /pixelfed_test — Test Pixelfed photo & caption post\n"
             f"  /freeimage_test — Test Freeimage.host upload\n"
             f"  /imgbb_test — Test ImgBB upload\n"
@@ -2813,6 +2847,123 @@ async def cmd_mastodon_test(update: "Update", context: "ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"[TG BOT] cmd_mastodon_test error: {e}", exc_info=True)
         await update.message.reply_text(f"Mastodon test error: {e}")
+
+
+async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show DeviantArt profile status, username, gallery link, and post stats."""
+    if not _is_admin(update): return
+    try:
+        from deviantart_uploader import verify_deviantart_token, get_deviantart_user_info
+        from config import DEVIANTART_ENABLED
+        from database import get_deviantart_stats
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+        st = get_deviantart_stats(today_str)
+
+        enabled_str = "ENABLED" if DEVIANTART_ENABLED else "DISABLED (set DEVIANTART_ENABLED=true)"
+        valid = verify_deviantart_token()
+        info = get_deviantart_user_info() if valid else {}
+
+        if valid and info:
+            user = info.get("username", "muthelyrics")
+            url = f"https://www.deviantart.com/{user}"
+            msg = (
+                f"🎭 DeviantArt Status: {enabled_str}\n"
+                f"{'═' * 34}\n"
+                f"Username  : @{user}\n"
+                f"Token     : 🟢 Valid (OAuth2)\n"
+                f"Today     : {st['today']} deviations posted\n"
+                f"All-time  : {st['total']} deviations\n"
+                f"Gallery   : {url}"
+            )
+        elif valid:
+            msg = (
+                f"🎭 DeviantArt Status: {enabled_str}\n"
+                f"{'═' * 34}\n"
+                f"Token     : 🟢 Valid (OAuth2)\n"
+                f"Today     : {st['today']} deviations posted\n"
+                f"All-time  : {st['total']} deviations\n"
+                f"Gallery   : https://www.deviantart.com/muthelyrics"
+            )
+        else:
+            msg = (
+                f"🎭 DeviantArt Status: {enabled_str}\n"
+                f"{'═' * 34}\n"
+                f"Token     : 🔴 Invalid or Expired\n"
+                f"Today     : {st['today']} deviations posted\n"
+                f"All-time  : {st['total']} deviations\n"
+                f"Gallery   : https://www.deviantart.com/muthelyrics\n\n"
+                f"👉 Run 'python get_deviantart_token.py' to generate a fresh token."
+            )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_deviantart error: {e}", exc_info=True)
+        await update.message.reply_text(f"DeviantArt error: {e}")
+
+
+async def cmd_deviantart_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Post a test artwork to DeviantArt gallery with real anime metadata."""
+    if not _is_admin(update): return
+    await update.message.reply_text("⏳ Posting test artwork to DeviantArt...")
+    try:
+        from deviantart_uploader import post_to_deviantart
+        local_img = None
+        for folder in ["processed", "downloads"]:
+            if os.path.exists(folder):
+                for f in sorted(os.listdir(folder), reverse=True):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        local_img = os.path.join(folder, f)
+                        break
+            if local_img:
+                break
+
+        anime_name = "Attack on Titan"
+        title = "Attack on Titan Eren Yeager Aesthetic Art"
+        if local_img:
+            fn = os.path.basename(local_img).lower()
+            if "naruto" in fn:
+                anime_name = "Naruto Shippuden"
+                title = "Naruto Uzumaki Sage Mode Minimalist Art"
+            elif "aot" in fn or "titan" in fn:
+                anime_name = "Attack on Titan"
+                title = "Attack on Titan Eren Yeager Aesthetic Art"
+            elif "demon" in fn or "slayer" in fn:
+                anime_name = "Demon Slayer"
+                title = "Demon Slayer Tanjiro Kamado Canvas Art"
+            elif "jujutsu" in fn or "jjk" in fn:
+                anime_name = "Jujutsu Kaisen"
+                title = "Gojo Satoru Domain Expansion Anime Art"
+
+        from amazon_search import generate_amazon_link
+        real_affiliate_link = generate_amazon_link(anime_name, title=title)
+        real_desc = f"Aesthetic high-resolution anime wall art.\nSeries: {anime_name}\nMerch: {real_affiliate_link}"
+
+        ok = post_to_deviantart(
+            image_url="",
+            title=title,
+            description=real_desc,
+            tags=["anime", "aesthetic", "wallart", anime_name.lower().replace(" ", "")],
+            link=real_affiliate_link,
+            image_path=local_img,
+        )
+        if ok:
+            await update.message.reply_text(
+                f"✅ DeviantArt test artwork posted successfully!\n\n"
+                f"🎌 Anime: {anime_name}\n"
+                f"📝 Title: {title}\n"
+                f"🛍️ Amazon Merch: {real_affiliate_link}\n"
+                f"🔗 Gallery: https://www.deviantart.com/muthelyrics"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ DeviantArt test post failed.\n"
+                "Check your DEVIANTART_ACCESS_TOKEN and DEVIANTART_REFRESH_TOKEN in .env.\n"
+                "Run 'python get_deviantart_token.py' to generate fresh tokens."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_deviantart_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"DeviantArt test error: {e}")
 
 
 async def cmd_pixelfed(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -3366,6 +3517,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("mastodon",      cmd_mastodon),
             ("mastodontest",  cmd_mastodon_test),
             ("mastodon_test", cmd_mastodon_test),
+            ("deviantart",     cmd_deviantart),
+            ("deviantart_test",cmd_deviantart_test),
+            ("deviantarttest", cmd_deviantart_test),
             ("pixelfed",      cmd_pixelfed),
             ("pixelfed_test", cmd_pixelfed_test),
             ("pixelfedtest",  cmd_pixelfed_test),
@@ -3402,7 +3556,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("summary",       "Today's multi-platform report (Auto: 10 PM)"),
-                BotCommand("crosspost",     "Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage)"),
+                BotCommand("crosspost",     "Multi-platform status across all 10 platforms"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("stats",         "Pins count and queue size"),
@@ -3438,6 +3592,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("raindrop_test", "Post test bookmark to Raindrop collection"),
                 BotCommand("mastodon",      "Mastodon profile stats & link"),
                 BotCommand("mastodon_test", "Post test anime to Mastodon feed"),
+                BotCommand("deviantart",    "DeviantArt gallery stats & link"),
+                BotCommand("deviantart_test","Post test artwork to DeviantArt"),
                 BotCommand("pixelfed",      "Pixelfed profile stats & link"),
                 BotCommand("pixelfed_test", "Post test photo to Pixelfed"),
                 BotCommand("freeimage",     "Freeimage.host profile stats & link"),
