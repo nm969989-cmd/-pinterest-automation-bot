@@ -24,6 +24,13 @@ import sys
 import os
 import requests
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # ─── ANSI Colors for terminal output ───────────────────────────────────────────
 _BOLD   = "\033[1m"
 _GREEN  = "\033[92m"
@@ -37,9 +44,12 @@ def _warn(msg): print(f"  {_YELLOW}⚠️  {msg}{_RESET}")
 def _err(msg):  print(f"  {_RED}❌ {msg}{_RESET}")
 def _info(msg): print(f"  {_CYAN}ℹ️  {msg}{_RESET}")
 
-# ─── Credentials (from .env or hardcoded below) ────────────────────────────────
-CONSUMER_KEY    = os.getenv("TUMBLR_CONSUMER_KEY",    "jISRSZLLpKhxd2XWNrKYuZ7I9RLpwxAFqwksbkyOw15ZkQuDo")
-CONSUMER_SECRET = os.getenv("TUMBLR_CONSUMER_SECRET", "C5dR8uw8i4cpogQNVxC0quGkc1TBVjAMsd4pBxQhuOjw1AxyFH")
+from dotenv import load_dotenv
+load_dotenv()
+
+# ─── Credentials (from .env) ──────────────────────────────────────────────────
+CONSUMER_KEY    = os.getenv("TUMBLR_CONSUMER_KEY", "").strip()
+CONSUMER_SECRET = os.getenv("TUMBLR_CONSUMER_SECRET", "").strip()
 CALLBACK_URL    = "https://in.pinterest.com/animeasthetic/"   # must match Tumblr app settings
 
 
