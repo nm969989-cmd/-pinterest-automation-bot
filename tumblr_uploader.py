@@ -137,14 +137,32 @@ def post_to_tumblr(image_url, title="", caption="", link="", tags=None,
                 err = result.get("errors", result)
                 logger.warning("[Tumblr] Attempt " + str(attempt)
                                + " failed: " + str(err))
+                err_str = str(err).lower()
+                if "1009" in err_str or "unauthorized" in err_str or "suspended" in err_str:
+                    logger.error("[Tumblr] OAuth consumer suspended or credentials unauthorized. Aborting retries.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("tumblr", "OAuth consumer suspended / unauthorized (code 1009)", cooldown_hours=24.0)
+                    except Exception:
+                        pass
+                    if tmp_path and os.path.exists(tmp_path):
+                        try:
+                            os.unlink(tmp_path)
+                        except Exception:
+                            pass
+                    return None
         except Exception as e:
             logger.warning("[Tumblr] Exception on attempt " + str(attempt)
                            + ": " + str(e))
 
+    if tmp_path and os.path.exists(tmp_path):
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
     logger.error("[Tumblr] All retries exhausted for: " + title)
     return None
-    if tmp_path and os.path.exists(tmp_path):
-        os.unlink(tmp_path)
 
 
 def get_tumblr_blog_info():
@@ -155,7 +173,8 @@ def get_tumblr_blog_info():
     try:
         client = _get_client()
         # Try blog_info endpoint first
-        r_obj = res.get("response")
+        res = client.blog_info(BN)
+        r_obj = res.get("response") if isinstance(res, dict) else {}
         blog = (r_obj.get("blog", {}) if isinstance(r_obj, dict) else {})
         # Fallback: user/info has blog data for primary blog
         if not blog:

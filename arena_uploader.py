@@ -108,6 +108,11 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                     f"[Are.na] Permission denied (403): {err_msg} -- "
                     "ARENA_ACCESS_TOKEN must have 'Read + Write' access level."
                 )
+                try:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("arena", f"HTTP 403 Write Scope Missing: {err_msg[:60]}", cooldown_hours=6.0)
+                except Exception:
+                    pass
                 return False   # Token lacks write scope, retry won't fix it
             elif res.status_code == 422:
                 # 422 = Unprocessable entity (bad URL, invalid format, etc.)

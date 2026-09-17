@@ -40,13 +40,15 @@ def _check_breaker(platform: str, results: dict) -> bool:
     return True
 
 
-def _handle_platform_error(platform: str, err: Exception):
-    """Detects HTTP 429 rate limits, 403 blocks, or suspensions and trips circuit breaker."""
+def _handle_platform_error(platform: str, err: object):
+    """Detects HTTP 429 rate limits, 403 blocks, 402 out-of-credits, or suspensions and trips circuit breaker."""
     err_str = str(err).lower()
     if any(k in err_str for k in ["429", "too many requests", "rate limit", "ratelimit"]):
         trip_breaker(platform, f"HTTP 429 Rate Limit: {str(err)[:80]}", cooldown_hours=6.0)
-    elif any(k in err_str for k in ["403", "forbidden", "suspended", "account terminated", "blocked"]):
+    elif any(k in err_str for k in ["403", "forbidden", "suspended", "account terminated", "blocked", "103"]):
         trip_breaker(platform, f"HTTP 403 / Access Blocked: {str(err)[:80]}", cooldown_hours=12.0)
+    elif any(k in err_str for k in ["402", "not enough credits", "credit", "quota"]):
+        trip_breaker(platform, f"HTTP 402 Quota Exhausted: {str(err)[:80]}", cooldown_hours=24.0)
 
 
 def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:

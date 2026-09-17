@@ -143,6 +143,14 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") 
                 except Exception as e:
                     logger.debug(f"[DeviantArt] Could not save refresh token to metadata: {e}")
 
+            # Immediately persist updated tokens to JSONBin cloud so they survive Render dyno restarts
+            try:
+                from jsonbin_sync import save_cloud_state
+                save_cloud_state()
+                logger.info("[DeviantArt] Successfully persisted refreshed tokens to JSONBin cloud.")
+            except Exception as jb_err:
+                logger.debug(f"[DeviantArt] JSONBin auto-sync after token refresh failed: {jb_err}")
+
             logger.info("[DeviantArt] Successfully refreshed and persisted OAuth2 tokens.")
             return new_access
         else:

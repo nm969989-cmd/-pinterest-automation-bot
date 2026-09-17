@@ -129,6 +129,15 @@ def post_to_imghippo(image_path: str,
             else:
                 logger.warning(f"[Imghippo] Upload returned HTTP {res.status_code}: {res.text[:200]}")
                 last_error = f"HTTP {res.status_code}"
+                # If out of credits (HTTP 402), abort immediately without wasting 16s on retries and trip circuit breaker
+                if res.status_code == 402 or "not enough credits" in res.text.lower():
+                    logger.error("[Imghippo] Free tier quota exhausted (0 credits remaining). Aborting retries.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("imghippo", "HTTP 402: Free tier quota exhausted (0 credits remaining)", cooldown_hours=24.0)
+                    except Exception:
+                        pass
+                    return None
 
         except requests.exceptions.RequestException as req_err:
             logger.warning(f"[Imghippo] Attempt {attempt}/{_MAX_RETRIES} network error: {req_err}")

@@ -511,6 +511,7 @@ async def _send_daily_report(chat_id):
             get_freeimage_stats, get_imgbb_stats, get_imghippo_stats,
             get_deviantart_stats, get_click_stats
         )
+        import config
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
             TUMBLR_ENABLED, TUMBLR_BLOG_NAME,

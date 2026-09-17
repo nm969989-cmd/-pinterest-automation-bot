@@ -136,6 +136,15 @@ def post_to_imgbb(image_path: str,
             else:
                 logger.warning(f"[ImgBB] Upload returned HTTP {res.status_code}: {res.text[:200]}")
                 last_error = f"HTTP {res.status_code}"
+                # If forbidden (code 103: Datacenter IP block by Cloudflare/ImgBB), abort immediately and trip circuit breaker
+                if "103" in res.text or "forbidden" in res.text.lower() or res.status_code in (401, 403):
+                    logger.error("[ImgBB] Access forbidden (Code 103) — ImgBB blocks cloud hosting IP addresses. Aborting retries.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("imgbb", "HTTP 400 Code 103: Server IP blocked by ImgBB", cooldown_hours=24.0)
+                    except Exception:
+                        pass
+                    return None
 
         except requests.exceptions.RequestException as req_err:
             logger.warning(f"[ImgBB] Attempt {attempt}/{_MAX_RETRIES} network error: {req_err}")
