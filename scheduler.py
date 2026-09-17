@@ -408,11 +408,12 @@ class PinScheduler:
                             arena_ok=None, tumblr_ok=None, bluesky_ok=None,
                             raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
                             pixelfed_ok=None, pixelfed_url: str = "",
-                            freeimage_ok=None, freeimage_url: str = ""):
+                            freeimage_ok=None, freeimage_url: str = "",
+                            imgbb_ok=None, imgbb_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
         Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
-        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok: True=posted, False=failed, None=disabled
+        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok: True=posted, False=failed, None=disabled
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -435,6 +436,8 @@ class PinScheduler:
                 pixelfed_url=pixelfed_url,
                 freeimage_ok=freeimage_ok,
                 freeimage_url=freeimage_url,
+                imgbb_ok=imgbb_ok,
+                imgbb_url=imgbb_url,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -965,6 +968,31 @@ class PinScheduler:
                                         _freeimage_result = False
                                         logger.warning(f"[Scheduler] Freeimage cross-post failed (non-critical): {_fi_err}")
 
+                                    # ── ImgBB Cross-Post ────────────────────────────────────────────────
+                                    _imgbb_result = None
+                                    _imgbb_url = None
+                                    try:
+                                        from config import IMGBB_ENABLED
+                                        if IMGBB_ENABLED:
+                                            from imgbb_uploader import post_to_imgbb
+                                            from database import mark_imgbb_posted, is_imgbb_posted
+                                            if not is_imgbb_posted(_cross_fn):
+                                                _imgbb_url = post_to_imgbb(
+                                                    image_path    = image_path,
+                                                    title         = pin["title"],
+                                                    anime_name    = pin.get("anime_name", ""),
+                                                    affiliate_url = pin.get("link", "")
+                                                )
+                                                _imgbb_result = bool(_imgbb_url)
+                                                if _imgbb_url:
+                                                    mark_imgbb_posted(_cross_fn, post_url=_imgbb_url,
+                                                                      title=pin["title"], image_url=_public_img or _cross_img)
+                                            else:
+                                                _imgbb_result = True  # already posted
+                                    except Exception as _ibb_err:
+                                        _imgbb_result = False
+                                        logger.warning(f"[Scheduler] ImgBB cross-post failed (non-critical): {_ibb_err}")
+
                                     # ── Notify admin (after cross-posts so results are known) ────────────
                                     self._notify_pin_posted(
                                         title=pin["title"],
@@ -984,6 +1012,8 @@ class PinScheduler:
                                         pixelfed_url=_pix_url or "",
                                         freeimage_ok=_freeimage_result,
                                         freeimage_url=_fi_url or "",
+                                        imgbb_ok=_imgbb_result,
+                                        imgbb_url=_imgbb_url or "",
                                     )
 
                                     # Auto-dispatch to configured stock photography platforms

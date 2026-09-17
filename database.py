@@ -261,6 +261,22 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_freeimage_filename
             ON freeimage_posts (filename)
         """)
+
+        # ── ImgBB Cross-Post Tracking ────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS imgbb_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_url    TEXT,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_imgbb_filename
+            ON imgbb_posts (filename)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -635,6 +651,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     mastodon_stats = get_mastodon_stats(today_str)
     pixelfed_stats = get_pixelfed_stats(today_str)
     freeimage_stats = get_freeimage_stats(today_str)
+    imgbb_stats = get_imgbb_stats(today_str)
 
     return {
         "date": today_str,
@@ -650,6 +667,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         "mastodon": mastodon_stats,
         "pixelfed": pixelfed_stats,
         "freeimage": freeimage_stats,
+        "imgbb": imgbb_stats,
     }
 
 
@@ -702,6 +720,58 @@ def get_freeimage_stats(today_str: str = None) -> dict:
             for r in recent
         ]
     }
+
+
+# ── ImgBB Cross-Post Tracking ────────────────────────────────────────────────
+
+def is_imgbb_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to ImgBB (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM imgbb_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_imgbb_posted(filename: str, post_url: str = "",
+                      title: str = "", image_url: str = "") -> None:
+    """Records a successful ImgBB upload. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO imgbb_posts (filename, post_url, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_url, title, image_url)
+        )
+        conn.commit()
+
+
+def get_imgbb_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time ImgBB upload statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM imgbb_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM imgbb_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, post_url, posted_at
+            FROM imgbb_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
 
 
 

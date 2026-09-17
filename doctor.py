@@ -242,6 +242,19 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _fi_e:
         freeimage_status = f"🟡 Check failed ({_fi_e})"
 
+    # 16. ImgBB Cross-Post Status
+    imgbb_status = "⚪ Disabled"
+    try:
+        if getattr(config, "IMGBB_ENABLED", False):
+            from imgbb_uploader import verify_imgbb_token
+            ibb_ok = verify_imgbb_token()
+            if ibb_ok:
+                imgbb_status = "🟢 Active (API Key Verified)"
+            else:
+                imgbb_status = "🟡 Reachable"
+    except Exception as _ibb_e:
+        imgbb_status = f"🟡 Check failed ({_ibb_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -279,6 +292,7 @@ def run_full_system_diagnostic() -> dict:
         "deviantart_status": deviantart_status,
         "pixelfed_status": pixelfed_status,
         "freeimage_status": freeimage_status,
+        "imgbb_status": imgbb_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -330,6 +344,7 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • DeviantArt         : {diag.get('deviantart_status', 'N/A')}\n"
         f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}\n"
         f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}\n"
+        f"  • ImgBB              : {diag.get('imgbb_status', 'N/A')}\n"
         f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )

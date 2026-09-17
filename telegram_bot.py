@@ -124,7 +124,7 @@ def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
     ])
 
 
-def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "", pixelfed_url: str = "", freeimage_url: str = "") -> "InlineKeyboardMarkup | None":
+def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "", pixelfed_url: str = "", freeimage_url: str = "", imgbb_url: str = "") -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin."""
     if not _TG_AVAILABLE:
         return None
@@ -153,6 +153,12 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
         fi_link = freeimage_url or "https://freeimage.host/muthelyrics"
         btn_label = "🖼️ View on Freeimage" if freeimage_url else "🖼️ Freeimage Gallery"
         rows.append([InlineKeyboardButton(btn_label, url=fi_link)])
+
+    # Row 4: ImgBB Button if enabled
+    if getattr(config, "IMGBB_ENABLED", False):
+        ibb_link = imgbb_url or "https://muthelyrics.imgbb.com/"
+        btn_label = "🖼️ View on ImgBB" if imgbb_url else "🖼️ ImgBB Gallery"
+        rows.append([InlineKeyboardButton(btn_label, url=ibb_link)])
 
     rows.append([
         InlineKeyboardButton("🚀 Post Next Now", callback_data="btn_postnow"),
@@ -204,7 +210,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- CROSS-POSTING ---\n"
-        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage)\n"
+        "/crosspost      - Multi-platform status (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, ImgBB)\n"
         "/arena          - Are.na channel stats & block count\n"
         "/arena_test     - Post test block to Are.na channel\n"
         "/tumblr         - Tumblr blog stats & follower count\n"
@@ -218,7 +224,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/pixelfed       - Pixelfed account stats & profile link\n"
         "/pixelfed_test  - Post test photo to Pixelfed feed\n"
         "/freeimage      - Freeimage.host API stats & link\n"
-        "/freeimage_test - Post test photo to Freeimage.host\n\n"
+        "/freeimage_test - Post test photo to Freeimage.host\n"
+        "/imgbb          - ImgBB API stats & link\n"
+        "/imgbb_test     - Post test photo to ImgBB\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -443,7 +451,7 @@ async def _send_daily_report(chat_id):
         from database import (
             get_today_uploads, get_all_time_stats,
             get_arena_stats, get_tumblr_stats, get_bluesky_stats,
-            get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats, get_freeimage_stats, get_click_stats
+            get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats, get_freeimage_stats, get_imgbb_stats, get_click_stats
         )
         from config import (
             ARENA_ENABLED, ARENA_CHANNEL_SLUG,
@@ -452,7 +460,7 @@ async def _send_daily_report(chat_id):
             RAINDROP_ENABLED, RAINDROP_COLLECTION_ID,
             MASTODON_ENABLED, MASTODON_INSTANCE_URL,
             PIXELFED_ENABLED, PIXELFED_INSTANCE_URL,
-            FREEIMAGE_ENABLED
+            FREEIMAGE_ENABLED, IMGBB_ENABLED
         )
         # Use IST date for consistent timezone-aware reporting
         now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -471,6 +479,7 @@ async def _send_daily_report(chat_id):
         mastodon_st  = get_mastodon_stats(today_ist_str)
         pixelfed_st  = get_pixelfed_stats(today_ist_str)
         freeimage_st = get_freeimage_stats(today_ist_str)
+        imgbb_st     = get_imgbb_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -494,6 +503,7 @@ async def _send_daily_report(chat_id):
         masto_badge     = "🟢 ON" if MASTODON_ENABLED else "⚪ OFF"
         pixelfed_badge  = "🟢 ON" if PIXELFED_ENABLED else "⚪ OFF"
         freeimage_badge = "🟢 ON" if FREEIMAGE_ENABLED else "⚪ OFF"
+        imgbb_badge     = "🟢 ON" if IMGBB_ENABLED else "⚪ OFF"
 
         summary_section = (
             f"📊 Platform Posting Summary:\n"
@@ -505,7 +515,8 @@ async def _send_daily_report(chat_id):
             f"  💧 Raindrop  : {raindrop_st['today']} today  |  {raindrop_st['total']} all-time  ({raindrop_badge})\n"
             f"  🐘 Mastodon  : {mastodon_st['today']} today  |  {mastodon_st['total']} all-time  ({masto_badge})\n"
             f"  📷 Pixelfed  : {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time  ({pixelfed_badge})\n"
-            f"  🖼️ Freeimage : {freeimage_st['today']} today  |  {freeimage_st['total']} all-time  ({freeimage_badge})\n\n"
+            f"  🖼️ Freeimage : {freeimage_st['today']} today  |  {freeimage_st['total']} all-time  ({freeimage_badge})\n"
+            f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n\n"
         )
 
         revenue_section = ""
@@ -546,6 +557,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += f"  • Pixelfed: {PIXELFED_INSTANCE_URL}\n"
         if FREEIMAGE_ENABLED:
             crosspost_section += "  • Freeimage: https://freeimage.host/muthelyrics\n"
+        if IMGBB_ENABLED:
+            crosspost_section += "  • ImgBB: https://muthelyrics.imgbb.com/\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -1693,8 +1706,9 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             action_note = "Your pin is live on Pinterest right now."
 
             # ── Cross-post to all enabled platforms (same as scheduler) ──────────
-            _arena_result = _tumblr_result = _bsky_result = _raindrop_result = _mastodon_result = _deviantart_result = _pixelfed_result = _freeimage_result = None
+            _arena_result = _tumblr_result = _bsky_result = _raindrop_result = _mastodon_result = _deviantart_result = _pixelfed_result = _freeimage_result = _imgbb_result = None
             _fi_url = None
+            _ibb_url = None
             _cross_fn = os.path.basename(processed_path)
             _cross_img = ""  # no public CDN URL yet for manual uploads
 
@@ -1840,6 +1854,25 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             except Exception as e:
                 _freeimage_result = False; logger.warning(f"[TG BOT] Freeimage cross-post error: {e}")
 
+            try:
+                from config import IMGBB_ENABLED
+                if IMGBB_ENABLED:
+                    from imgbb_uploader import post_to_imgbb
+                    from database import mark_imgbb_posted, is_imgbb_posted
+                    if not is_imgbb_posted(_cross_fn):
+                        _ibb_url = post_to_imgbb(
+                            image_path=processed_path,
+                            title=title,
+                            anime_name=anime_name,
+                            affiliate_url=amazon_link,
+                        )
+                        _imgbb_result = bool(_ibb_url)
+                        if _ibb_url: mark_imgbb_posted(_cross_fn, post_url=_ibb_url, title=title, image_url=_public_img)
+                    else:
+                        _imgbb_result = True
+            except Exception as e:
+                _imgbb_result = False; logger.warning(f"[TG BOT] ImgBB cross-post error: {e}")
+
             # Auto-dispatch stock photography uploads if configured
             try:
                 from scheduler import _dispatch_stock_uploads_async
@@ -1853,7 +1886,8 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 f"🔮 Are.na  {_icon(_arena_result)}  🎨 Tumblr  {_icon(_tumblr_result)}\n"
                 f"🦋 Bluesky {_icon(_bsky_result)}  💧 Raindrop {_icon(_raindrop_result)}\n"
                 f"🐘 Mastodon {_icon(_mastodon_result)}  🎭 DeviantArt {_icon(_deviantart_result)}\n"
-                f"📷 Pixelfed {_icon(_pixelfed_result)}  🖼️ Freeimage {_icon(_freeimage_result)}"
+                f"📷 Pixelfed {_icon(_pixelfed_result)}  🖼️ Freeimage {_icon(_freeimage_result)}\n"
+                f"🖼️ ImgBB   {_icon(_imgbb_result)}"
             )
 
 
@@ -1897,7 +1931,7 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 InlineKeyboardButton("🎯 View Amazon Merch", url=target_url or amazon_link),
             ]
         ]
-        from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL, FREEIMAGE_ENABLED
+        from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL, FREEIMAGE_ENABLED, IMGBB_ENABLED
         if _pixelfed_result and _pix_url:
             buttons.append([InlineKeyboardButton("📷 View on Pixelfed", url=_pix_url)])
         elif PIXELFED_ENABLED:
@@ -1907,6 +1941,11 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             buttons.append([InlineKeyboardButton("🖼️ View on Freeimage", url=_fi_url)])
         elif FREEIMAGE_ENABLED:
             buttons.append([InlineKeyboardButton("🖼️ Freeimage Gallery", url="https://freeimage.host/muthelyrics")])
+
+        if _imgbb_result and _ibb_url:
+            buttons.append([InlineKeyboardButton("🖼️ View on ImgBB", url=_ibb_url)])
+        elif IMGBB_ENABLED:
+            buttons.append([InlineKeyboardButton("🖼️ ImgBB Gallery", url="https://muthelyrics.imgbb.com/")])
 
         if not uploaded_ok:
             buttons.append([InlineKeyboardButton("🚀 Post to Pinterest NOW", callback_data="btn_postnow")])
@@ -1938,11 +1977,12 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              arena_ok=None, tumblr_ok=None, bluesky_ok=None,
                              raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
                              pixelfed_ok=None, pixelfed_url: str = "",
-                             freeimage_ok=None, freeimage_url: str = ""):
+                             freeimage_ok=None, freeimage_url: str = "",
+                             imgbb_ok=None, imgbb_url: str = ""):
     """
     Send a rich Telegram notification after every successful Pinterest post.
     Sends the actual image + details. FREE — no limits at 3 messages/day.
-    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok: True=posted, False=failed, None=disabled
+    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok: True=posted, False=failed, None=disabled
     """
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -1970,7 +2010,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     cross_lines = ""
     if (arena_ok is not None or tumblr_ok is not None or bluesky_ok is not None
             or raindrop_ok is not None or mastodon_ok is not None or deviantart_ok is not None
-            or pixelfed_ok is not None or freeimage_ok is not None):
+            or pixelfed_ok is not None or freeimage_ok is not None or imgbb_ok is not None):
         cross_lines = (
             f"\n{'─' * 26}\n"
             f"🔮 Are.na    {_platform_icon(arena_ok)}  "
@@ -1980,7 +2020,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🐘 Mastodon {_platform_icon(mastodon_ok)}  "
             f"🎭 DeviantArt {_platform_icon(deviantart_ok)}\n"
             f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}  "
-            f"🖼️ Freeimage {_platform_icon(freeimage_ok)}"
+            f"🖼️ Freeimage {_platform_icon(freeimage_ok)}\n"
+            f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}"
         )
 
     caption = (
@@ -1996,7 +2037,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     reply_markup = get_post_confirmation_keyboard(
         amazon_url=target_url or link,
         pixelfed_url=pixelfed_url,
-        freeimage_url=freeimage_url
+        freeimage_url=freeimage_url,
+        imgbb_url=imgbb_url
     )
 
     async def _send():
@@ -2366,6 +2408,14 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             freeimage_status = "🟢 ACTIVE (API Key Verified)" if verify_freeimage_token() else "🟡 REACHABLE"
         freeimage_st = get_freeimage_stats(today_str)
 
+        # ImgBB status
+        imgbb_status = "DISABLED (IMGBB_ENABLED=false)"
+        from config import IMGBB_ENABLED
+        if IMGBB_ENABLED:
+            from imgbb_uploader import verify_imgbb_token
+            imgbb_status = "🟢 ACTIVE (API Key Verified)" if verify_imgbb_token() else "🟡 REACHABLE"
+        imgbb_st = get_imgbb_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -2404,6 +2454,10 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {freeimage_status}\n"
             f"  • Posts: {freeimage_st['today']} today  |  {freeimage_st['total']} all-time\n"
             f"  • Link: https://freeimage.host/muthelyrics\n\n"
+            f"🖼️ ImgBB:\n"
+            f"  • Status: {imgbb_status}\n"
+            f"  • Posts: {imgbb_st['today']} today  |  {imgbb_st['total']} all-time\n"
+            f"  • Link: https://muthelyrics.imgbb.com/\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /arena_test — Test Are.na block upload\n"
@@ -2413,6 +2467,7 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  /mastodon_test — Test Mastodon status & image post\n"
             f"  /pixelfed_test — Test Pixelfed photo & caption post\n"
             f"  /freeimage_test — Test Freeimage.host upload\n"
+            f"  /imgbb_test — Test ImgBB upload\n"
             f"  /testpost — Test Pinterest webhook"
         )
         await update.message.reply_text(msg)
@@ -2812,6 +2867,113 @@ async def cmd_freeimage_test(update: "Update", context: "ContextTypes.DEFAULT_TY
         await update.message.reply_text(f"Freeimage test error: {e}")
 
 
+async def cmd_imgbb(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show ImgBB API stats and gallery link."""
+    if not _is_admin(update): return
+    try:
+        from imgbb_uploader import get_imgbb_info, verify_imgbb_token
+        from database import get_imgbb_stats
+        from config import IMGBB_ENABLED
+        enabled_str = "ENABLED" if IMGBB_ENABLED else "DISABLED (set IMGBB_ENABLED=true)"
+        valid = verify_imgbb_token()
+        info = get_imgbb_info()
+        stats = get_imgbb_stats()
+
+        recent_lines = []
+        for i, r in enumerate(stats.get("recent", [])[:3], 1):
+            recent_lines.append(f"  {i}. {r['title'][:30]} -> {r['post_url']}")
+        recent_str = "\n".join(recent_lines) if recent_lines else "  No uploads recorded yet."
+
+        msg = (
+            f"🖼️ ImgBB Status: {enabled_str}\n"
+            f"{'═' * 34}\n"
+            f"API Status: {'🟢 Verified & Connected' if valid else '🟡 Reachable'}\n"
+            f"API Key   : {info['api_key_masked']}\n"
+            f"Profile   : {info['profile_url']}\n\n"
+            f"📊 Upload Statistics:\n"
+            f"  • Today    : {stats['today']} images\n"
+            f"  • All-Time : {stats['total']} images\n\n"
+            f"Recent Uploads:\n{recent_str}\n\n"
+            f"👉 Use /imgbb_test to post a live anime test poster."
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imgbb error: {e}", exc_info=True)
+        await update.message.reply_text(f"ImgBB error: {e}")
+
+
+async def cmd_imgbb_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Upload a test anime poster with real anime metadata & Amazon affiliate link to ImgBB."""
+    if not _is_admin(update): return
+    await update.message.reply_text("⏳ Uploading real anime test poster to ImgBB...")
+    try:
+        from imgbb_uploader import post_to_imgbb
+        from database import mark_imgbb_posted
+        local_img = None
+        for folder in ["processed", "downloads"]:
+            if os.path.exists(folder):
+                for f in sorted(os.listdir(folder), reverse=True):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        local_img = os.path.join(folder, f)
+                        break
+            if local_img:
+                break
+
+        anime_name = "Attack on Titan"
+        title = "Attack on Titan Eren Yeager Aesthetic Poster"
+        if local_img:
+            fn = os.path.basename(local_img).lower()
+            if "naruto" in fn:
+                anime_name = "Naruto Shippuden"
+                title = "Naruto Uzumaki Sage Mode Minimalist Poster"
+            elif "aot" in fn or "titan" in fn:
+                anime_name = "Attack on Titan"
+                title = "Attack on Titan Eren Yeager Aesthetic Poster"
+            elif "demon" in fn or "slayer" in fn or "tanjiro" in fn:
+                anime_name = "Demon Slayer"
+                title = "Demon Slayer Tanjiro Kamado Canvas Poster"
+            elif "jujutsu" in fn or "jjk" in fn or "gojo" in fn:
+                anime_name = "Jujutsu Kaisen"
+                title = "Gojo Satoru Domain Expansion Anime Poster"
+            elif "solo" in fn or "leveling" in fn:
+                anime_name = "Solo Leveling"
+                title = "Solo Leveling Sung Jin-Woo Shadow Monarch Poster"
+
+        from amazon_search import generate_amazon_link
+        real_affiliate_link = generate_amazon_link(anime_name, title=title)
+
+        post_url = post_to_imgbb(
+            image_path=local_img or "https://iili.io/noC9Xne.jpg",
+            title=title,
+            anime_name=anime_name,
+            affiliate_url=real_affiliate_link
+        )
+        if post_url:
+            if local_img:
+                mark_imgbb_posted(os.path.basename(local_img), post_url=post_url, title=title)
+            btn = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🖼️ View on ImgBB", url=post_url),
+                InlineKeyboardButton("🛒 View Amazon Merch", url=real_affiliate_link),
+            ]])
+            await update.message.reply_text(
+                f"✅ ImgBB upload succeeded with REAL anime data!\n\n"
+                f"🎌 Anime: {anime_name}\n"
+                f"📝 Title: {title}\n"
+                f"🛍️ Amazon Merch: {real_affiliate_link}\n"
+                f"🔗 ImgBB URL: {post_url}",
+                reply_markup=btn
+            )
+        else:
+            await update.message.reply_text(
+                "❌ ImgBB test upload failed.\n"
+                "Check that IMGBB_API_KEY is set in .env."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imgbb_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"ImgBB test error: {e}")
+
+
+
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
               dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
@@ -2952,6 +3114,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("freeimage",     cmd_freeimage),
             ("freeimage_test",cmd_freeimage_test),
             ("freeimagetest", cmd_freeimage_test),
+            ("imgbb",         cmd_imgbb),
+            ("imgbb_test",    cmd_imgbb_test),
+            ("imgbbtest",     cmd_imgbb_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))

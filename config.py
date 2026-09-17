@@ -107,6 +107,11 @@ PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('tru
 FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '6d207e02198a847aa98d0a2a901485a5').strip()
 FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(FREEIMAGE_API_KEY)
 
+# ImgBB Dedicated Image Uploading
+IMGBB_API_KEY          = os.getenv('IMGBB_API_KEY', '1506c60298ac253357a0d04c40ea4bd7').strip()
+IMGBB_ENABLED          = os.getenv('IMGBB_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGBB_API_KEY)
+
+
 
 
 
