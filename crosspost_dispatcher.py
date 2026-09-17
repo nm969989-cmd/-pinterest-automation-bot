@@ -19,8 +19,11 @@ Used identically by:
 """
 
 import os
+import time
+import random
 import requests
 from logger import get_logger
+from hashtag_optimizer import format_platform_caption, get_platform_tags
 
 logger = get_logger(__name__)
 
@@ -92,16 +95,22 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         "imghippo_ok": None, "imghippo_url": "",
     }
 
+    # Determine stealth mode (1 in every 3 posts is pure community art appreciation without affiliate CTA)
+    is_stealth = random.random() < 0.35
+    if is_stealth:
+        logger.info("[Crosspost] Stealth / Art Appreciation Mode ACTIVE for this cycle (omitting commercial CTA on social feeds)")
+
     # ── 1. Are.na ────────────────────────────────────────────────────────────
     if getattr(config, "ARENA_ENABLED", False):
         try:
             from arena_uploader import post_to_arena
             from database import mark_arena_posted, is_arena_posted
             if not is_arena_posted(filename):
+                arena_desc = format_platform_caption("general", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
                 ok = post_to_arena(
                     image_url=public_img_url,
                     title=title,
-                    description=description,
+                    description=arena_desc,
                     link=link,
                 )
                 results["arena_ok"] = bool(ok)
@@ -122,6 +131,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from database import mark_tumblr_posted, is_tumblr_posted
             blog = getattr(config, "TUMBLR_BLOG_NAME", "animeasthet07")
             if not is_tumblr_posted(filename):
+                time.sleep(random.uniform(2, 5))
                 post_id = post_to_tumblr(
                     image_url=original_image_url,
                     title=title,
@@ -149,10 +159,12 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from database import mark_bluesky_posted, is_bluesky_posted
             handle = getattr(config, "BLUESKY_HANDLE", "muthelyrics.bsky.social")
             if not is_bluesky_posted(filename):
+                time.sleep(random.uniform(3, 7))
+                bsky_caption = format_platform_caption("bluesky", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
                 post_uri = post_to_bluesky(
                     image_url=public_img_url,
                     title=title,
-                    caption=description,
+                    caption=bsky_caption,
                     link=link,
                     image_path=image_path,
                 )
@@ -177,6 +189,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from database import mark_raindrop_posted, is_raindrop_posted
             col_id = getattr(config, "RAINDROP_COLLECTION_ID", "")
             if not is_raindrop_posted(filename):
+                time.sleep(random.uniform(2, 5))
                 drop_ok = post_to_raindrop(
                     image_url=original_image_url,
                     title=title,
@@ -200,10 +213,12 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from mastodon_uploader import post_to_mastodon
             from database import mark_mastodon_posted, is_mastodon_posted
             if not is_mastodon_posted(filename):
+                time.sleep(random.uniform(3, 8))
+                masto_caption = format_platform_caption("mastodon", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
                 masto_url = post_to_mastodon(
                     image_url=public_img_url,
                     title=title,
-                    description=description,
+                    description=masto_caption,
                     link=link,
                     image_path=image_path,
                 )
@@ -226,10 +241,14 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from deviantart_uploader import post_to_deviantart
             from database import mark_deviantart_posted, is_deviantart_posted
             if not is_deviantart_posted(filename):
+                time.sleep(random.uniform(3, 8))
+                da_desc = format_platform_caption("deviantart", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
+                da_tags = get_platform_tags(anime_name, platform="deviantart")
                 da_ok = post_to_deviantart(
                     image_url=public_img_url or original_image_url,
                     title=title,
-                    description=description,
+                    description=da_desc,
+                    tags=da_tags,
                     link=link,
                     image_path=image_path,
                 )
@@ -250,10 +269,12 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             from database import mark_pixelfed_posted, is_pixelfed_posted
             inst_url = getattr(config, "PIXELFED_INSTANCE_URL", "https://pixelfed.social")
             if not is_pixelfed_posted(filename):
+                time.sleep(random.uniform(3, 8))
+                pix_caption = format_platform_caption("pixelfed", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
                 pix_url = post_to_pixelfed(
                     image_url=public_img_url or original_image_url,
                     title=title,
-                    description=description,
+                    description=pix_caption,
                     link=link,
                     image_path=image_path,
                 )

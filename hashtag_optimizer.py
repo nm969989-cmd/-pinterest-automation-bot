@@ -9,6 +9,7 @@ Replaces the generic AI-generated hashtags with niche-specific, high-traffic tag
 """
 
 import re
+import random
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -63,9 +64,16 @@ _PRODUCT_TAGS = {
     "default":  ["#AnimeMerch", "#AnimeGifts", "#AnimeShop", "#AnimeProducts", "#BuyAnime"],
 }
 
-# ── Compliance + reach tags (always included) ─────────────────────────────────
-
-_BASE_TAGS = ["#anime", "#animefan", "#otaku", "#ad", "#affiliate"]
+# ── Compliance + reach tags (dynamically sampled) ─────────────────────────────
+_ORGANIC_AESTHETIC_TAGS = [
+    "#AnimeArt", "#AnimeAesthetic", "#OtakuLife", "#DigitalArt",
+    "#AnimeWallpaper", "#MangaArt", "#AnimeCommunity", "#AnimeDrawing",
+    "#AestheticArt", "#AnimeLove", "#AnimeFanart", "#JapanArt",
+    "#AnimeIllustration", "#AnimeVibes", "#AnimeStuff", "#AnimeEdit",
+    "#KawaiiAesthetic", "#MangaDrawing", "#AnimeLover", "#AnimeArtwork"
+]
+_DISCLOSURE_TAGS = ["#ad", "#affiliate"]
+_BASE_TAGS = ["#anime", "#animefan", "#otaku"]
 
 # ── Series-specific tag bank (100+ anime) ────────────────────────────────────
 
@@ -168,59 +176,205 @@ def optimize_hashtags(
     genre: str = "general",
     character_name: str = "",
     product_hint: str = "anime merch",
+    target_count: int = None,
+    include_disclosure: bool = True,
 ) -> str:
     """
-    Generates 12-15 Pinterest SEO-optimized hashtags for a pin.
+    Generates dynamic, randomized SEO hashtags for a pin or post.
+    Employs random sampling and shuffling so no two posts have identical
+    tag fingerprints, preventing automated bot/spam detection.
 
     Args:
-        anime_name:     e.g. "Demon Slayer"
-        genre:          e.g. "shonen", "isekai", "romance" (from board_router)
-        character_name: e.g. "Tanjiro" (extracted from AI title)
-        product_hint:   e.g. "anime poster", "anime hoodie"
+        anime_name:          e.g. "Demon Slayer"
+        genre:               e.g. "shonen", "isekai", "romance"
+        character_name:      e.g. "Tanjiro"
+        product_hint:        e.g. "anime poster", "anime hoodie"
+        target_count:        Optional maximum tag count
+        include_disclosure:  Whether to include #ad/#affiliate (Pinterest only)
 
     Returns:
-        A formatted hashtag string ready to append to a pin description.
+        A formatted, shuffled hashtag string ready to append to a description.
     """
     tags = []
 
-    # Layer 1: Series-specific tags (3-5 tags, most targeted)
-    anime_tags = _get_anime_specific_tags(anime_name)
-    tags.extend(anime_tags[:4])
+    # Layer 1: Series-specific tags (random sample of 2-4 tags)
+    anime_tags = list(_get_anime_specific_tags(anime_name))
+    if anime_tags:
+        k_series = min(len(anime_tags), random.randint(2, 4))
+        tags.extend(random.sample(anime_tags, k_series))
 
-    # Add character tag if we have one and it's not already in anime_tags
+    # Add character tag if we have one
     if character_name and character_name.strip():
         char_tag = f"#{character_name.strip().split()[0].title()}"
         if char_tag not in tags:
             tags.append(char_tag)
 
-    # Layer 2: Genre-specific tags (3-4 tags)
+    # Layer 2: Genre-specific tags (random sample of 2-3 tags)
     genre_key = genre.lower() if genre.lower() in _GENRE_TAGS else "general"
-    genre_tag_pool = _GENRE_TAGS[genre_key]
-    tags.extend(genre_tag_pool[:3])
+    genre_pool = list(_GENRE_TAGS[genre_key])
+    k_genre = min(len(genre_pool), random.randint(2, 3))
+    tags.extend(random.sample(genre_pool, k_genre))
 
-    # Layer 3: Product-type tags (2-3 tags)
+    # Layer 3: Product-type tags (1-2 tags)
     product_key = _detect_product_type(product_hint)
-    product_tag_pool = _PRODUCT_TAGS.get(product_key, _PRODUCT_TAGS["default"])
-    tags.extend(product_tag_pool[:2])
+    product_pool = list(_PRODUCT_TAGS.get(product_key, _PRODUCT_TAGS["default"]))
+    k_prod = min(len(product_pool), random.randint(1, 2))
+    tags.extend(random.sample(product_pool, k_prod))
 
-    # Layer 4: Base tags (always present — compliance + reach)
-    for tag in _BASE_TAGS:
-        if tag not in tags:
-            tags.append(tag)
+    # Layer 4: Organic aesthetic tags (random sample of 2-3 tags)
+    k_organic = random.randint(2, 3)
+    tags.extend(random.sample(_ORGANIC_AESTHETIC_TAGS, k_organic))
 
-    # Deduplicate while preserving order, cap at 15
+    # Layer 5: Compliance disclosure tag (only if explicitly enabled)
+    if include_disclosure:
+        tags.append(random.choice(_DISCLOSURE_TAGS))
+
+    # Deduplicate while preserving unique tags
     seen = set()
-    final_tags = []
+    unique_tags = []
     for tag in tags:
-        if tag.lower() not in seen:
-            seen.add(tag.lower())
-            final_tags.append(tag)
-        if len(final_tags) >= 15:
-            break
+        lower_t = tag.lower()
+        if lower_t not in seen:
+            seen.add(lower_t)
+            unique_tags.append(tag)
+
+    # Shuffle to eliminate robotic sequential fingerprints
+    random.shuffle(unique_tags)
+
+    # Dynamic count limit (between 8 and 12 tags unless specified)
+    max_tags = target_count or random.randint(8, 12)
+    final_tags = unique_tags[:max_tags]
 
     result = " ".join(final_tags)
-    logger.info(f"[Hashtag] Generated {len(final_tags)} tags for '{anime_name}' ({genre}): {result}")
+    logger.info(f"[Hashtag] Dynamically generated {len(final_tags)} tags for '{anime_name}' ({genre}): {result}")
     return result
+
+
+# Alias for backward compatibility
+get_optimized_hashtags = optimize_hashtags
+
+
+def get_platform_tags(
+    anime_name: str,
+    genre: str = "general",
+    platform: str = "general",
+    character_name: str = "",
+) -> list:
+    """
+    Returns platform-tailored tags adhering to each network's culture and limits.
+    """
+    plat = platform.lower()
+    anime_tags = list(_get_anime_specific_tags(anime_name))
+    anime_tag = anime_tags[0] if anime_tags else f"#{anime_name.replace(' ', '')}"
+    if character_name and character_name.strip():
+        char_tag = f"#{character_name.strip().split()[0].title()}"
+    else:
+        char_tag = ""
+
+    if plat in ("bluesky", "bsky"):
+        # Bluesky: 2-3 tags max to preserve character budget and avoid looking spammy
+        pool = [anime_tag, "#Anime", "#DigitalArt", "#AnimeArt", "#Illustration"]
+        if char_tag:
+            pool.insert(1, char_tag)
+        selected = [anime_tag]
+        remaining = [t for t in pool if t != anime_tag]
+        selected.extend(random.sample(remaining, min(len(remaining), random.randint(1, 2))))
+        return selected
+
+    elif plat == "mastodon":
+        # Mastodon: 3-4 polite community tags
+        pool = [anime_tag, "#AnimeArt", "#Manga", "#Illustration", "#Creative", "#FediverseArt"]
+        if char_tag:
+            pool.insert(1, char_tag)
+        selected = [anime_tag]
+        remaining = [t for t in pool if t != anime_tag]
+        selected.extend(random.sample(remaining, min(len(remaining), 2)))
+        return selected
+
+    elif plat == "pixelfed":
+        # Pixelfed: 4-6 photo/art aesthetic tags
+        pool = [anime_tag, "#AnimeArt", "#DigitalArt", "#AnimeAesthetic", "#Illustration", "#FanArt"]
+        if char_tag:
+            pool.insert(1, char_tag)
+        selected = [anime_tag]
+        remaining = [t for t in pool if t != anime_tag]
+        selected.extend(random.sample(remaining, min(len(remaining), random.randint(3, 4))))
+        return selected
+
+    elif plat == "deviantart":
+        # DeviantArt: Clean keywords WITHOUT '#'
+        clean_anime = re.sub(r'[^a-zA-Z0-9]', '', anime_name).lower()
+        base = ["anime", "digitalart", "illustration", "aesthetic", "wallpaper", "artwork"]
+        if clean_anime:
+            base.insert(0, clean_anime)
+        if char_tag:
+            base.insert(1, char_tag.lstrip("#").lower())
+        return base[:8]
+
+    # Default / Pinterest
+    return get_optimized_hashtags(anime_name, genre, character_name, include_disclosure=False).split()
+
+
+def format_platform_caption(
+    platform: str,
+    title: str,
+    description: str,
+    link: str = "",
+    anime_name: str = "",
+    character_name: str = "",
+    is_stealth: bool = False,
+) -> str:
+    """
+    Formats natural, platform-native post copy to prevent spam flags.
+    Removes generic bulk hashtag blocks and tailors link placement.
+    """
+    plat = platform.lower()
+    tags = get_platform_tags(anime_name=anime_name, platform=plat, character_name=character_name)
+    tags_str = " ".join(tags)
+
+    # Extract clean text body without existing hashtag blocks
+    body_lines = []
+    for line in description.split("\n"):
+        tokens = line.strip().split()
+        if tokens and sum(1 for t in tokens if t.startswith("#")) >= len(tokens) * 0.5:
+            continue
+        body_lines.append(line)
+    clean_body = "\n".join(body_lines).strip()
+    if not clean_body:
+        clean_body = title
+
+    # 1. Bluesky: strict 300 character limit
+    if plat in ("bluesky", "bsky"):
+        clean_title = title.split(" - ")[0].split(" | ")[0][:80]
+        caption = f"{clean_title}\n\n{tags_str}"
+        if link and not is_stealth and len(caption) + len(link) + 14 <= 290:
+            caption = f"{clean_title}\n\nSource: {link}\n\n{tags_str}"
+        return caption[:300]
+
+    # 2. Mastodon: 500 chars, polite community tone
+    if plat == "mastodon":
+        desc_snippet = clean_body[:200].rstrip()
+        parts = [title]
+        if desc_snippet and desc_snippet != title:
+            parts.append(desc_snippet)
+        if link and not is_stealth:
+            parts.append(f"Source & More: {link}")
+        parts.append(tags_str)
+        return "\n\n".join(parts)[:490]
+
+    # 3. Pixelfed: photo gallery style
+    if plat == "pixelfed":
+        parts = [title]
+        if clean_body and clean_body != title:
+            parts.append(clean_body[:250])
+        if link and not is_stealth:
+            parts.append(f"Inspiration & Prints: {link}")
+        parts.append(tags_str)
+        return "\n\n".join(parts)
+
+    # 4. DeviantArt / General
+    return clean_body
+
 
 
 def replace_hashtags_in_description(description: str, optimized_tags: str) -> str:

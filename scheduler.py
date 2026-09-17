@@ -555,6 +555,15 @@ class PinScheduler:
             mins_since_heartbeat = (now - _last_heartbeat_check).total_seconds() / 60
             if mins_since_heartbeat >= 30:
                 _last_heartbeat_check = now
+
+                # ── Trigger organic human browsing & activity simulation ──────
+                try:
+                    import threading
+                    from human_simulator import run_organic_simulation
+                    threading.Thread(target=run_organic_simulation, name="HumanSimThread", daemon=True).start()
+                except Exception as _sim_e:
+                    logger.debug(f"[Scheduler] Human simulation thread spawn error: {_sim_e}")
+
                 today_posted_hb = count_posts_today(today_ist)
                 # Use UTC date for both slot counting and post counting to stay in
                 # the same timezone — avoids cross-midnight IST/UTC false positives.
