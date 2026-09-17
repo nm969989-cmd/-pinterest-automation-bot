@@ -155,13 +155,15 @@ def get_tumblr_blog_info():
     try:
         client = _get_client()
         # Try blog_info endpoint first
-        res  = client.blog_info(BN)
-        blog = res.get("response", {}).get("blog", {})
+        r_obj = res.get("response")
+        blog = (r_obj.get("blog", {}) if isinstance(r_obj, dict) else {})
         # Fallback: user/info has blog data for primary blog
         if not blog:
             uinfo = client.info()
+            u_resp = uinfo.get("response")
+            u_user = (u_resp.get("user", {}) if isinstance(u_resp, dict) else {})
             blogs = (uinfo.get("user", {}).get("blogs")
-                     or uinfo.get("response", {}).get("user", {}).get("blogs")
+                     or u_user.get("blogs")
                      or [])
             blog  = next((b for b in blogs if b.get("name") == BN), {})
         if blog:
@@ -184,9 +186,8 @@ def verify_tumblr_token():
         client = _get_client()
         res    = client.info()
         # pytumblr returns nested: res['user']['name'] OR res['response']['user']['name']
-        user = (res.get("user")
-                or res.get("response", {}).get("user")
-                or {})
+        resp_obj = res.get("response")
+        user = res.get("user") or (resp_obj.get("user") if isinstance(resp_obj, dict) else {}) or {}
         name = user.get("name", "")
         if name:
             logger.info("[Tumblr] Token valid — logged in as: " + name)
