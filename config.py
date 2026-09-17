@@ -111,6 +111,11 @@ FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('tru
 IMGBB_API_KEY          = os.getenv('IMGBB_API_KEY', '1506c60298ac253357a0d04c40ea4bd7').strip()
 IMGBB_ENABLED          = os.getenv('IMGBB_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGBB_API_KEY)
 
+# Imghippo Dedicated Image Uploading
+IMGHIPPO_API_KEY       = os.getenv('IMGHIPPO_API_KEY', '00f11d3e65f34df60a3cf9e47ecf7453').strip()
+IMGHIPPO_ENABLED       = os.getenv('IMGHIPPO_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGHIPPO_API_KEY)
+
+
 
 
 

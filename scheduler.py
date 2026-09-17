@@ -409,11 +409,12 @@ class PinScheduler:
                             raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
                             pixelfed_ok=None, pixelfed_url: str = "",
                             freeimage_ok=None, freeimage_url: str = "",
-                            imgbb_ok=None, imgbb_url: str = ""):
+                            imgbb_ok=None, imgbb_url: str = "",
+                            imghippo_ok=None, imghippo_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
         Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
-        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok: True=posted, False=failed, None=disabled
+        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok / imghippo_ok: True=posted, False=failed, None=disabled
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -438,6 +439,8 @@ class PinScheduler:
                 freeimage_url=freeimage_url,
                 imgbb_ok=imgbb_ok,
                 imgbb_url=imgbb_url,
+                imghippo_ok=imghippo_ok,
+                imghippo_url=imghippo_url,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -993,6 +996,31 @@ class PinScheduler:
                                         _imgbb_result = False
                                         logger.warning(f"[Scheduler] ImgBB cross-post failed (non-critical): {_ibb_err}")
 
+                                    # ── Imghippo Cross-Post ─────────────────────────────────────────────
+                                    _imghippo_result = None
+                                    _imghippo_url = None
+                                    try:
+                                        from config import IMGHIPPO_ENABLED
+                                        if IMGHIPPO_ENABLED:
+                                            from imghippo_uploader import post_to_imghippo
+                                            from database import mark_imghippo_posted, is_imghippo_posted
+                                            if not is_imghippo_posted(_cross_fn):
+                                                _imghippo_url = post_to_imghippo(
+                                                    image_path    = image_path,
+                                                    title         = pin["title"],
+                                                    anime_name    = pin.get("anime_name", ""),
+                                                    affiliate_url = pin.get("link", "")
+                                                )
+                                                _imghippo_result = bool(_imghippo_url)
+                                                if _imghippo_url:
+                                                    mark_imghippo_posted(_cross_fn, post_url=_imghippo_url,
+                                                                         title=pin["title"], image_url=_public_img or _cross_img)
+                                            else:
+                                                _imghippo_result = True  # already posted
+                                    except Exception as _hipp_err:
+                                        _imghippo_result = False
+                                        logger.warning(f"[Scheduler] Imghippo cross-post failed (non-critical): {_hipp_err}")
+
                                     # ── Notify admin (after cross-posts so results are known) ────────────
                                     self._notify_pin_posted(
                                         title=pin["title"],
@@ -1014,6 +1042,8 @@ class PinScheduler:
                                         freeimage_url=_fi_url or "",
                                         imgbb_ok=_imgbb_result,
                                         imgbb_url=_imgbb_url or "",
+                                        imghippo_ok=_imghippo_result,
+                                        imghippo_url=_imghippo_url or "",
                                     )
 
                                     # Auto-dispatch to configured stock photography platforms

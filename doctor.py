@@ -255,6 +255,19 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _ibb_e:
         imgbb_status = f"🟡 Check failed ({_ibb_e})"
 
+    # 17. Imghippo Cross-Post Status
+    imghippo_status = "⚪ Disabled"
+    try:
+        if getattr(config, "IMGHIPPO_ENABLED", False):
+            from imghippo_uploader import verify_imghippo_token
+            hippo_ok = verify_imghippo_token()
+            if hippo_ok:
+                imghippo_status = "🟢 Active (API Key Verified)"
+            else:
+                imghippo_status = "🟡 Reachable"
+    except Exception as _hip_e:
+        imghippo_status = f"🟡 Check failed ({_hip_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -293,6 +306,7 @@ def run_full_system_diagnostic() -> dict:
         "pixelfed_status": pixelfed_status,
         "freeimage_status": freeimage_status,
         "imgbb_status": imgbb_status,
+        "imghippo_status": imghippo_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -345,6 +359,7 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}\n"
         f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}\n"
         f"  • ImgBB              : {diag.get('imgbb_status', 'N/A')}\n"
+        f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}\n"
         f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )

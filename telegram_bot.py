@@ -124,7 +124,7 @@ def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
     ])
 
 
-def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "", pixelfed_url: str = "", freeimage_url: str = "", imgbb_url: str = "") -> "InlineKeyboardMarkup | None":
+def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "", pixelfed_url: str = "", freeimage_url: str = "", imgbb_url: str = "", imghippo_url: str = "") -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin."""
     if not _TG_AVAILABLE:
         return None
@@ -159,6 +159,12 @@ def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = ""
         ibb_link = imgbb_url or "https://muthelyrics.imgbb.com/"
         btn_label = "🖼️ View on ImgBB" if imgbb_url else "🖼️ ImgBB Gallery"
         rows.append([InlineKeyboardButton(btn_label, url=ibb_link)])
+
+    # Row 5: Imghippo Button if enabled
+    if getattr(config, "IMGHIPPO_ENABLED", False):
+        hippo_link = imghippo_url or "https://www.imghippo.com/dashboard"
+        btn_label = "🦛 View on Imghippo" if imghippo_url else "🦛 Imghippo Gallery"
+        rows.append([InlineKeyboardButton(btn_label, url=hippo_link)])
 
     rows.append([
         InlineKeyboardButton("🚀 Post Next Now", callback_data="btn_postnow"),
@@ -480,6 +486,7 @@ async def _send_daily_report(chat_id):
         pixelfed_st  = get_pixelfed_stats(today_ist_str)
         freeimage_st = get_freeimage_stats(today_ist_str)
         imgbb_st     = get_imgbb_stats(today_ist_str)
+        imghippo_st  = get_imghippo_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -504,6 +511,7 @@ async def _send_daily_report(chat_id):
         pixelfed_badge  = "🟢 ON" if PIXELFED_ENABLED else "⚪ OFF"
         freeimage_badge = "🟢 ON" if FREEIMAGE_ENABLED else "⚪ OFF"
         imgbb_badge     = "🟢 ON" if IMGBB_ENABLED else "⚪ OFF"
+        imghippo_badge  = "🟢 ON" if getattr(config, "IMGHIPPO_ENABLED", False) else "⚪ OFF"
 
         summary_section = (
             f"📊 Platform Posting Summary:\n"
@@ -516,7 +524,8 @@ async def _send_daily_report(chat_id):
             f"  🐘 Mastodon  : {mastodon_st['today']} today  |  {mastodon_st['total']} all-time  ({masto_badge})\n"
             f"  📷 Pixelfed  : {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time  ({pixelfed_badge})\n"
             f"  🖼️ Freeimage : {freeimage_st['today']} today  |  {freeimage_st['total']} all-time  ({freeimage_badge})\n"
-            f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n\n"
+            f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n"
+            f"  🦛 Imghippo  : {imghippo_st['today']} today  |  {imghippo_st['total']} all-time  ({imghippo_badge})\n\n"
         )
 
         revenue_section = ""
@@ -559,6 +568,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += "  • Freeimage: https://freeimage.host/muthelyrics\n"
         if IMGBB_ENABLED:
             crosspost_section += "  • ImgBB: https://muthelyrics.imgbb.com/\n"
+        if getattr(config, "IMGHIPPO_ENABLED", False):
+            crosspost_section += "  • Imghippo: https://www.imghippo.com/dashboard\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -1706,9 +1717,10 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             action_note = "Your pin is live on Pinterest right now."
 
             # ── Cross-post to all enabled platforms (same as scheduler) ──────────
-            _arena_result = _tumblr_result = _bsky_result = _raindrop_result = _mastodon_result = _deviantart_result = _pixelfed_result = _freeimage_result = _imgbb_result = None
+            _arena_result = _tumblr_result = _bsky_result = _raindrop_result = _mastodon_result = _deviantart_result = _pixelfed_result = _freeimage_result = _imgbb_result = _imghippo_result = None
             _fi_url = None
             _ibb_url = None
+            _hippo_url = None
             _cross_fn = os.path.basename(processed_path)
             _cross_img = ""  # no public CDN URL yet for manual uploads
 
@@ -1873,6 +1885,25 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             except Exception as e:
                 _imgbb_result = False; logger.warning(f"[TG BOT] ImgBB cross-post error: {e}")
 
+            try:
+                from config import IMGHIPPO_ENABLED
+                if IMGHIPPO_ENABLED:
+                    from imghippo_uploader import post_to_imghippo
+                    from database import mark_imghippo_posted, is_imghippo_posted
+                    if not is_imghippo_posted(_cross_fn):
+                        _hippo_url = post_to_imghippo(
+                            image_path=processed_path,
+                            title=title,
+                            anime_name=anime_name,
+                            affiliate_url=amazon_link,
+                        )
+                        _imghippo_result = bool(_hippo_url)
+                        if _hippo_url: mark_imghippo_posted(_cross_fn, post_url=_hippo_url, title=title, image_url=_public_img)
+                    else:
+                        _imghippo_result = True
+            except Exception as e:
+                _imghippo_result = False; logger.warning(f"[TG BOT] Imghippo cross-post error: {e}")
+
             # Auto-dispatch stock photography uploads if configured
             try:
                 from scheduler import _dispatch_stock_uploads_async
@@ -1887,7 +1918,7 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 f"🦋 Bluesky {_icon(_bsky_result)}  💧 Raindrop {_icon(_raindrop_result)}\n"
                 f"🐘 Mastodon {_icon(_mastodon_result)}  🎭 DeviantArt {_icon(_deviantart_result)}\n"
                 f"📷 Pixelfed {_icon(_pixelfed_result)}  🖼️ Freeimage {_icon(_freeimage_result)}\n"
-                f"🖼️ ImgBB   {_icon(_imgbb_result)}"
+                f"🖼️ ImgBB   {_icon(_imgbb_result)}  🦛 Imghippo {_icon(_imghippo_result)}"
             )
 
 
@@ -1931,7 +1962,7 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 InlineKeyboardButton("🎯 View Amazon Merch", url=target_url or amazon_link),
             ]
         ]
-        from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL, FREEIMAGE_ENABLED, IMGBB_ENABLED
+        from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL, FREEIMAGE_ENABLED, IMGBB_ENABLED, IMGHIPPO_ENABLED
         if _pixelfed_result and _pix_url:
             buttons.append([InlineKeyboardButton("📷 View on Pixelfed", url=_pix_url)])
         elif PIXELFED_ENABLED:
@@ -1946,6 +1977,11 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             buttons.append([InlineKeyboardButton("🖼️ View on ImgBB", url=_ibb_url)])
         elif IMGBB_ENABLED:
             buttons.append([InlineKeyboardButton("🖼️ ImgBB Gallery", url="https://muthelyrics.imgbb.com/")])
+
+        if _imghippo_result and _hippo_url:
+            buttons.append([InlineKeyboardButton("🦛 View on Imghippo", url=_hippo_url)])
+        elif IMGHIPPO_ENABLED:
+            buttons.append([InlineKeyboardButton("🦛 Imghippo Gallery", url="https://www.imghippo.com/dashboard")])
 
         if not uploaded_ok:
             buttons.append([InlineKeyboardButton("🚀 Post to Pinterest NOW", callback_data="btn_postnow")])
@@ -1978,11 +2014,12 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
                              pixelfed_ok=None, pixelfed_url: str = "",
                              freeimage_ok=None, freeimage_url: str = "",
-                             imgbb_ok=None, imgbb_url: str = ""):
+                             imgbb_ok=None, imgbb_url: str = "",
+                             imghippo_ok=None, imghippo_url: str = ""):
     """
     Send a rich Telegram notification after every successful Pinterest post.
     Sends the actual image + details. FREE — no limits at 3 messages/day.
-    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok: True=posted, False=failed, None=disabled
+    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok / imghippo_ok: True=posted, False=failed, None=disabled
     """
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -2010,7 +2047,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     cross_lines = ""
     if (arena_ok is not None or tumblr_ok is not None or bluesky_ok is not None
             or raindrop_ok is not None or mastodon_ok is not None or deviantart_ok is not None
-            or pixelfed_ok is not None or freeimage_ok is not None or imgbb_ok is not None):
+            or pixelfed_ok is not None or freeimage_ok is not None or imgbb_ok is not None
+            or imghippo_ok is not None):
         cross_lines = (
             f"\n{'─' * 26}\n"
             f"🔮 Are.na    {_platform_icon(arena_ok)}  "
@@ -2021,7 +2059,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🎭 DeviantArt {_platform_icon(deviantart_ok)}\n"
             f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}  "
             f"🖼️ Freeimage {_platform_icon(freeimage_ok)}\n"
-            f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}"
+            f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}  "
+            f"🦛 Imghippo  {_platform_icon(imghippo_ok)}"
         )
 
     caption = (
@@ -2038,7 +2077,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         amazon_url=target_url or link,
         pixelfed_url=pixelfed_url,
         freeimage_url=freeimage_url,
-        imgbb_url=imgbb_url
+        imgbb_url=imgbb_url,
+        imghippo_url=imghippo_url
     )
 
     async def _send():
@@ -2416,6 +2456,14 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             imgbb_status = "🟢 ACTIVE (API Key Verified)" if verify_imgbb_token() else "🟡 REACHABLE"
         imgbb_st = get_imgbb_stats(today_str)
 
+        # Imghippo status
+        imghippo_status = "DISABLED (IMGHIPPO_ENABLED=false)"
+        from config import IMGHIPPO_ENABLED
+        if IMGHIPPO_ENABLED:
+            from imghippo_uploader import verify_imghippo_token
+            imghippo_status = "🟢 ACTIVE (API Key Verified)" if verify_imghippo_token() else "🟡 REACHABLE"
+        imghippo_st = get_imghippo_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -2458,6 +2506,10 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {imgbb_status}\n"
             f"  • Posts: {imgbb_st['today']} today  |  {imgbb_st['total']} all-time\n"
             f"  • Link: https://muthelyrics.imgbb.com/\n\n"
+            f"🦛 Imghippo:\n"
+            f"  • Status: {imghippo_status}\n"
+            f"  • Posts: {imghippo_st['today']} today  |  {imghippo_st['total']} all-time\n"
+            f"  • Link: https://www.imghippo.com/dashboard\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /arena_test — Test Are.na block upload\n"
@@ -2468,6 +2520,7 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  /pixelfed_test — Test Pixelfed photo & caption post\n"
             f"  /freeimage_test — Test Freeimage.host upload\n"
             f"  /imgbb_test — Test ImgBB upload\n"
+            f"  /imghippo_test — Test Imghippo upload\n"
             f"  /testpost — Test Pinterest webhook"
         )
         await update.message.reply_text(msg)
@@ -2973,6 +3026,112 @@ async def cmd_imgbb_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await update.message.reply_text(f"ImgBB test error: {e}")
 
 
+async def cmd_imghippo(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Imghippo API stats and dashboard link."""
+    if not _is_admin(update): return
+    try:
+        from imghippo_uploader import get_imghippo_info, verify_imghippo_token
+        from database import get_imghippo_stats
+        from config import IMGHIPPO_ENABLED
+        enabled_str = "ENABLED" if IMGHIPPO_ENABLED else "DISABLED (set IMGHIPPO_ENABLED=true)"
+        valid = verify_imghippo_token()
+        info = get_imghippo_info()
+        stats = get_imghippo_stats()
+
+        recent_lines = []
+        for i, r in enumerate(stats.get("recent", [])[:3], 1):
+            recent_lines.append(f"  {i}. {r['title'][:30]} -> {r['post_url']}")
+        recent_str = "\n".join(recent_lines) if recent_lines else "  No uploads recorded yet."
+
+        msg = (
+            f"🦛 Imghippo Status: {enabled_str}\n"
+            f"{'═' * 34}\n"
+            f"API Status: {'🟢 Verified & Connected' if valid else '🟡 Reachable'}\n"
+            f"API Key   : {info['api_key_masked']}\n"
+            f"Dashboard : {info['profile_url']}\n\n"
+            f"📊 Upload Statistics:\n"
+            f"  • Today    : {stats['today']} images\n"
+            f"  • All-Time : {stats['total']} images\n\n"
+            f"Recent Uploads:\n{recent_str}\n\n"
+            f"👉 Use /imghippo_test to post a live anime test poster."
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imghippo error: {e}", exc_info=True)
+        await update.message.reply_text(f"Imghippo error: {e}")
+
+
+async def cmd_imghippo_test(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Upload a test anime poster with real anime metadata & Amazon affiliate link to Imghippo."""
+    if not _is_admin(update): return
+    await update.message.reply_text("⏳ Uploading real anime test poster to Imghippo...")
+    try:
+        from imghippo_uploader import post_to_imghippo
+        from database import mark_imghippo_posted
+        local_img = None
+        for folder in ["processed", "downloads"]:
+            if os.path.exists(folder):
+                for f in sorted(os.listdir(folder), reverse=True):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        local_img = os.path.join(folder, f)
+                        break
+            if local_img:
+                break
+
+        anime_name = "Attack on Titan"
+        title = "Attack on Titan Eren Yeager Aesthetic Poster"
+        if local_img:
+            fn = os.path.basename(local_img).lower()
+            if "naruto" in fn:
+                anime_name = "Naruto Shippuden"
+                title = "Naruto Uzumaki Sage Mode Minimalist Poster"
+            elif "aot" in fn or "titan" in fn:
+                anime_name = "Attack on Titan"
+                title = "Attack on Titan Eren Yeager Aesthetic Poster"
+            elif "demon" in fn or "slayer" in fn or "tanjiro" in fn:
+                anime_name = "Demon Slayer"
+                title = "Demon Slayer Tanjiro Kamado Canvas Poster"
+            elif "jujutsu" in fn or "jjk" in fn or "gojo" in fn:
+                anime_name = "Jujutsu Kaisen"
+                title = "Gojo Satoru Domain Expansion Anime Poster"
+            elif "solo" in fn or "leveling" in fn:
+                anime_name = "Solo Leveling"
+                title = "Solo Leveling Sung Jin-Woo Shadow Monarch Poster"
+
+        from amazon_search import generate_amazon_link
+        real_affiliate_link = generate_amazon_link(anime_name, title=title)
+
+        post_url = post_to_imghippo(
+            image_path=local_img or "downloads/test.jpg",
+            title=title,
+            anime_name=anime_name,
+            affiliate_url=real_affiliate_link
+        )
+        if post_url:
+            if local_img:
+                mark_imghippo_posted(os.path.basename(local_img), post_url=post_url, title=title)
+            btn = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🦛 View on Imghippo", url=post_url),
+                InlineKeyboardButton("🛒 View Amazon Merch", url=real_affiliate_link),
+            ]])
+            await update.message.reply_text(
+                f"✅ Imghippo upload succeeded with REAL anime data!\n\n"
+                f"🎌 Anime: {anime_name}\n"
+                f"📝 Title: {title}\n"
+                f"🛍️ Amazon Merch: {real_affiliate_link}\n"
+                f"🔗 Direct Imghippo URL: {post_url}",
+                reply_markup=btn
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Imghippo test upload failed.\n"
+                "Check that IMGHIPPO_API_KEY is set in .env."
+            )
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imghippo_test error: {e}", exc_info=True)
+        await update.message.reply_text(f"Imghippo test error: {e}")
+
+
 
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
@@ -3117,6 +3276,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("imgbb",         cmd_imgbb),
             ("imgbb_test",    cmd_imgbb_test),
             ("imgbbtest",     cmd_imgbb_test),
+            ("imghippo",      cmd_imghippo),
+            ("imghippo_test", cmd_imghippo_test),
+            ("imghippotest",  cmd_imghippo_test),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -3181,6 +3343,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("pixelfed_test", "Post test photo to Pixelfed"),
                 BotCommand("freeimage",     "Freeimage.host profile stats & link"),
                 BotCommand("freeimage_test","Post test photo to Freeimage.host"),
+                BotCommand("imgbb",         "ImgBB profile stats & link"),
+                BotCommand("imgbb_test",    "Post test photo to ImgBB"),
+                BotCommand("imghippo",      "Imghippo profile stats & link"),
+                BotCommand("imghippo_test", "Post test photo to Imghippo"),
                 BotCommand("help",          "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")
