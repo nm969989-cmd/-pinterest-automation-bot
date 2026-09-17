@@ -1,12 +1,12 @@
 """
 arena_uploader.py — Are.na Visual Curation Cross-Poster
 =========================================================
-Posts image blocks to the Are.na channel configured in .env.
+Posts image blocks to the Are.na channel configured in .env using the Are.na v3 REST API.
 Mirrors the pinterest_uploader.py / shutterstock_uploader.py pattern.
 
-Are.na API v2 docs: https://dev.are.na/documentation
-Channel: are.na/manoj-muthelyrics/aesthetic-inspiration
-Plan: Guest (200 blocks free) -> upgrade to Premium ($7/mo) for unlimited
+Are.na API v3 docs: https://www.are.na/developers/explore
+Channel: are.na/manoj-muthelyrics/aesthetic-inspiration-wb-oqfprvnw
+Plan: Free (200 blocks free) -> upgrade to Premium ($7/mo) for unlimited
 
 Usage (standalone test):
     python arena_uploader.py
@@ -19,32 +19,32 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 # -- API Constants -------------------------------------------------------------
-ARENA_API_BASE = "https://api.are.na/v2"
+ARENA_API_BASE = "https://api.are.na/v3"
 _MAX_RETRIES   = 3
 _RETRY_DELAYS  = [0, 5, 15]   # seconds -- mirrors pinterest_uploader pattern
 
 
 def _get_headers() -> dict:
-    """Returns auth headers for Are.na API calls."""
+    """Returns auth headers for Are.na v3 API calls."""
     from config import ARENA_ACCESS_TOKEN
     if not ARENA_ACCESS_TOKEN:
         raise ValueError("ARENA_ACCESS_TOKEN is not set in .env")
     return {
-        "Authorization": f"Bearer {ARENA_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {ARENA_ACCESS_TOKEN.strip()}",
         "Content-Type":  "application/json",
     }
 
 
 def post_to_arena(image_url: str, title: str, description: str, link: str = "") -> bool:
     """
-    Posts an image block to the Are.na channel (ARENA_CHANNEL_SLUG in .env).
+    Posts an image block to the Are.na channel (ARENA_CHANNEL_SLUG in .env) using Are.na v3 REST API.
 
     Args:
         image_url:   Publicly accessible image URL (e.g. from Cloudinary / Catbox).
-        title:       Pin title -- prepended to the block description.
+        title:       Pin title -- set as block title.
         description: Pin caption / description.
         link:        Optional destination URL (Amazon affiliate link, etc.)
-                     Appended to description so it's visible in the block.
+                     Passed as original_source_url and appended to description.
 
     Returns:
         True on success, False on all failures.
@@ -60,43 +60,36 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
         logger.warning("[Are.na] No image_url provided -- cannot post block.")
         return False
 
-    # -- Build block description -----------------------------------------------
-    # Are.na blocks don't have a separate "title" field for image blocks,
-    # so we pack title + description + link into one rich description string.
-    block_description_parts = []
-    if title:
-        block_description_parts.append(f"[{title}]")
-    if description:
-        block_description_parts.append(description[:400])
-    if link:
-        block_description_parts.append(f"\nLink: {link}")
-    block_description = "\n\n".join(block_description_parts)
-
-    # -- Build request components ---------------------------------------------
-    # Fetch headers first (raises ValueError if token missing)
+    # -- Fetch headers first (raises ValueError if token missing) -------------
     try:
         headers = _get_headers()
     except ValueError as e:
         logger.error(f"[Are.na] Config error: {e}")
         return False
 
-    # Are.na new API: pass auth_token as BOTH Authorization header AND query param.
-    # Bearer-only returns 401 even with a valid personal access token.
-    token   = headers["Authorization"].replace("Bearer ", "")
-    url     = f"{ARENA_API_BASE}/channels/{ARENA_CHANNEL_SLUG}/blocks"
-    params  = {"auth_token": token}
+    # -- Build payload for Are.na v3 POST /v3/blocks --------------------------
+    block_desc = (description or "").strip()
+    if link and link not in block_desc:
+        block_desc = f"{block_desc}\n\nLink: {link}" if block_desc else f"Link: {link}"
+
+    url = f"{ARENA_API_BASE}/blocks"
     payload = {
-        "source":      image_url,           # Are.na fetches + caches the image
-        "description": block_description,   # Shown below the image in channel
+        "value": image_url,
+        "channel_ids": [ARENA_CHANNEL_SLUG],
     }
+    if title:
+        payload["title"] = title[:255]
+    if block_desc:
+        payload["description"] = block_desc[:1000]
+    if link:
+        payload["original_source_url"] = link
 
     # -- POST with retry (3 attempts, exponential backoff) --------------------
     for attempt, delay in enumerate(_RETRY_DELAYS, 1):
         if delay:
             time.sleep(delay)
         try:
-            res = requests.post(url, json=payload, headers=headers,
-                                params=params, timeout=20)
+            res = requests.post(url, json=payload, headers=headers, timeout=25)
             if res.status_code in (200, 201):
                 block_id = res.json().get("id", "?")
                 logger.info(
@@ -104,8 +97,20 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
                 return True
+            elif res.status_code == 403:
+                # 403 = Scope / permission error (token has Read-only instead of Read + Write)
+                err_msg = ""
+                try:
+                    err_msg = res.json().get("details", {}).get("message", res.text[:120])
+                except Exception:
+                    err_msg = res.text[:120]
+                logger.error(
+                    f"[Are.na] Permission denied (403): {err_msg} -- "
+                    "ARENA_ACCESS_TOKEN must have 'Read + Write' access level."
+                )
+                return False   # Token lacks write scope, retry won't fix it
             elif res.status_code == 422:
-                # 422 = Unprocessable entity (bad URL, duplicate, etc.)
+                # 422 = Unprocessable entity (bad URL, invalid format, etc.)
                 logger.warning(
                     f"[Are.na] Block rejected (422): {res.text[:120]} -- "
                     "image URL may be invalid or already posted."
@@ -127,36 +132,38 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
 
 def get_arena_channel_info() -> dict:
     """
-    Fetches Are.na channel metadata: title, block count, slug.
+    Fetches Are.na channel metadata: title, block count, slug, status, URL.
     Used by /arena Telegram command and doctor health check.
 
     Returns:
-        dict with keys: title, slug, length (block count), status
+        dict with keys: title, slug, length (block count), status, url
         or None on failure.
     """
     from config import ARENA_CHANNEL_SLUG
 
     try:
-        from config import ARENA_CHANNEL_SLUG
         headers = _get_headers()
-        token   = headers["Authorization"].replace("Bearer ", "")
         res = requests.get(
             f"{ARENA_API_BASE}/channels/{ARENA_CHANNEL_SLUG}",
             headers=headers,
-            params={"auth_token": token},
             timeout=10,
         )
         if res.status_code == 200:
             data = res.json()
+            counts = data.get("counts", {})
+            block_count = counts.get("blocks", counts.get("contents", 0))
+            owner = data.get("owner", {})
+            owner_slug = owner.get("slug", "user")
+            channel_slug = data.get("slug", ARENA_CHANNEL_SLUG)
             return {
                 "title":  data.get("title", ARENA_CHANNEL_SLUG),
-                "slug":   data.get("slug",  ARENA_CHANNEL_SLUG),
-                "length": data.get("length", 0),
-                "status": data.get("status", "unknown"),
-                "url":    f"https://www.are.na/manoj-muthelyrics/{data.get('slug', ARENA_CHANNEL_SLUG)}",
+                "slug":   channel_slug,
+                "length": block_count,
+                "status": data.get("visibility", data.get("state", "public")),
+                "url":    f"https://www.are.na/{owner_slug}/{channel_slug}",
             }
         else:
-            logger.warning(f"[Are.na] Channel info failed: HTTP {res.status_code}")
+            logger.warning(f"[Are.na] Channel info failed: HTTP {res.status_code} - {res.text[:100]}")
     except Exception as e:
         logger.error(f"[Are.na] get_arena_channel_info error: {e}")
     return None
@@ -164,30 +171,25 @@ def get_arena_channel_info() -> dict:
 
 def verify_arena_token() -> bool:
     """
-    Checks if the ARENA_ACCESS_TOKEN is valid by fetching the channel.
-    (The /v2/me endpoint was removed from Are.na's new API — returns 410.)
-    Returns True if token can successfully fetch the configured channel.
+    Checks if the ARENA_ACCESS_TOKEN is valid via /v3/me endpoint.
+    Returns True if token can successfully authenticate.
     """
     try:
-        from config import ARENA_CHANNEL_SLUG
         headers = _get_headers()
-        token   = headers["Authorization"].replace("Bearer ", "")
         res = requests.get(
-            f"{ARENA_API_BASE}/channels/{ARENA_CHANNEL_SLUG}",
+            f"{ARENA_API_BASE}/me",
             headers=headers,
-            params={"auth_token": token},
             timeout=10,
         )
         if res.status_code == 200:
             data = res.json()
-            logger.info(f"[Are.na] Token valid -- channel: {data.get('title', '?')}")
+            logger.info(f"[Are.na] Token valid -- logged in as: {data.get('name', '?')} (@{data.get('slug', '?')})")
             return True
         elif res.status_code == 401:
-            logger.warning(f"[Are.na] Token invalid (401).")
+            logger.warning("[Are.na] Token invalid (HTTP 401 Unauthorized).")
             return False
         else:
-            # 200 not required for token check; any non-401 means token is accepted
-            logger.warning(f"[Are.na] Channel check returned HTTP {res.status_code}")
+            logger.warning(f"[Are.na] Token check returned HTTP {res.status_code}")
             return res.status_code != 401
     except Exception as e:
         logger.error(f"[Are.na] Token verification error: {e}")
@@ -197,7 +199,7 @@ def verify_arena_token() -> bool:
 # -- Standalone test ----------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
-    print("Are.na Uploader -- Standalone Test")
+    print("Are.na Uploader (v3 API) -- Standalone Test")
     print("=" * 60)
 
     print("\n[1] Verifying token...")
@@ -208,7 +210,7 @@ if __name__ == "__main__":
     info = get_arena_channel_info()
     if info:
         print(f"    Channel  : {info['title']}")
-        print(f"    Blocks   : {info['length']}/200 used (Guest plan)")
+        print(f"    Blocks   : {info['length']}/200 used (Free plan)")
         print(f"    Status   : {info['status']}")
         print(f"    URL      : {info['url']}")
     else:

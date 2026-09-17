@@ -91,6 +91,24 @@ MASTODON_INSTANCE_URL  = os.getenv('MASTODON_INSTANCE_URL', 'https://mastodon.so
 MASTODON_ACCESS_TOKEN  = os.getenv('MASTODON_ACCESS_TOKEN', '').strip()
 MASTODON_ENABLED       = os.getenv('MASTODON_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(MASTODON_ACCESS_TOKEN)
 
+# DeviantArt Art Community Cross-Post
+DEVIANTART_CLIENT_ID     = os.getenv('DEVIANTART_CLIENT_ID', '').strip()
+DEVIANTART_CLIENT_SECRET = os.getenv('DEVIANTART_CLIENT_SECRET', '').strip()
+DEVIANTART_ACCESS_TOKEN  = os.getenv('DEVIANTART_ACCESS_TOKEN', '').strip()
+DEVIANTART_REFRESH_TOKEN = os.getenv('DEVIANTART_REFRESH_TOKEN', '').strip()
+DEVIANTART_ENABLED       = os.getenv('DEVIANTART_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+# Pixelfed (Fediverse) Photo & Visual Art Sharing
+PIXELFED_INSTANCE_URL  = os.getenv('PIXELFED_INSTANCE_URL', 'https://pixelfed.social').strip().rstrip('/')
+PIXELFED_ACCESS_TOKEN  = os.getenv('PIXELFED_ACCESS_TOKEN', '').strip()
+PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(PIXELFED_ACCESS_TOKEN)
+
+# Freeimage.host Dedicated Image Uploading
+FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '6d207e02198a847aa98d0a2a901485a5').strip()
+FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(FREEIMAGE_API_KEY)
+
+
+
 
 
 

@@ -213,6 +213,54 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_mastodon_filename
             ON mastodon_posts (filename)
         """)
+
+        # ── DeviantArt Cross-Post Tracking ────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deviantart_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                itemid      INTEGER,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_deviantart_filename
+            ON deviantart_posts (filename)
+        """)
+
+        # ── Pixelfed Cross-Post Tracking ─────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pixelfed_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_url    TEXT,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pixelfed_filename
+            ON pixelfed_posts (filename)
+        """)
+
+        # ── Freeimage.host Cross-Post Tracking ──────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS freeimage_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_url    TEXT,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_freeimage_filename
+            ON freeimage_posts (filename)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -470,8 +518,110 @@ def get_mastodon_stats(today_str: str = None) -> dict:
     }
 
 
+# ── DeviantArt Cross-Post Tracking ──────────────────────────────────────────
+
+def is_deviantart_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to DeviantArt (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM deviantart_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_deviantart_posted(filename: str, itemid: int = 0,
+                           title: str = "", image_url: str = "") -> None:
+    """Records a successful DeviantArt post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO deviantart_posts (filename, itemid, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, itemid, title, image_url)
+        )
+        conn.commit()
+
+
+def get_deviantart_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time DeviantArt posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM deviantart_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM deviantart_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, image_url, posted_at
+            FROM deviantart_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "image_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
+
+# ── Pixelfed Cross-Post Tracking ─────────────────────────────────────────────
+
+def is_pixelfed_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Pixelfed (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pixelfed_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_pixelfed_posted(filename: str, post_url: str = "",
+                         title: str = "", image_url: str = "") -> None:
+    """Records a successful Pixelfed post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pixelfed_posts (filename, post_url, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_url, title, image_url)
+        )
+        conn.commit()
+
+
+def get_pixelfed_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Pixelfed posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM pixelfed_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM pixelfed_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, post_url, posted_at
+            FROM pixelfed_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
+
 def get_multi_platform_stats(today_str: str = None) -> dict:
-    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon)."""
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed)."""
     if not today_str:
         import datetime as _dt
         today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
@@ -483,6 +633,8 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     bluesky_stats = get_bluesky_stats(today_str)
     raindrop_stats = get_raindrop_stats(today_str)
     mastodon_stats = get_mastodon_stats(today_str)
+    pixelfed_stats = get_pixelfed_stats(today_str)
+    freeimage_stats = get_freeimage_stats(today_str)
 
     return {
         "date": today_str,
@@ -496,6 +648,59 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         "bluesky": bluesky_stats,
         "raindrop": raindrop_stats,
         "mastodon": mastodon_stats,
+        "pixelfed": pixelfed_stats,
+        "freeimage": freeimage_stats,
+    }
+
+
+# ── Freeimage.host Cross-Post Tracking ───────────────────────────────────────
+
+def is_freeimage_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to Freeimage.host (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM freeimage_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_freeimage_posted(filename: str, post_url: str = "",
+                          title: str = "", image_url: str = "") -> None:
+    """Records a successful Freeimage.host upload. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO freeimage_posts (filename, post_url, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_url, title, image_url)
+        )
+        conn.commit()
+
+
+def get_freeimage_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Freeimage.host upload statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM freeimage_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM freeimage_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, post_url, posted_at
+            FROM freeimage_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
     }
 
 

@@ -191,6 +191,57 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _masto_e:
         mastodon_status = f"🟡 Check failed ({_masto_e})"
 
+    # 13. DeviantArt Cross-Post Status
+    deviantart_status = "⚪ Disabled"
+    try:
+        if config.DEVIANTART_ENABLED and (config.DEVIANTART_ACCESS_TOKEN or config.DEVIANTART_REFRESH_TOKEN):
+            from deviantart_uploader import verify_deviantart_token, get_deviantart_user_info
+            da_ok = verify_deviantart_token()
+            if da_ok:
+                da_info = get_deviantart_user_info()
+                da_user = da_info.get("username", "user")
+                deviantart_status = f"🟢 Active (@{da_user})"
+            else:
+                deviantart_status = "🔴 Token Invalid"
+                warnings.append("DeviantArt token is invalid — run 'python get_deviantart_token.py'")
+        elif config.DEVIANTART_ENABLED and not config.DEVIANTART_ACCESS_TOKEN and not config.DEVIANTART_REFRESH_TOKEN:
+            deviantart_status = "🔴 Credentials Missing"
+            warnings.append("DEVIANTART_ENABLED=true but credentials are empty in .env")
+    except Exception as _da_e:
+        deviantart_status = f"🟡 Check failed ({_da_e})"
+
+    # 14. Pixelfed Cross-Post Status
+    pixelfed_status = "⚪ Disabled"
+    try:
+        if config.PIXELFED_ENABLED and config.PIXELFED_ACCESS_TOKEN:
+            from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
+            pix_ok = verify_pixelfed_token()
+            if pix_ok:
+                pinfo = get_pixelfed_profile_info()
+                statuses = pinfo.get("statuses_count", 0) if pinfo else "?"
+                pixelfed_status = f"🟢 Active (@{pinfo.get('username', 'user')}, {statuses} posts)"
+            else:
+                pixelfed_status = "🔴 Token Invalid"
+                warnings.append("Pixelfed token is invalid — check PIXELFED_ACCESS_TOKEN in .env")
+        elif config.PIXELFED_ENABLED and not config.PIXELFED_ACCESS_TOKEN:
+            pixelfed_status = "🔴 Token Missing"
+            warnings.append("PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env")
+    except Exception as _pix_e:
+        pixelfed_status = f"🟡 Check failed ({_pix_e})"
+
+    # 15. Freeimage.host Cross-Post Status
+    freeimage_status = "⚪ Disabled"
+    try:
+        if getattr(config, "FREEIMAGE_ENABLED", False):
+            from freeimage_uploader import verify_freeimage_token
+            fi_ok = verify_freeimage_token()
+            if fi_ok:
+                freeimage_status = "🟢 Active (API Key Verified)"
+            else:
+                freeimage_status = "🟡 Reachable"
+    except Exception as _fi_e:
+        freeimage_status = f"🟡 Check failed ({_fi_e})"
+
     # Overall Health Verdict
     if any("🔴" in w or "Critical" in w or "DB Error" in w for w in warnings):
         overall_badge = "🔴 ATTENTION NEEDED"
@@ -225,6 +276,9 @@ def run_full_system_diagnostic() -> dict:
         "bluesky_status": bluesky_status,
         "raindrop_status": raindrop_status,
         "mastodon_status": mastodon_status,
+        "deviantart_status": deviantart_status,
+        "pixelfed_status": pixelfed_status,
+        "freeimage_status": freeimage_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
     }
 
@@ -273,6 +327,9 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
         f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}\n"
         f"  • Mastodon           : {diag.get('mastodon_status', 'N/A')}\n"
+        f"  • DeviantArt         : {diag.get('deviantart_status', 'N/A')}\n"
+        f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}\n"
+        f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}\n"
         f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )

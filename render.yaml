@@ -81,6 +81,29 @@ services:
         sync: false
       - key: MASTODON_ENABLED
         value: "true"
+      # DeviantArt Cross-Posting
+      - key: DEVIANTART_CLIENT_ID
+        sync: false
+      - key: DEVIANTART_CLIENT_SECRET
+        sync: false
+      - key: DEVIANTART_ACCESS_TOKEN
+        sync: false
+      - key: DEVIANTART_REFRESH_TOKEN
+        sync: false
+      - key: DEVIANTART_ENABLED
+        value: "true"
+      # Pixelfed Cross-Posting
+      - key: PIXELFED_INSTANCE_URL
+        value: "https://pixelfed.social"
+      - key: PIXELFED_ACCESS_TOKEN
+        sync: false
+      - key: PIXELFED_ENABLED
+        value: "true"
+      # Freeimage.host Cross-Posting
+      - key: FREEIMAGE_API_KEY
+        value: "6d207e02198a847aa98d0a2a901485a5"
+      - key: FREEIMAGE_ENABLED
+        value: "true"
 
 
 

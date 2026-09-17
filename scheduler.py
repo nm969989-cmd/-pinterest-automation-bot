@@ -406,11 +406,13 @@ class PinScheduler:
                             image_path: str, pin_type: str,
                             posted_today: int, time_ist: str,
                             arena_ok=None, tumblr_ok=None, bluesky_ok=None,
-                            raindrop_ok=None, mastodon_ok=None):
+                            raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
+                            pixelfed_ok=None, pixelfed_url: str = "",
+                            freeimage_ok=None, freeimage_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
         Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
-        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok: True=posted, False=failed, None=disabled
+        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok: True=posted, False=failed, None=disabled
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -428,6 +430,11 @@ class PinScheduler:
                 bluesky_ok=bluesky_ok,
                 raindrop_ok=raindrop_ok,
                 mastodon_ok=mastodon_ok,
+                deviantart_ok=deviantart_ok,
+                pixelfed_ok=pixelfed_ok,
+                pixelfed_url=pixelfed_url,
+                freeimage_ok=freeimage_ok,
+                freeimage_url=freeimage_url,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -884,6 +891,80 @@ class PinScheduler:
                                         _mastodon_result = False
                                         logger.warning(f"[Scheduler] Mastodon cross-post failed (non-critical): {_masto_err}")
 
+                                    # ── DeviantArt Cross-Post ───────────────────────────────────────────
+                                    _da_result = None
+                                    try:
+                                        from config import DEVIANTART_ENABLED
+                                        if DEVIANTART_ENABLED:
+                                            from deviantart_uploader import post_to_deviantart
+                                            from database import mark_deviantart_posted, is_deviantart_posted
+                                            if not is_deviantart_posted(_cross_fn):
+                                                _da_ok = post_to_deviantart(
+                                                    image_url   = _public_img or _cross_img,
+                                                    title       = pin["title"],
+                                                    description = pin.get("description", ""),
+                                                    link        = pin.get("link", ""),
+                                                )
+                                                _da_result = bool(_da_ok)
+                                                if _da_ok:
+                                                    mark_deviantart_posted(_cross_fn, title=pin["title"], image_url=_cross_img)
+                                            else:
+                                                _da_result = True  # already posted
+                                    except Exception as _da_err:
+                                        _da_result = False
+                                        logger.warning(f"[Scheduler] DeviantArt cross-post failed (non-critical): {_da_err}")
+
+                                    # ── Pixelfed Cross-Post ─────────────────────────────────────────────
+                                    _pixelfed_result = None
+                                    _pix_url = None
+                                    try:
+                                        from config import PIXELFED_ENABLED
+                                        if PIXELFED_ENABLED:
+                                            from pixelfed_uploader import post_to_pixelfed
+                                            from database import mark_pixelfed_posted, is_pixelfed_posted
+                                            if not is_pixelfed_posted(_cross_fn):
+                                                _pix_url = post_to_pixelfed(
+                                                    image_url   = _public_img or _cross_img,
+                                                    title       = pin["title"],
+                                                    description = pin.get("description", ""),
+                                                    link        = pin.get("link", ""),
+                                                    image_path  = image_path,
+                                                )
+                                                _pixelfed_result = bool(_pix_url)
+                                                if _pix_url:
+                                                    mark_pixelfed_posted(_cross_fn, post_url=_pix_url,
+                                                                         title=pin["title"], image_url=_public_img or _cross_img)
+                                            else:
+                                                _pixelfed_result = True  # already posted
+                                    except Exception as _pix_err:
+                                        _pixelfed_result = False
+                                        logger.warning(f"[Scheduler] Pixelfed cross-post failed (non-critical): {_pix_err}")
+
+                                    # ── Freeimage.host Cross-Post ───────────────────────────────────────
+                                    _freeimage_result = None
+                                    _fi_url = None
+                                    try:
+                                        from config import FREEIMAGE_ENABLED
+                                        if FREEIMAGE_ENABLED:
+                                            from freeimage_uploader import post_to_freeimage
+                                            from database import mark_freeimage_posted, is_freeimage_posted
+                                            if not is_freeimage_posted(_cross_fn):
+                                                _fi_url = post_to_freeimage(
+                                                    image_path    = image_path,
+                                                    title         = pin["title"],
+                                                    anime_name    = pin.get("anime_name", ""),
+                                                    affiliate_url = pin.get("link", "")
+                                                )
+                                                _freeimage_result = bool(_fi_url)
+                                                if _fi_url:
+                                                    mark_freeimage_posted(_cross_fn, post_url=_fi_url,
+                                                                         title=pin["title"], image_url=_public_img or _cross_img)
+                                            else:
+                                                _freeimage_result = True  # already posted
+                                    except Exception as _fi_err:
+                                        _freeimage_result = False
+                                        logger.warning(f"[Scheduler] Freeimage cross-post failed (non-critical): {_fi_err}")
+
                                     # ── Notify admin (after cross-posts so results are known) ────────────
                                     self._notify_pin_posted(
                                         title=pin["title"],
@@ -898,6 +979,11 @@ class PinScheduler:
                                         bluesky_ok=_bsky_result,
                                         raindrop_ok=_raindrop_result,
                                         mastodon_ok=_mastodon_result,
+                                        deviantart_ok=_da_result,
+                                        pixelfed_ok=_pixelfed_result,
+                                        pixelfed_url=_pix_url or "",
+                                        freeimage_ok=_freeimage_result,
+                                        freeimage_url=_fi_url or "",
                                     )
 
                                     # Auto-dispatch to configured stock photography platforms
