@@ -653,7 +653,7 @@ def get_pixelfed_stats(today_str: str = None) -> dict:
 
 
 def get_multi_platform_stats(today_str: str = None) -> dict:
-    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed)."""
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, DeviantArt, Freeimage, ImgBB, Imghippo)."""
     if not today_str:
         import datetime as _dt
         today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
@@ -666,6 +666,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     raindrop_stats = get_raindrop_stats(today_str)
     mastodon_stats = get_mastodon_stats(today_str)
     pixelfed_stats = get_pixelfed_stats(today_str)
+    deviantart_stats = get_deviantart_stats(today_str)
     freeimage_stats = get_freeimage_stats(today_str)
     imgbb_stats = get_imgbb_stats(today_str)
     imghippo_stats = get_imghippo_stats(today_str)
@@ -683,6 +684,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         "raindrop": raindrop_stats,
         "mastodon": mastodon_stats,
         "pixelfed": pixelfed_stats,
+        "deviantart": deviantart_stats,
         "freeimage": freeimage_stats,
         "imgbb": imgbb_stats,
         "imghippo": imghippo_stats,

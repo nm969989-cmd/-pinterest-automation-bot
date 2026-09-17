@@ -26,10 +26,14 @@ _MAX_RETRIES  = 3
 _RETRY_DELAYS = [0, 5, 15]
 
 
-def _get_access_token() -> str:
+_cached_access_token = ""
+
+
+def _get_access_token(force_refresh: bool = False) -> str:
     """
     Returns valid access token, auto-refreshing via refresh_token if needed.
     """
+    global _cached_access_token
     from config import (
         DEVIANTART_CLIENT_ID,
         DEVIANTART_CLIENT_SECRET,
@@ -37,15 +41,45 @@ def _get_access_token() -> str:
         DEVIANTART_REFRESH_TOKEN,
     )
 
-    token = DEVIANTART_ACCESS_TOKEN
+    if not force_refresh and _cached_access_token:
+        return _cached_access_token
+
+    token = "" if force_refresh else DEVIANTART_ACCESS_TOKEN
     if not token and DEVIANTART_REFRESH_TOKEN:
         token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, DEVIANTART_REFRESH_TOKEN)
+
+    if token:
+        _cached_access_token = token
     return token
+
+
+def _save_token_to_env(key: str, value: str):
+    """Saves updated OAuth token to .env file so it persists across bot runs."""
+    try:
+        env_path = os.path.join(os.path.dirname(__file__), ".env")
+        if not os.path.exists(env_path):
+            return
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith(f"{key}=") or line.startswith(f"export {key}="):
+                new_lines.append(f"{key}={value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"{key}={value}\n")
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        logger.warning(f"[DeviantArt] Failed to update {key} in .env: {e}")
 
 
 def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> str:
     """
-    Refreshes the OAuth2 token and returns new access_token.
+    Refreshes the OAuth2 token, saves rotated tokens to .env, and returns new access_token.
     """
     url = "https://www.deviantart.com/oauth2/token"
     payload = {
@@ -58,7 +92,12 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> st
         r = requests.post(url, data=payload, timeout=20)
         if r.status_code == 200:
             data = r.json()
-            new_access = data.get("access_token")
+            new_access = data.get("access_token", "")
+            new_refresh = data.get("refresh_token", "")
+            if new_access:
+                _save_token_to_env("DEVIANTART_ACCESS_TOKEN", new_access)
+            if new_refresh:
+                _save_token_to_env("DEVIANTART_REFRESH_TOKEN", new_refresh)
             logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
             return new_access
         else:
@@ -213,7 +252,7 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
 
 
 def verify_deviantart_token() -> bool:
-    """Checks if DeviantArt credentials/tokens are valid."""
+    """Checks if DeviantArt credentials/tokens are valid, auto-refreshing if expired."""
     access_token = _get_access_token()
     if not access_token:
         return False
@@ -223,13 +262,25 @@ def verify_deviantart_token() -> bool:
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
-        return r.status_code == 200
+        if r.status_code == 200:
+            return True
+        elif r.status_code == 401:
+            logger.info("[DeviantArt] Access token expired (HTTP 401), refreshing via refresh_token...")
+            new_token = _get_access_token(force_refresh=True)
+            if new_token:
+                r2 = requests.get(
+                    "https://www.deviantart.com/api/v1/oauth2/user/whoami",
+                    headers={"Authorization": f"Bearer {new_token}"},
+                    timeout=10,
+                )
+                return r2.status_code == 200
+        return False
     except Exception:
         return False
 
 
 def get_deviantart_user_info() -> dict:
-    """Returns username and stats from DeviantArt."""
+    """Returns username and stats from DeviantArt, auto-refreshing if expired."""
     access_token = _get_access_token()
     if not access_token:
         return {}
@@ -241,6 +292,16 @@ def get_deviantart_user_info() -> dict:
         )
         if r.status_code == 200:
             return r.json()
+        elif r.status_code == 401:
+            new_token = _get_access_token(force_refresh=True)
+            if new_token:
+                r2 = requests.get(
+                    "https://www.deviantart.com/api/v1/oauth2/user/whoami",
+                    headers={"Authorization": f"Bearer {new_token}"},
+                    timeout=10,
+                )
+                if r2.status_code == 200:
+                    return r2.json()
     except Exception:
         pass
     return {}

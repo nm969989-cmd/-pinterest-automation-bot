@@ -1,35 +1,93 @@
-import sqlite3, sys
+"""
+check_db.py - SQLite Database Inspector & Platform Sync Status
+==============================================================
+Provides quick CLI visibility into recent uploads, cross-posts, and queue state.
+"""
+
+import sys
+import sqlite3
+from database import get_multi_platform_stats, get_queue_counts, _get_conn
+
+# Force UTF-8 console output
 sys.stdout.reconfigure(encoding='utf-8')
-conn = sqlite3.connect('bot_state.db')
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
 
-print("=== UPLOADED FILES (last 5) ===")
-cur.execute('SELECT filename, uploaded_at, title, image_url FROM uploaded_files ORDER BY rowid DESC LIMIT 5')
-for row in cur.fetchall():
-    print(f"  {row['filename']} | {row['uploaded_at']}")
-    print(f"  image_url: {str(row['image_url'])[:120]}")
-    print()
+print("=" * 65)
+print("     ANIME PINTEREST BOT — DATABASE & CROSS-POST INSPECTOR")
+print("=" * 65)
 
-print("\n=== BLUESKY POSTS ===")
-cur.execute('SELECT * FROM bluesky_posts ORDER BY rowid DESC LIMIT 5')
-for row in cur.fetchall():
-    d = dict(row)
-    for k,v in d.items(): print(f"  {k}: {str(v)[:100]}")
-    print()
+# 1. Multi-Platform Totals
+print("\n📊 CROSS-PLATFORM POSTING TOTALS:")
+try:
+    stats = get_multi_platform_stats()
+    queue = get_queue_counts()
+    print(f"  • Queue Status    : {queue['new']} new | {queue['backlog']} backlog | {queue['total']} total")
+    print(f"  • Pinterest Uploads: {stats['pinterest']}")
+    print(f"  • Freeimage.host   : {stats['freeimage']}")
+    print(f"  • ImgBB            : {stats['imgbb']}")
+    print(f"  • Imghippo         : {stats['imghippo']}")
+    print(f"  • Pixelfed         : {stats['pixelfed']}")
+    print(f"  • DeviantArt       : {stats['deviantart']}")
+    print(f"  • Are.na           : {stats['arena']}")
+    print(f"  • Tumblr           : {stats['tumblr']}")
+    print(f"  • Bluesky          : {stats['bluesky']}")
+    print(f"  • Raindrop.io      : {stats['raindrop']}")
+    print(f"  • Mastodon         : {stats['mastodon']}")
+except Exception as e:
+    print(f"  ⚠️ Error fetching multi-platform stats: {e}")
 
-print("\n=== MASTODON POSTS ===")
-cur.execute('SELECT * FROM mastodon_posts ORDER BY rowid DESC LIMIT 5')
-for row in cur.fetchall():
-    d = dict(row)
-    for k,v in d.items(): print(f"  {k}: {str(v)[:100]}")
-    print()
+# 2. Detailed Table Inspect
+with _get_conn() as conn:
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    
+    print("\n📌 RECENT PINTEREST UPLOADS (Last 3):")
+    cur.execute("SELECT filename, uploaded_at, title, image_url FROM uploaded_files ORDER BY rowid DESC LIMIT 3")
+    rows = cur.fetchall()
+    if rows:
+        for r in rows:
+            print(f"  • [{r['uploaded_at']}] {r['title'][:40]} | File: {r['filename']}")
+            print(f"    URL: {str(r['image_url'])[:80]}...")
+    else:
+        print("  (No uploads yet)")
 
-print("\n=== ARENA POSTS ===")
-cur.execute('SELECT * FROM arena_posts ORDER BY rowid DESC LIMIT 5')
-for row in cur.fetchall():
-    d = dict(row)
-    for k,v in d.items(): print(f"  {k}: {str(v)[:100]}")
-    print()
+    print("\n🦛 RECENT IMGHIPPO POSTS (Last 3):")
+    cur.execute("SELECT filename, posted_at, title, post_url FROM imghippo_posts ORDER BY id DESC LIMIT 3")
+    rows = cur.fetchall()
+    if rows:
+        for r in rows:
+            print(f"  • [{r['posted_at']}] {r['title'][:40]} | File: {r['filename']}")
+            print(f"    Post URL: {r['post_url']}")
+    else:
+        print("  (No Imghippo posts yet)")
 
-conn.close()
+    print("\n🖼️ RECENT IMGBB POSTS (Last 3):")
+    cur.execute("SELECT filename, posted_at, title, post_url FROM imgbb_posts ORDER BY id DESC LIMIT 3")
+    rows = cur.fetchall()
+    if rows:
+        for r in rows:
+            print(f"  • [{r['posted_at']}] {r['title'][:40]} | File: {r['filename']}")
+            print(f"    Post URL: {r['post_url']}")
+    else:
+        print("  (No ImgBB posts yet)")
+
+    print("\n📷 RECENT FREEIMAGE POSTS (Last 3):")
+    cur.execute("SELECT filename, posted_at, title, post_url FROM freeimage_posts ORDER BY id DESC LIMIT 3")
+    rows = cur.fetchall()
+    if rows:
+        for r in rows:
+            print(f"  • [{r['posted_at']}] {r['title'][:40]} | File: {r['filename']}")
+            print(f"    Post URL: {r['post_url']}")
+    else:
+        print("  (No Freeimage posts yet)")
+
+    print("\n📸 RECENT PIXELFED POSTS (Last 3):")
+    cur.execute("SELECT filename, posted_at, title, post_url FROM pixelfed_posts ORDER BY id DESC LIMIT 3")
+    rows = cur.fetchall()
+    if rows:
+        for r in rows:
+            print(f"  • [{r['posted_at']}] {r['title'][:40]} | File: {r['filename']}")
+            print(f"    Post URL: {r['post_url']}")
+    else:
+        print("  (No Pixelfed posts yet)")
+
+print("\n" + "=" * 65)
