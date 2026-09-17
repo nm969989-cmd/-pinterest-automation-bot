@@ -405,16 +405,18 @@ class PinScheduler:
     def _notify_pin_posted(self, title: str, anime_name: str, link: str,
                             image_path: str, pin_type: str,
                             posted_today: int, time_ist: str,
-                            arena_ok=None, tumblr_ok=None, bluesky_ok=None,
-                            raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
+                            arena_ok=None, arena_url: str = "",
+                            tumblr_ok=None, tumblr_url: str = "",
+                            bluesky_ok=None, bluesky_url: str = "",
+                            raindrop_ok=None, raindrop_url: str = "",
+                            mastodon_ok=None, mastodon_url: str = "",
+                            deviantart_ok=None, deviantart_url: str = "",
                             pixelfed_ok=None, pixelfed_url: str = "",
                             freeimage_ok=None, freeimage_url: str = "",
                             imgbb_ok=None, imgbb_url: str = "",
                             imghippo_ok=None, imghippo_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
-        Uses the existing Telegram bot — completely FREE, no API limits at 3/day.
-        arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok / imghippo_ok: True=posted, False=failed, None=disabled
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -428,11 +430,17 @@ class PinScheduler:
                 max_today=MAX_POSTS_PER_DAY,
                 time_ist=time_ist,
                 arena_ok=arena_ok,
+                arena_url=arena_url,
                 tumblr_ok=tumblr_ok,
+                tumblr_url=tumblr_url,
                 bluesky_ok=bluesky_ok,
+                bluesky_url=bluesky_url,
                 raindrop_ok=raindrop_ok,
+                raindrop_url=raindrop_url,
                 mastodon_ok=mastodon_ok,
+                mastodon_url=mastodon_url,
                 deviantart_ok=deviantart_ok,
+                deviantart_url=deviantart_url,
                 pixelfed_ok=pixelfed_ok,
                 pixelfed_url=pixelfed_url,
                 freeimage_ok=freeimage_ok,
@@ -753,273 +761,8 @@ class PinScheduler:
                                     )
 
                                     # ── Run cross-posts FIRST so results can be included in notification ──
-                                    _arena_result    = None   # None=disabled/skipped, True=ok, False=fail
-                                    _tumblr_result   = None
-                                    _bsky_result     = None
-                                    _raindrop_result = None
-                                    _mastodon_result = None
-                                    _cross_fn = (image_path or "").split("/")[-1].split("\\")[-1]
-                                    _cross_img = pin.get("image_url", "")
-
-                                    # ── Get a public CDN URL for cross-posting ────────────────────────────
-                                    # Pinterest CDN (i.pinimg.com) blocks third-party fetches with HTTP 403.
-                                    # Are.na's server tries to download the image itself (server-side fetch)
-                                    # so it MUST have a publicly accessible URL — not Pinterest CDN.
-                                    # Upload to Cloudinary/Catbox to get a permanently public URL.
-                                    _public_img = _cross_img  # fallback to original Pinterest URL
-                                    if image_path and os.path.exists(image_path):
-                                        try:
-                                            from image_host import upload_image_to_host
-                                            _hosted = upload_image_to_host(image_path)
-                                            if _hosted:
-                                                _public_img = _hosted
-                                                logger.info(f"[Scheduler] Public CDN URL for cross-posts: {_hosted[:80]}")
-                                        except Exception as _host_err:
-                                            logger.warning(f"[Scheduler] CDN upload for cross-post failed (using original URL): {_host_err}")
-
-                                    # Cross-post to Are.na visual curation channel
-                                    # Are.na's server fetches the image — must use a public URL (not Pinterest CDN)
-                                    try:
-                                        from config import ARENA_ENABLED
-                                        if ARENA_ENABLED:
-                                            from arena_uploader import post_to_arena
-                                            from database import mark_arena_posted, is_arena_posted
-                                            if _public_img and not is_arena_posted(_cross_fn):
-                                                _arena_ok = post_to_arena(
-                                                    image_url=_public_img,
-                                                    title=pin["title"],
-                                                    description=pin.get("description", ""),
-                                                    link=pin.get("link", ""),
-                                                )
-                                                _arena_result = bool(_arena_ok)
-                                                if _arena_ok:
-                                                    mark_arena_posted(_cross_fn, title=pin["title"], image_url=_public_img)
-                                            else:
-                                                _arena_result = True  # already posted / no image = skip quietly
-                                    except Exception as _arena_err:
-                                        _arena_result = False
-                                        logger.warning(f"[Scheduler] Are.na cross-post failed (non-critical): {_arena_err}")
-
-
-
-                                    # ── Tumblr Cross-Post ────────────────────────────────────────────────
-                                    try:
-                                        from config import TUMBLR_ENABLED
-                                        if TUMBLR_ENABLED:
-                                            from tumblr_uploader import post_to_tumblr
-                                            from database import mark_tumblr_posted, is_tumblr_posted
-                                            if not is_tumblr_posted(_cross_fn):
-                                                _tmblr_ok = post_to_tumblr(
-                                                    image_url  = _cross_img,
-                                                    title      = pin["title"],
-                                                    caption    = pin.get("description", ""),
-                                                    link       = pin.get("link", ""),
-                                                    image_path = image_path,   # direct binary upload
-                                                )
-                                                _tumblr_result = bool(_tmblr_ok)
-                                                if _tmblr_ok:
-                                                    from config import TUMBLR_BLOG_NAME
-                                                    mark_tumblr_posted(_cross_fn, post_id=_tmblr_ok,
-                                                                        blog=TUMBLR_BLOG_NAME, image_url=_cross_img)
-                                            else:
-                                                _tumblr_result = True  # already posted
-                                    except Exception as _tmblr_err:
-                                        _tumblr_result = False
-                                        logger.warning(f"[Scheduler] Tumblr cross-post failed (non-critical): {_tmblr_err}")
-
-                                    # ── Bluesky Cross-Post ───────────────────────────────────────────────
-                                    try:
-                                        from config import BLUESKY_ENABLED
-                                        if BLUESKY_ENABLED:
-                                            from bluesky_uploader import post_to_bluesky
-                                            from database import mark_bluesky_posted, is_bluesky_posted
-                                            if not is_bluesky_posted(_cross_fn):
-                                                _bsky_uri = post_to_bluesky(
-                                                    image_url  = _public_img,   # public CDN, not Pinterest CDN
-                                                    title      = pin["title"],
-                                                    caption    = pin.get("description", ""),
-                                                    link       = pin.get("link", ""),
-                                                    image_path = image_path,
-                                                )
-                                                _bsky_result = bool(_bsky_uri)
-                                                if _bsky_uri:
-                                                    mark_bluesky_posted(_cross_fn, post_uri=_bsky_uri, image_url=_public_img)
-                                            else:
-                                                _bsky_result = True  # already posted
-                                    except Exception as _bsky_err:
-                                        _bsky_result = False
-                                        logger.warning(f"[Scheduler] Bluesky cross-post failed (non-critical): {_bsky_err}")
-
-                                    # ── Raindrop.io Cross-Post ──────────────────────────────────────────
-                                    try:
-                                        from config import RAINDROP_ENABLED
-                                        if RAINDROP_ENABLED:
-                                            from raindrop_uploader import post_to_raindrop
-                                            from database import mark_raindrop_posted, is_raindrop_posted
-                                            if not is_raindrop_posted(_cross_fn):
-                                                _drop_ok = post_to_raindrop(
-                                                    image_url  = _cross_img,
-                                                    title      = pin["title"],
-                                                    description= pin.get("description", ""),
-                                                    link       = pin.get("link", ""),
-                                                    image_path = image_path,
-                                                )
-                                                _raindrop_result = bool(_drop_ok)
-                                                if _drop_ok:
-                                                    mark_raindrop_posted(_cross_fn, title=pin["title"], image_url=_cross_img)
-                                            else:
-                                                _raindrop_result = True  # already posted
-                                    except Exception as _drop_err:
-                                        _raindrop_result = False
-                                        logger.warning(f"[Scheduler] Raindrop cross-post failed (non-critical): {_drop_err}")
-
-                                    # ── Mastodon Cross-Post ─────────────────────────────────────────────
-                                    try:
-                                        from config import MASTODON_ENABLED
-                                        if MASTODON_ENABLED:
-                                            from mastodon_uploader import post_to_mastodon
-                                            from database import mark_mastodon_posted, is_mastodon_posted
-                                            if not is_mastodon_posted(_cross_fn):
-                                                _masto_url = post_to_mastodon(
-                                                    image_url   = _public_img,   # public CDN, not Pinterest CDN
-                                                    title       = pin["title"],
-                                                    description = pin.get("description", ""),
-                                                    link        = pin.get("link", ""),
-                                                    image_path  = image_path,
-                                                )
-                                                _mastodon_result = bool(_masto_url)
-                                                if _masto_url:
-                                                    mark_mastodon_posted(_cross_fn, post_url=_masto_url,
-                                                                         title=pin["title"], image_url=_public_img)
-                                            else:
-                                                _mastodon_result = True  # already posted
-                                    except Exception as _masto_err:
-                                        _mastodon_result = False
-                                        logger.warning(f"[Scheduler] Mastodon cross-post failed (non-critical): {_masto_err}")
-
-                                    # ── DeviantArt Cross-Post ───────────────────────────────────────────
-                                    _da_result = None
-                                    try:
-                                        from config import DEVIANTART_ENABLED
-                                        if DEVIANTART_ENABLED:
-                                            from deviantart_uploader import post_to_deviantart
-                                            from database import mark_deviantart_posted, is_deviantart_posted
-                                            if not is_deviantart_posted(_cross_fn):
-                                                _da_ok = post_to_deviantart(
-                                                    image_url   = _public_img or _cross_img,
-                                                    title       = pin["title"],
-                                                    description = pin.get("description", ""),
-                                                    link        = pin.get("link", ""),
-                                                )
-                                                _da_result = bool(_da_ok)
-                                                if _da_ok:
-                                                    mark_deviantart_posted(_cross_fn, title=pin["title"], image_url=_cross_img)
-                                            else:
-                                                _da_result = True  # already posted
-                                    except Exception as _da_err:
-                                        _da_result = False
-                                        logger.warning(f"[Scheduler] DeviantArt cross-post failed (non-critical): {_da_err}")
-
-                                    # ── Pixelfed Cross-Post ─────────────────────────────────────────────
-                                    _pixelfed_result = None
-                                    _pix_url = None
-                                    try:
-                                        from config import PIXELFED_ENABLED
-                                        if PIXELFED_ENABLED:
-                                            from pixelfed_uploader import post_to_pixelfed
-                                            from database import mark_pixelfed_posted, is_pixelfed_posted
-                                            if not is_pixelfed_posted(_cross_fn):
-                                                _pix_url = post_to_pixelfed(
-                                                    image_url   = _public_img or _cross_img,
-                                                    title       = pin["title"],
-                                                    description = pin.get("description", ""),
-                                                    link        = pin.get("link", ""),
-                                                    image_path  = image_path,
-                                                )
-                                                _pixelfed_result = bool(_pix_url)
-                                                if _pix_url:
-                                                    mark_pixelfed_posted(_cross_fn, post_url=_pix_url,
-                                                                         title=pin["title"], image_url=_public_img or _cross_img)
-                                            else:
-                                                _pixelfed_result = True  # already posted
-                                    except Exception as _pix_err:
-                                        _pixelfed_result = False
-                                        logger.warning(f"[Scheduler] Pixelfed cross-post failed (non-critical): {_pix_err}")
-
-                                    # ── Freeimage.host Cross-Post ───────────────────────────────────────
-                                    _freeimage_result = None
-                                    _fi_url = None
-                                    try:
-                                        from config import FREEIMAGE_ENABLED
-                                        if FREEIMAGE_ENABLED:
-                                            from freeimage_uploader import post_to_freeimage
-                                            from database import mark_freeimage_posted, is_freeimage_posted
-                                            if not is_freeimage_posted(_cross_fn):
-                                                _fi_url = post_to_freeimage(
-                                                    image_path    = image_path,
-                                                    title         = pin["title"],
-                                                    anime_name    = pin.get("anime_name", ""),
-                                                    affiliate_url = pin.get("link", "")
-                                                )
-                                                _freeimage_result = bool(_fi_url)
-                                                if _fi_url:
-                                                    mark_freeimage_posted(_cross_fn, post_url=_fi_url,
-                                                                         title=pin["title"], image_url=_public_img or _cross_img)
-                                            else:
-                                                _freeimage_result = True  # already posted
-                                    except Exception as _fi_err:
-                                        _freeimage_result = False
-                                        logger.warning(f"[Scheduler] Freeimage cross-post failed (non-critical): {_fi_err}")
-
-                                    # ── ImgBB Cross-Post ────────────────────────────────────────────────
-                                    _imgbb_result = None
-                                    _imgbb_url = None
-                                    try:
-                                        from config import IMGBB_ENABLED
-                                        if IMGBB_ENABLED:
-                                            from imgbb_uploader import post_to_imgbb
-                                            from database import mark_imgbb_posted, is_imgbb_posted
-                                            if not is_imgbb_posted(_cross_fn):
-                                                _imgbb_url = post_to_imgbb(
-                                                    image_path    = image_path,
-                                                    title         = pin["title"],
-                                                    anime_name    = pin.get("anime_name", ""),
-                                                    affiliate_url = pin.get("link", "")
-                                                )
-                                                _imgbb_result = bool(_imgbb_url)
-                                                if _imgbb_url:
-                                                    mark_imgbb_posted(_cross_fn, post_url=_imgbb_url,
-                                                                      title=pin["title"], image_url=_public_img or _cross_img)
-                                            else:
-                                                _imgbb_result = True  # already posted
-                                    except Exception as _ibb_err:
-                                        _imgbb_result = False
-                                        logger.warning(f"[Scheduler] ImgBB cross-post failed (non-critical): {_ibb_err}")
-
-                                    # ── Imghippo Cross-Post ─────────────────────────────────────────────
-                                    _imghippo_result = None
-                                    _imghippo_url = None
-                                    try:
-                                        from config import IMGHIPPO_ENABLED
-                                        if IMGHIPPO_ENABLED:
-                                            from imghippo_uploader import post_to_imghippo
-                                            from database import mark_imghippo_posted, is_imghippo_posted
-                                            if not is_imghippo_posted(_cross_fn):
-                                                _imghippo_url = post_to_imghippo(
-                                                    image_path    = image_path,
-                                                    title         = pin["title"],
-                                                    anime_name    = pin.get("anime_name", ""),
-                                                    affiliate_url = pin.get("link", "")
-                                                )
-                                                _imghippo_result = bool(_imghippo_url)
-                                                if _imghippo_url:
-                                                    mark_imghippo_posted(_cross_fn, post_url=_imghippo_url,
-                                                                         title=pin["title"], image_url=_public_img or _cross_img)
-                                            else:
-                                                _imghippo_result = True  # already posted
-                                    except Exception as _hipp_err:
-                                        _imghippo_result = False
-                                        logger.warning(f"[Scheduler] Imghippo cross-post failed (non-critical): {_hipp_err}")
+                                    from crosspost_dispatcher import dispatch_all_crossposts
+                                    cp_res = dispatch_all_crossposts(pin, image_path)
 
                                     # ── Notify admin (after cross-posts so results are known) ────────────
                                     self._notify_pin_posted(
@@ -1030,20 +773,26 @@ class PinScheduler:
                                         pin_type=pin_type,
                                         posted_today=counts_after,
                                         time_ist=now_ist,
-                                        arena_ok=_arena_result,
-                                        tumblr_ok=_tumblr_result,
-                                        bluesky_ok=_bsky_result,
-                                        raindrop_ok=_raindrop_result,
-                                        mastodon_ok=_mastodon_result,
-                                        deviantart_ok=_da_result,
-                                        pixelfed_ok=_pixelfed_result,
-                                        pixelfed_url=_pix_url or "",
-                                        freeimage_ok=_freeimage_result,
-                                        freeimage_url=_fi_url or "",
-                                        imgbb_ok=_imgbb_result,
-                                        imgbb_url=_imgbb_url or "",
-                                        imghippo_ok=_imghippo_result,
-                                        imghippo_url=_imghippo_url or "",
+                                        arena_ok=cp_res.get("arena_ok"),
+                                        arena_url=cp_res.get("arena_url", ""),
+                                        tumblr_ok=cp_res.get("tumblr_ok"),
+                                        tumblr_url=cp_res.get("tumblr_url", ""),
+                                        bluesky_ok=cp_res.get("bluesky_ok"),
+                                        bluesky_url=cp_res.get("bluesky_url", ""),
+                                        raindrop_ok=cp_res.get("raindrop_ok"),
+                                        raindrop_url=cp_res.get("raindrop_url", ""),
+                                        mastodon_ok=cp_res.get("mastodon_ok"),
+                                        mastodon_url=cp_res.get("mastodon_url", ""),
+                                        deviantart_ok=cp_res.get("deviantart_ok"),
+                                        deviantart_url=cp_res.get("deviantart_url", ""),
+                                        pixelfed_ok=cp_res.get("pixelfed_ok"),
+                                        pixelfed_url=cp_res.get("pixelfed_url", ""),
+                                        freeimage_ok=cp_res.get("freeimage_ok"),
+                                        freeimage_url=cp_res.get("freeimage_url", ""),
+                                        imgbb_ok=cp_res.get("imgbb_ok"),
+                                        imgbb_url=cp_res.get("imgbb_url", ""),
+                                        imghippo_ok=cp_res.get("imghippo_ok"),
+                                        imghippo_url=cp_res.get("imghippo_url", ""),
                                     )
 
                                     # Auto-dispatch to configured stock photography platforms

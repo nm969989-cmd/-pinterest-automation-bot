@@ -124,48 +124,94 @@ def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
     ])
 
 
-def get_post_confirmation_keyboard(amazon_url: str = "", pinterest_url: str = "", pixelfed_url: str = "", freeimage_url: str = "", imgbb_url: str = "", imghippo_url: str = "") -> "InlineKeyboardMarkup | None":
-    """Returns interactive direct link buttons for a posted pin."""
+def get_post_confirmation_keyboard(
+    amazon_url: str = "",
+    pinterest_url: str = "",
+    bluesky_url: str = "",
+    mastodon_url: str = "",
+    tumblr_url: str = "",
+    arena_url: str = "",
+    raindrop_url: str = "",
+    deviantart_url: str = "",
+    pixelfed_url: str = "",
+    freeimage_url: str = "",
+    imgbb_url: str = "",
+    imghippo_url: str = "",
+) -> "InlineKeyboardMarkup | None":
+    """Returns interactive direct link buttons for a posted pin across all active platforms."""
     if not _TG_AVAILABLE:
         return None
     import config
+
+    rows = []
+
+    # Row 1: Pinterest + Amazon
     p_url = pinterest_url or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
     row1 = [InlineKeyboardButton("📌 View Pinterest", url=p_url)]
-
     if amazon_url and amazon_url.startswith("http"):
-        # Show different label depending on whether it's a direct product or search results
-        if "/dp/" in amazon_url:
-            amazon_label = "🎯 Amazon Product"
-        else:
-            amazon_label = "🔍 Browse Amazon"
+        amazon_label = "🎯 Amazon Product" if "/dp/" in amazon_url else "🔍 Browse Amazon"
         row1.append(InlineKeyboardButton(amazon_label, url=amazon_url))
+    rows.append(row1)
 
-    rows = [row1]
+    # Secondary platforms (paired 2 per row)
+    platform_btns = []
 
-    # Row 2: Pixelfed Button if enabled
+    if getattr(config, "BLUESKY_ENABLED", False):
+        b_handle = getattr(config, "BLUESKY_HANDLE", "muthelyrics.bsky.social")
+        b_link = bluesky_url or f"https://bsky.app/profile/{b_handle}"
+        btn_txt = "🦋 View on Bluesky" if (bluesky_url and "/post/" in bluesky_url) else "🦋 Bluesky Feed"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=b_link))
+
+    if getattr(config, "MASTODON_ENABLED", False):
+        m_link = mastodon_url or "https://mastodon.social/@muthelyrics"
+        btn_txt = "🐘 View on Mastodon" if (mastodon_url and "/@" in mastodon_url and mastodon_url != "https://mastodon.social/@muthelyrics") else "🐘 Mastodon Feed"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=m_link))
+
+    if getattr(config, "TUMBLR_ENABLED", False):
+        t_blog = getattr(config, "TUMBLR_BLOG_NAME", "animeasthet07")
+        t_link = tumblr_url or f"https://{t_blog}.tumblr.com"
+        btn_txt = "🎨 View on Tumblr" if (tumblr_url and "/post/" in tumblr_url) else "🎨 Tumblr Blog"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=t_link))
+
+    if getattr(config, "ARENA_ENABLED", False):
+        a_slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
+        a_link = arena_url or (f"https://www.are.na/channel/{a_slug}" if a_slug else "https://www.are.na/manoj-muthelyrics")
+        platform_btns.append(InlineKeyboardButton("🔮 View on Are.na", url=a_link))
+
+    if getattr(config, "RAINDROP_ENABLED", False):
+        r_col = getattr(config, "RAINDROP_COLLECTION_ID", "")
+        r_link = raindrop_url or (f"https://raindrop.io/collection/{r_col}" if r_col else "https://app.raindrop.io")
+        platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=r_link))
+
+    if getattr(config, "DEVIANTART_ENABLED", False):
+        da_link = deviantart_url or "https://www.deviantart.com/muthelyrics"
+        platform_btns.append(InlineKeyboardButton("🎭 DeviantArt Gallery", url=da_link))
+
     if getattr(config, "PIXELFED_ENABLED", False):
         pix_link = pixelfed_url or f"{getattr(config, 'PIXELFED_INSTANCE_URL', 'https://pixelfed.social')}/PinterestAutomationBot"
-        btn_label = "📷 View on Pixelfed" if pixelfed_url else "📷 Pixelfed Profile"
-        rows.append([InlineKeyboardButton(btn_label, url=pix_link)])
+        btn_txt = "📷 View on Pixelfed" if (pixelfed_url and "/p/" in pixelfed_url) else "📷 Pixelfed Profile"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=pix_link))
 
-    # Row 3: Freeimage Button if enabled
     if getattr(config, "FREEIMAGE_ENABLED", False):
         fi_link = freeimage_url or "https://freeimage.host/muthelyrics"
-        btn_label = "🖼️ View on Freeimage" if freeimage_url else "🖼️ Freeimage Gallery"
-        rows.append([InlineKeyboardButton(btn_label, url=fi_link)])
+        btn_txt = "🖼️ View on Freeimage" if (freeimage_url and "/i/" in freeimage_url) else "🖼️ Freeimage Gallery"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=fi_link))
 
-    # Row 4: ImgBB Button if enabled
     if getattr(config, "IMGBB_ENABLED", False):
         ibb_link = imgbb_url or "https://muthelyrics.imgbb.com/"
-        btn_label = "🖼️ View on ImgBB" if imgbb_url else "🖼️ ImgBB Gallery"
-        rows.append([InlineKeyboardButton(btn_label, url=ibb_link)])
+        btn_txt = "🖼️ View on ImgBB" if (imgbb_url and "ibb.co" in imgbb_url) else "🖼️ ImgBB Gallery"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=ibb_link))
 
-    # Row 5: Imghippo Button if enabled
     if getattr(config, "IMGHIPPO_ENABLED", False):
         hippo_link = imghippo_url or "https://www.imghippo.com/dashboard"
-        btn_label = "🦛 View on Imghippo" if imghippo_url else "🦛 Imghippo Gallery"
-        rows.append([InlineKeyboardButton(btn_label, url=hippo_link)])
+        btn_txt = "🦛 View on Imghippo" if (imghippo_url and "/files/" in imghippo_url) else "🦛 Imghippo Gallery"
+        platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
 
+    # Append platforms in pairs of 2
+    for i in range(0, len(platform_btns), 2):
+        rows.append(platform_btns[i:i+2])
+
+    # Control actions
     rows.append([
         InlineKeyboardButton("🚀 Post Next Now", callback_data="btn_postnow"),
         InlineKeyboardButton("📋 View Queue", callback_data="btn_queue"),
@@ -1410,16 +1456,62 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             remaining = get_queue_counts()["total"]
-            from database import get_tracked_target_url
+            from database import get_tracked_target_url, mark_file_uploaded
+            mark_file_uploaded(
+                os.path.basename(image_path),
+                pin["title"],
+                pin["anime_name"],
+                pin.get("image_url", ""),
+                pin.get("board_id", "")
+            )
+
+            # ── Dispatch cross-posts across all 10 platforms ───────────────────
+            from crosspost_dispatcher import dispatch_all_crossposts
+            cp_res = dispatch_all_crossposts(pin, image_path)
+
+            def _platform_icon(result):
+                if result is True:   return "✅"
+                if result is False:  return "❌"
+                return "—"
+
+            cross_lines = ""
+            if any(cp_res[k] is not None for k in cp_res if k.endswith("_ok")):
+                cross_lines = (
+                    f"\n{'─' * 26}\n"
+                    f"🔮 Are.na    {_platform_icon(cp_res.get('arena_ok'))}  "
+                    f"🎨 Tumblr     {_platform_icon(cp_res.get('tumblr_ok'))}\n"
+                    f"🦋 Bluesky  {_platform_icon(cp_res.get('bluesky_ok'))}  "
+                    f"💧 Raindrop   {_platform_icon(cp_res.get('raindrop_ok'))}\n"
+                    f"🐘 Mastodon {_platform_icon(cp_res.get('mastodon_ok'))}  "
+                    f"🎭 DeviantArt {_platform_icon(cp_res.get('deviantart_ok'))}\n"
+                    f"📷 Pixelfed  {_platform_icon(cp_res.get('pixelfed_ok'))}  "
+                    f"🖼️ Freeimage {_platform_icon(cp_res.get('freeimage_ok'))}\n"
+                    f"🖼️ ImgBB     {_platform_icon(cp_res.get('imgbb_ok'))}  "
+                    f"🦛 Imghippo  {_platform_icon(cp_res.get('imghippo_ok'))}"
+                )
+
             target_url = get_tracked_target_url(pin["link"])
             confirm_text = (
                 f"📌 {pin_type} pin posted!{stale_note}\n"
                 f"{'─' * 26}\n"
                 f"📝 {pin['title']}\n"
                 f"🎌 {pin['anime_name']} • {remaining} left in queue"
+                f"{cross_lines}"
             )
 
-            confirm_markup = get_post_confirmation_keyboard(target_url or pin["link"])
+            confirm_markup = get_post_confirmation_keyboard(
+                amazon_url=target_url or pin["link"],
+                bluesky_url=cp_res.get("bluesky_url", ""),
+                mastodon_url=cp_res.get("mastodon_url", ""),
+                tumblr_url=cp_res.get("tumblr_url", ""),
+                arena_url=cp_res.get("arena_url", ""),
+                raindrop_url=cp_res.get("raindrop_url", ""),
+                deviantart_url=cp_res.get("deviantart_url", ""),
+                pixelfed_url=cp_res.get("pixelfed_url", ""),
+                freeimage_url=cp_res.get("freeimage_url", ""),
+                imgbb_url=cp_res.get("imgbb_url", ""),
+                imghippo_url=cp_res.get("imghippo_url", ""),
+            )
             if image_path and os.path.exists(image_path):
                 try:
                     with open(image_path, "rb") as img_file:
@@ -2010,16 +2102,19 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              image_path: str, pin_type: str,
                              posted_today: int, max_today: int,
                              time_ist: str,
-                             arena_ok=None, tumblr_ok=None, bluesky_ok=None,
-                             raindrop_ok=None, mastodon_ok=None, deviantart_ok=None,
+                             arena_ok=None, arena_url: str = "",
+                             tumblr_ok=None, tumblr_url: str = "",
+                             bluesky_ok=None, bluesky_url: str = "",
+                             raindrop_ok=None, raindrop_url: str = "",
+                             mastodon_ok=None, mastodon_url: str = "",
+                             deviantart_ok=None, deviantart_url: str = "",
                              pixelfed_ok=None, pixelfed_url: str = "",
                              freeimage_ok=None, freeimage_url: str = "",
                              imgbb_ok=None, imgbb_url: str = "",
                              imghippo_ok=None, imghippo_url: str = ""):
     """
     Send a rich Telegram notification after every successful Pinterest post.
-    Sends the actual image + details. FREE — no limits at 3 messages/day.
-    arena_ok / tumblr_ok / bluesky_ok / raindrop_ok / mastodon_ok / deviantart_ok / pixelfed_ok / freeimage_ok / imgbb_ok / imghippo_ok: True=posted, False=failed, None=disabled
+    Sends the actual image + details with 1-tap buttons for all 10 social & image hosting platforms.
     """
     global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -2071,14 +2166,18 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         f"{cross_lines}"
     )
 
-
-
     reply_markup = get_post_confirmation_keyboard(
         amazon_url=target_url or link,
+        bluesky_url=bluesky_url,
+        mastodon_url=mastodon_url,
+        tumblr_url=tumblr_url,
+        arena_url=arena_url,
+        raindrop_url=raindrop_url,
+        deviantart_url=deviantart_url,
         pixelfed_url=pixelfed_url,
         freeimage_url=freeimage_url,
         imgbb_url=imgbb_url,
-        imghippo_url=imghippo_url
+        imghippo_url=imghippo_url,
     )
 
     async def _send():
