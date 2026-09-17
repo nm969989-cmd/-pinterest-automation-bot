@@ -106,8 +106,18 @@ def post_to_imgbb(image_path: str,
             }
 
             if is_url:
-                payload["image"] = image_path
-                res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=30)
+                import io
+                try:
+                    dl = requests.get(image_path, headers=_HEADERS, timeout=20)
+                    if dl.status_code == 200 and dl.content:
+                        files = {"image": (f"{safe_name}.jpg", io.BytesIO(dl.content), "image/jpeg")}
+                        res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=35)
+                    else:
+                        payload["image"] = image_path
+                        res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=30)
+                except Exception as dl_err:
+                    payload["image"] = image_path
+                    res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=30)
             else:
                 with open(image_path, "rb") as f:
                     files = {"image": (os.path.basename(image_path), f, "image/jpeg")}

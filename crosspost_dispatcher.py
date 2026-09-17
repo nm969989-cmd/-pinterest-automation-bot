@@ -39,8 +39,24 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
     link = pin.get("link", "")
     anime_name = pin.get("anime_name", "")
     original_image_url = pin.get("image_url", "")
+    temp_downloaded_file = None
+    if (not image_path or not os.path.exists(image_path)) and original_image_url and original_image_url.startswith("http"):
+        try:
+            import tempfile, requests
+            dl_res = requests.get(original_image_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+            if dl_res.status_code == 200 and len(dl_res.content) > 1000:
+                tf = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                tf.write(dl_res.content)
+                tf.close()
+                image_path = tf.name
+                temp_downloaded_file = tf.name
+                if not filename:
+                    filename = os.path.basename(original_image_url.split("?")[0])
+                logger.info(f"[Crosspost] Downloaded remote image to local temp file: {image_path}")
+        except Exception as dl_e:
+            logger.warning(f"[Crosspost] Failed to download remote image for cross-posting: {dl_e}")
 
-    # 1. Obtain public CDN URL (essential because Pinterest CDN blocks server fetches)
+    # 1. Obtain public CDN URL (essential because Pinterest / Telegram CDNs block server fetches)
     public_img_url = original_image_url
     if image_path and os.path.exists(image_path):
         try:
@@ -51,6 +67,17 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
                 logger.info(f"[Crosspost] Permanent public CDN URL: {hosted[:70]}...")
         except Exception as e:
             logger.warning(f"[Crosspost] CDN upload failed (using fallback): {e}")
+
+    # Fallback: if public_img_url is still empty or a blocked domain, upload to Freeimage early
+    if (not public_img_url or "api.telegram.org" in public_img_url or "pinimg.com" in public_img_url) and image_path and os.path.exists(image_path):
+        try:
+            from freeimage_uploader import post_to_freeimage
+            fi_hosted = post_to_freeimage(image_path=image_path, title=title)
+            if fi_hosted:
+                public_img_url = fi_hosted
+                logger.info(f"[Crosspost] Using Freeimage as public CDN URL: {public_img_url}")
+        except Exception:
+            pass
 
     results = {
         "arena_ok": None, "arena_url": "",
@@ -317,5 +344,11 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception as e:
             results["imghippo_ok"] = False
             logger.warning(f"[Crosspost] Imghippo error: {e}")
+
+    if temp_downloaded_file and os.path.exists(temp_downloaded_file):
+        try:
+            os.remove(temp_downloaded_file)
+        except Exception:
+            pass
 
     return results
