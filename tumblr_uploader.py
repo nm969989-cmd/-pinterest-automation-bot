@@ -127,14 +127,16 @@ def post_to_tumblr(image_url, title="", caption="", link="", tags=None,
                 tags    = all_tags,
                 data    = img_data,    # direct binary upload — never fails with URL block
             )
-            pid = result.get("id") or result.get("id_string")
+            # pytumblr returns data['response'] on success, full envelope on error.
+            # Guard non-dict shapes so a weird payload can't crash the retry loop.
+            pid = result.get("id") or result.get("id_string") if isinstance(result, dict) else None
             if pid:
                 logger.info("[Tumblr] Posted id=" + str(pid)
                             + " title=" + title[:50]
                             + (" attempt=" + str(attempt) if attempt > 1 else ""))
                 return str(pid)
             else:
-                err = result.get("errors", result)
+                err = result.get("errors", result) if isinstance(result, dict) else result
                 logger.warning("[Tumblr] Attempt " + str(attempt)
                                + " failed: " + str(err))
                 err_str = str(err).lower()
@@ -150,6 +152,14 @@ def post_to_tumblr(image_url, title="", caption="", link="", tags=None,
                             os.unlink(tmp_path)
                         except Exception:
                             pass
+                    return None
+                if "429" in err_str or "rate limit" in err_str or "too many requests" in err_str:
+                    logger.error("[Tumblr] Rate limited (HTTP 429). Tripping circuit breaker.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("tumblr", "HTTP 429: Rate limited by Tumblr", cooldown_hours=6.0)
+                    except Exception:
+                        pass
                     return None
         except Exception as e:
             logger.warning("[Tumblr] Exception on attempt " + str(attempt)
@@ -179,12 +189,12 @@ def get_tumblr_blog_info():
         # Fallback: user/info has blog data for primary blog
         if not blog:
             uinfo = client.info()
-            u_resp = uinfo.get("response")
+            u_resp = uinfo.get("response") if isinstance(uinfo, dict) else {}
             u_user = (u_resp.get("user", {}) if isinstance(u_resp, dict) else {})
-            blogs = (uinfo.get("user", {}).get("blogs")
-                     or u_user.get("blogs")
-                     or [])
-            blog  = next((b for b in blogs if b.get("name") == BN), {})
+            if not isinstance(u_user, dict):
+                u_user = {}
+            blogs = (u_user.get("blogs") or [])
+            blog  = next((b for b in blogs if isinstance(b, dict) and b.get("name") == BN), {})
         if blog:
             return {
                 "title":     blog.get("title",       BN),
@@ -204,9 +214,19 @@ def verify_tumblr_token():
     try:
         client = _get_client()
         res    = client.info()
+        # pytumblr usually returns a dict, but on some API errors the parsed
+        # payload can be a raw list — guard against both shapes before .get().
+        if not isinstance(res, dict):
+            logger.warning("[Tumblr] Token check got unexpected payload type "
+                           + type(res).__name__ + ": " + str(res)[:200])
+            return False
         # pytumblr returns nested: res['user']['name'] OR res['response']['user']['name']
         resp_obj = res.get("response")
-        user = res.get("user") or (resp_obj.get("user") if isinstance(resp_obj, dict) else {}) or {}
+        if not isinstance(resp_obj, dict):
+            resp_obj = {}
+        user = res.get("user") or resp_obj.get("user") or {}
+        if not isinstance(user, dict):
+            user = {}
         name = user.get("name", "")
         if name:
             logger.info("[Tumblr] Token valid — logged in as: " + name)
@@ -215,7 +235,9 @@ def verify_tumblr_token():
         if user.get("blogs"):
             logger.info("[Tumblr] Token valid — blogs found")
             return True
-        logger.warning("[Tumblr] Token check returned no user name")
+        meta = res.get("meta", {})
+        logger.warning("[Tumblr] Token check returned no user name (meta: "
+                       + str(meta)[:160] + ")")
         return False
     except ValueError as e:
         logger.warning("[Tumblr] Config error: " + str(e))

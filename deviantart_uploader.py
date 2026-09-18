@@ -90,35 +90,67 @@ def _save_token_to_env(key: str, value: str):
         logger.warning(f"[DeviantArt] Failed to update {key} in .env: {e}")
 
 
+def _clear_db_tokens():
+    """Purges stale DeviantArt tokens from bot_metadata so .env becomes the fallback source."""
+    global _cached_access_token
+    try:
+        from database import set_metadata
+        set_metadata("deviantart_access_token", "")
+        set_metadata("deviantart_refresh_token", "")
+        logger.info("[DeviantArt] Cleared stale tokens from bot_metadata.")
+    except Exception as e:
+        logger.debug(f"[DeviantArt] Could not clear bot_metadata tokens: {e}")
+    _cached_access_token = ""
+
+
 def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") -> str:
     """
     Refreshes the OAuth2 token, saves rotated tokens to bot_metadata and .env, and returns new access_token.
+
+    DeviantArt rotates refresh tokens on every refresh, so bot_metadata and .env
+    can drift out of sync (e.g. after re-auth via get_deviantart_token.py, which
+    only wrote .env). If a candidate token is rejected with HTTP 400, it is
+    purged from its store and the next candidate is tried automatically.
     """
     global _cached_access_token
 
-    if not refresh_token:
-        try:
-            from database import get_metadata
-            refresh_token = get_metadata("deviantart_refresh_token", "").strip()
-        except Exception:
-            pass
-    if not refresh_token:
-        from config import DEVIANTART_REFRESH_TOKEN
-        refresh_token = DEVIANTART_REFRESH_TOKEN or os.getenv("DEVIANTART_REFRESH_TOKEN", "").strip()
+    from config import DEVIANTART_REFRESH_TOKEN as ENV_REFRESH
 
-    if not refresh_token:
+    # Collect candidates from BOTH stores (DB first — it rotates with the bot)
+    db_token = ""
+    try:
+        from database import get_metadata
+        db_token = get_metadata("deviantart_refresh_token", "").strip()
+    except Exception:
+        pass
+    env_token = (ENV_REFRESH or os.getenv("DEVIANTART_REFRESH_TOKEN", "")).strip()
+
+    candidates = []
+    primary = (refresh_token or db_token or env_token).strip()
+    if primary:
+        candidates.append(primary)
+    for tok in (db_token, env_token):
+        if tok and tok not in candidates:
+            candidates.append(tok)
+
+    if not candidates:
         logger.error("[DeviantArt] Cannot refresh token: No refresh_token available.")
         return ""
 
     url = "https://www.deviantart.com/oauth2/token"
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-    }
-    try:
-        r = requests.post(url, data=payload, timeout=20)
+    for tok in candidates:
+        payload = {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": tok,
+        }
+        try:
+            r = requests.post(url, data=payload, timeout=20)
+        except Exception as e:
+            logger.error(f"[DeviantArt] Error during token refresh: {e}")
+            return ""
+
         if r.status_code == 200:
             data = r.json()
             new_access = data.get("access_token", "").strip()
@@ -153,10 +185,21 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") 
 
             logger.info("[DeviantArt] Successfully refreshed and persisted OAuth2 tokens.")
             return new_access
-        else:
-            logger.error(f"[DeviantArt] Token refresh failed: HTTP {r.status_code} - {r.text}")
-    except Exception as e:
-        logger.error(f"[DeviantArt] Error during token refresh: {e}")
+
+        logger.error(f"[DeviantArt] Token refresh failed: HTTP {r.status_code} - {r.text}")
+        body = r.text.lower()
+        if r.status_code == 400 and ("invalid" in body or "expired" in body or "revoked" in body):
+            # This candidate is dead — purge it from whichever store it came from
+            # and fall through to the next candidate (DB <-> .env sync fix).
+            if tok == db_token and db_token:
+                _clear_db_tokens()
+                db_token = ""
+            continue
+        # Non-400 (network/5xx/429) — don't burn the alternate token, fail fast
+        return ""
+
+    logger.error("[DeviantArt] All refresh tokens rejected. "
+                 "Re-authenticate with: python get_deviantart_token.py")
     return ""
 
 

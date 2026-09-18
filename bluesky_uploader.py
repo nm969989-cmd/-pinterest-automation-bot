@@ -62,10 +62,28 @@ def _get_session() -> tuple:
     url = f"{BSKY_XRPC_BASE}/com.atproto.server.createSession"
     payload = {"identifier": handle, "password": password}
 
-    res = requests.post(url, json=payload, timeout=12)
-    if res.status_code != 200:
+    # Retry transient failures (429/5xx/timeouts) — a single rate-limit blip
+    # must not kill an entire cross-post cycle.
+    res = None
+    for attempt, delay in enumerate(_RETRY_DELAYS, 1):
+        if delay:
+            time.sleep(delay)
+        try:
+            res = requests.post(url, json=payload, timeout=15)
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[Bluesky] Session request error (attempt {attempt}): {e}")
+            continue
+        if res.status_code == 200:
+            break
+        if res.status_code in (429, 500, 502, 503, 504):
+            logger.warning(f"[Bluesky] Session attempt {attempt} failed: HTTP {res.status_code} {res.text[:100]}")
+            continue
+        # Hard auth failure (401/403) — retries will not help
         logger.error(f"[Bluesky] Auth failed (HTTP {res.status_code}): {res.text[:150]}")
         raise ValueError(f"Bluesky authentication failed: HTTP {res.status_code}")
+
+    if res is None or res.status_code != 200:
+        raise ValueError("Bluesky session creation failed after retries (network or rate limit)")
 
     data = res.json()
     jwt = data.get("accessJwt", "")

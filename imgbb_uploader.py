@@ -111,17 +111,17 @@ def post_to_imgbb(image_path: str,
                     dl = requests.get(image_path, headers=_HEADERS, timeout=20)
                     if dl.status_code == 200 and dl.content:
                         files = {"image": (f"{safe_name}.jpg", io.BytesIO(dl.content), "image/jpeg")}
-                        res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=35)
+                        res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
                     else:
                         payload["image"] = image_path
-                        res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=30)
+                        res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=45)
                 except Exception as dl_err:
                     payload["image"] = image_path
-                    res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=30)
+                    res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=45)
             else:
                 with open(image_path, "rb") as f:
                     files = {"image": (os.path.basename(image_path), f, "image/jpeg")}
-                    res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=35)
+                    res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
 
             if res.status_code == 200:
                 try:
@@ -136,6 +136,15 @@ def post_to_imgbb(image_path: str,
             else:
                 logger.warning(f"[ImgBB] Upload returned HTTP {res.status_code}: {res.text[:200]}")
                 last_error = f"HTTP {res.status_code}"
+                # If rate limited (HTTP 429), trip circuit breaker — retries just waste quota
+                if res.status_code == 429 or "too many requests" in res.text.lower() or "rate limit" in res.text.lower():
+                    logger.error("[ImgBB] Rate limited (HTTP 429). Tripping circuit breaker.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("imgbb", "HTTP 429: Rate limited by ImgBB", cooldown_hours=6.0)
+                    except Exception:
+                        pass
+                    return None
                 # If forbidden (code 103: Datacenter IP block by Cloudflare/ImgBB), abort immediately and trip circuit breaker
                 if "103" in res.text or "forbidden" in res.text.lower() or res.status_code in (401, 403):
                     logger.error("[ImgBB] Access forbidden (Code 103) — ImgBB blocks cloud hosting IP addresses. Aborting retries.")

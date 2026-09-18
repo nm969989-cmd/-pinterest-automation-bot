@@ -121,6 +121,26 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                     "image URL may be invalid or already posted."
                 )
                 return False   # No point retrying a 422
+            elif res.status_code == 402 or (res.status_code == 403 and "limit" in res.text.lower()):
+                # 402 / quota 403 = Paid-plan or free 200-block channel limit reached
+                logger.error(
+                    f"[Are.na] Quota/plan limit reached (HTTP {res.status_code}): {res.text[:120]} -- "
+                    "free plan allows 200 blocks per channel."
+                )
+                try:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("arena", f"HTTP {res.status_code}: Are.na quota exhausted (200-block free limit)", cooldown_hours=24.0)
+                except Exception:
+                    pass
+                return False   # Retrying won't lift the quota any sooner
+            elif res.status_code == 429:
+                logger.warning(f"[Are.na] Rate limited (HTTP 429): {res.text[:100]}")
+                try:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("arena", "HTTP 429: Rate limited by Are.na", cooldown_hours=6.0)
+                except Exception:
+                    pass
+                return False
             else:
                 logger.warning(
                     f"[Are.na] Attempt {attempt}/{_MAX_RETRIES} failed: "

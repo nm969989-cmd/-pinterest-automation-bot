@@ -184,6 +184,16 @@ def main():
             f.writelines(new_lines)
         print("[OK] Saved into .env successfully!")
 
+        # Keep the bot's SQLite metadata in sync — the uploader looks up
+        # bot_metadata BEFORE .env, so a stale DB token would keep breaking refreshes.
+        try:
+            from database import set_metadata
+            set_metadata("deviantart_access_token", access_token or "")
+            set_metadata("deviantart_refresh_token", refresh_token or "")
+            print("[OK] Synced tokens to bot database.")
+        except Exception as db_err:
+            print(f"[WARN] Could not sync tokens to database: {db_err}")
+
 
 if __name__ == "__main__":
     main()

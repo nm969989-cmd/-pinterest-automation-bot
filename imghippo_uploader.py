@@ -114,7 +114,7 @@ def post_to_imghippo(image_path: str,
                     file_content = f.read()
                 files = {"file": (os.path.basename(image_path), file_content, "image/jpeg")}
 
-            res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=35)
+            res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
 
             if res.status_code == 200:
                 try:
