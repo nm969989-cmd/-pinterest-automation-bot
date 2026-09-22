@@ -1640,7 +1640,8 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             def _platform_icon(result):
                 if result is True:   return "✅"
                 if result is False:  return "❌"
-                return "—"
+                return "—"  # None = disabled or circuit-breaker skipped
+
 
             cross_lines = ""
             if any(cp_res[k] is not None for k in cp_res if k.endswith("_ok")):
