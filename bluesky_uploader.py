@@ -5,7 +5,7 @@ Cross-posts images and aesthetic artwork directly to Bluesky (bsky.app)
 using Bluesky's official native REST / XRPC endpoints.
 
 Zero third-party library dependencies required — uses pure requests.
-Mirrors the tumblr_uploader.py and arena_uploader.py architecture.
+Mirrors the arena_uploader.py architecture.
 
 AT Protocol Specs:
   - Base XRPC endpoint: https://bsky.social/xrpc

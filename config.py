@@ -67,14 +67,6 @@ ARENA_ACCESS_TOKEN = os.getenv('ARENA_ACCESS_TOKEN', '')
 ARENA_CHANNEL_SLUG = os.getenv('ARENA_CHANNEL_SLUG', 'aesthetic-inspiration')
 ARENA_ENABLED      = os.getenv('ARENA_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
-# Tumblr Cross-Post
-TUMBLR_CONSUMER_KEY        = os.getenv('TUMBLR_CONSUMER_KEY', 'jISRSZLLpKhxd2XWNrkYuZ7l9RLpwxAFqwkskbkyOw45ZkQuDo')
-TUMBLR_CONSUMER_SECRET     = os.getenv('TUMBLR_CONSUMER_SECRET', 'C5dR8uw8i4cpogQNVxC0quGkc1TBVjAMsd4pBxQhuOjwlAxyFH')
-TUMBLR_ACCESS_TOKEN        = os.getenv('TUMBLR_ACCESS_TOKEN', '')
-TUMBLR_ACCESS_TOKEN_SECRET = os.getenv('TUMBLR_ACCESS_TOKEN_SECRET', '')
-TUMBLR_BLOG_NAME           = os.getenv('TUMBLR_BLOG_NAME', 'animeasthet07')
-TUMBLR_TAGS                = os.getenv('TUMBLR_TAGS', 'anime,aesthetic,animeart,wallpaper,pinterest,animeasthetic')
-TUMBLR_ENABLED             = os.getenv('TUMBLR_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
 # Bluesky Cross-Post (AT Protocol)
 BLUESKY_HANDLE       = os.getenv('BLUESKY_HANDLE', '')
@@ -91,12 +83,6 @@ MASTODON_INSTANCE_URL  = os.getenv('MASTODON_INSTANCE_URL', 'https://mastodon.so
 MASTODON_ACCESS_TOKEN  = os.getenv('MASTODON_ACCESS_TOKEN', '').strip()
 MASTODON_ENABLED       = os.getenv('MASTODON_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(MASTODON_ACCESS_TOKEN)
 
-# DeviantArt Art Community Cross-Post
-DEVIANTART_CLIENT_ID     = os.getenv('DEVIANTART_CLIENT_ID', '').strip()
-DEVIANTART_CLIENT_SECRET = os.getenv('DEVIANTART_CLIENT_SECRET', '').strip()
-DEVIANTART_ACCESS_TOKEN  = os.getenv('DEVIANTART_ACCESS_TOKEN', '').strip()
-DEVIANTART_REFRESH_TOKEN = os.getenv('DEVIANTART_REFRESH_TOKEN', '').strip()
-DEVIANTART_ENABLED       = os.getenv('DEVIANTART_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
 # Pixelfed (Fediverse) Photo & Visual Art Sharing
 PIXELFED_INSTANCE_URL  = os.getenv('PIXELFED_INSTANCE_URL', 'https://pixelfed.social').strip().rstrip('/')
@@ -107,9 +93,6 @@ PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('tru
 FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '6d207e02198a847aa98d0a2a901485a5').strip()
 FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(FREEIMAGE_API_KEY)
 
-# ImgBB Dedicated Image Uploading
-IMGBB_API_KEY          = os.getenv('IMGBB_API_KEY', '1506c60298ac253357a0d04c40ea4bd7').strip()
-IMGBB_ENABLED          = os.getenv('IMGBB_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGBB_API_KEY)
 
 # Imghippo Dedicated Image Uploading
 IMGHIPPO_API_KEY       = os.getenv('IMGHIPPO_API_KEY', '00f11d3e65f34df60a3cf9e47ecf7453').strip()

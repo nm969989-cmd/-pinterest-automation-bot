@@ -1,17 +1,14 @@
 """
 crosspost_dispatcher.py — Unified Multi-Platform Cross-Posting Dispatcher
 ==========================================================================
-Coordinates automated publishing across all 10 social & image hosting platforms:
+Coordinates automated publishing across all 7 social & image hosting platforms:
   1. Are.na
-  2. Tumblr
-  3. Bluesky
-  4. Raindrop.io
-  5. Mastodon
-  6. DeviantArt
-  7. Pixelfed
-  8. Freeimage.host
-  9. ImgBB
-  10. Imghippo
+  2. Bluesky
+  3. Raindrop.io
+  4. Mastodon
+  5. Pixelfed
+  6. Freeimage.host
+  7. Imghippo
 
 Used identically by:
   - Smart Pin Scheduler (automatic time-slot posting)
@@ -126,14 +123,11 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
 
     results = {
         "arena_ok": None, "arena_url": "",
-        "tumblr_ok": None, "tumblr_url": "",
         "bluesky_ok": None, "bluesky_url": "",
         "raindrop_ok": None, "raindrop_url": "",
         "mastodon_ok": None, "mastodon_url": "",
-        "deviantart_ok": None, "deviantart_url": "",
         "pixelfed_ok": None, "pixelfed_url": "",
         "freeimage_ok": None, "freeimage_url": "",
-        "imgbb_ok": None, "imgbb_url": "",
         "imghippo_ok": None, "imghippo_url": "",
     }
 
@@ -167,36 +161,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Are.na error: {e}")
             _handle_platform_error("arena", e)
 
-    # ── 2. Tumblr ────────────────────────────────────────────────────────────
-    if getattr(config, "TUMBLR_ENABLED", False) and _check_breaker("tumblr", results):
-        try:
-            from tumblr_uploader import post_to_tumblr
-            from database import mark_tumblr_posted, is_tumblr_posted
-            blog = getattr(config, "TUMBLR_BLOG_NAME", "animeasthet07")
-            if not is_tumblr_posted(filename):
-                time.sleep(random.uniform(2, 5))
-                post_id = post_to_tumblr(
-                    image_url=original_image_url,
-                    title=title,
-                    caption=description,
-                    link=link,
-                    image_path=image_path,
-                )
-                results["tumblr_ok"] = bool(post_id)
-                if post_id:
-                    mark_tumblr_posted(filename, post_id=str(post_id), blog=blog, image_url=original_image_url)
-                    results["tumblr_url"] = f"https://{blog}.tumblr.com/post/{post_id}"
-                else:
-                    results["tumblr_url"] = f"https://{blog}.tumblr.com"
-            else:
-                results["tumblr_ok"] = True
-                results["tumblr_url"] = f"https://{blog}.tumblr.com"
-        except Exception as e:
-            results["tumblr_ok"] = False
-            logger.warning(f"[Crosspost] Tumblr error: {e}")
-            _handle_platform_error("tumblr", e)
-
-    # ── 3. Bluesky ───────────────────────────────────────────────────────────
+    # ── 2. Bluesky ───────────────────────────────────────────────────────────
     if getattr(config, "BLUESKY_ENABLED", False) and _check_breaker("bluesky", results):
         try:
             from bluesky_uploader import post_to_bluesky
@@ -227,7 +192,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Bluesky error: {e}")
             _handle_platform_error("bluesky", e)
 
-    # ── 4. Raindrop.io ───────────────────────────────────────────────────────
+    # ── 3. Raindrop.io ───────────────────────────────────────────────────────
     if getattr(config, "RAINDROP_ENABLED", False) and _check_breaker("raindrop", results):
         try:
             from raindrop_uploader import post_to_raindrop
@@ -253,7 +218,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Raindrop error: {e}")
             _handle_platform_error("raindrop", e)
 
-    # ── 5. Mastodon ──────────────────────────────────────────────────────────
+    # ── 4. Mastodon ──────────────────────────────────────────────────────────
     if getattr(config, "MASTODON_ENABLED", False) and _check_breaker("mastodon", results):
         try:
             from mastodon_uploader import post_to_mastodon
@@ -282,35 +247,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Mastodon error: {e}")
             _handle_platform_error("mastodon", e)
 
-    # ── 6. DeviantArt ────────────────────────────────────────────────────────
-    if getattr(config, "DEVIANTART_ENABLED", False) and _check_breaker("deviantart", results):
-        try:
-            from deviantart_uploader import post_to_deviantart
-            from database import mark_deviantart_posted, is_deviantart_posted
-            if not is_deviantart_posted(filename):
-                time.sleep(random.uniform(3, 8))
-                da_desc = format_platform_caption("deviantart", title, description, link=link, anime_name=anime_name, is_stealth=is_stealth)
-                da_tags = get_platform_tags(anime_name, platform="deviantart")
-                da_ok = post_to_deviantart(
-                    image_url=public_img_url or original_image_url,
-                    title=title,
-                    description=da_desc,
-                    tags=da_tags,
-                    link=link,
-                    image_path=image_path,
-                )
-                results["deviantart_ok"] = bool(da_ok)
-                if da_ok:
-                    mark_deviantart_posted(filename, title=title, image_url=public_img_url or original_image_url)
-            else:
-                results["deviantart_ok"] = True
-            results["deviantart_url"] = "https://www.deviantart.com/muthelyrics"
-        except Exception as e:
-            results["deviantart_ok"] = False
-            logger.warning(f"[Crosspost] DeviantArt error: {e}")
-            _handle_platform_error("deviantart", e)
-
-    # ── 7. Pixelfed ──────────────────────────────────────────────────────────
+    # ── 5. Pixelfed ──────────────────────────────────────────────────────────
     if getattr(config, "PIXELFED_ENABLED", False) and _check_breaker("pixelfed", results):
         try:
             from pixelfed_uploader import post_to_pixelfed
@@ -340,7 +277,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Pixelfed error: {e}")
             _handle_platform_error("pixelfed", e)
 
-    # ── 8. Freeimage.host ────────────────────────────────────────────────────
+    # ── 6. Freeimage.host ────────────────────────────────────────────────────
     if getattr(config, "FREEIMAGE_ENABLED", False) and _check_breaker("freeimage", results):
         try:
             from freeimage_uploader import post_to_freeimage
@@ -366,33 +303,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             logger.warning(f"[Crosspost] Freeimage error: {e}")
             _handle_platform_error("freeimage", e)
 
-    # ── 9. ImgBB ─────────────────────────────────────────────────────────────
-    if getattr(config, "IMGBB_ENABLED", False) and _check_breaker("imgbb", results):
-        try:
-            from imgbb_uploader import post_to_imgbb
-            from database import mark_imgbb_posted, is_imgbb_posted
-            if not is_imgbb_posted(filename):
-                ibb_url = post_to_imgbb(
-                    image_path=image_path,
-                    title=title,
-                    anime_name=anime_name,
-                    affiliate_url=link,
-                )
-                results["imgbb_ok"] = bool(ibb_url)
-                if ibb_url:
-                    mark_imgbb_posted(filename, post_url=ibb_url, title=title, image_url=public_img_url or original_image_url)
-                    results["imgbb_url"] = ibb_url
-                else:
-                    results["imgbb_url"] = "https://muthelyrics.imgbb.com/"
-            else:
-                results["imgbb_ok"] = True
-                results["imgbb_url"] = "https://muthelyrics.imgbb.com/"
-        except Exception as e:
-            results["imgbb_ok"] = False
-            logger.warning(f"[Crosspost] ImgBB error: {e}")
-            _handle_platform_error("imgbb", e)
-
-    # ── 10. Imghippo ─────────────────────────────────────────────────────────
+    # ── 7. Imghippo ──────────────────────────────────────────────────────────
     if getattr(config, "IMGHIPPO_ENABLED", False) and _check_breaker("imghippo", results):
         try:
             from imghippo_uploader import post_to_imghippo

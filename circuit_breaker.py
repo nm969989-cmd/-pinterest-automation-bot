@@ -129,8 +129,8 @@ def get_all_cooldowns() -> dict:
     """
     active = {}
     known_platforms = [
-        "pinterest", "arena", "tumblr", "bluesky", "mastodon", "deviantart",
-        "pixelfed", "raindrop", "imgbb", "freeimage", "imghippo"
+        "pinterest", "arena", "bluesky", "mastodon",
+        "pixelfed", "raindrop", "freeimage", "imghippo"
     ]
     for p in known_platforms:
         cooling, reason, rem = is_cooling_down(p)
