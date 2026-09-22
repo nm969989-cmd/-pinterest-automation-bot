@@ -1455,6 +1455,25 @@ def get_stock_stats_today(today_str: str = "") -> dict:
     return {p: count_stock_posts_today(p, today_str) for p in platforms}
 
 
+def get_stock_stats_alltime() -> dict:
+    """
+    Returns all-time total successful upload count per stock platform
+    and a grand total. Used by /stockstats Telegram command.
+    """
+    platforms = ["shutterstock", "adobe", "freepik", "depositphotos", "dreamstime", "123rf"]
+    result = {}
+    with _get_conn() as conn:
+        for p in platforms:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM stock_uploads WHERE platform = ? AND status = 'success'",
+                (p,)
+            ).fetchone()
+            result[p] = row[0] if row else 0
+    result["total"] = sum(result.values())
+    return result
+
+
+
 # Initialize on import
 init_db()
 

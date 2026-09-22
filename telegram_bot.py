@@ -243,6 +243,8 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/dailyreport    - Detailed pin & cross-post report\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
         "/analytics      - 7-day pins & revenue report\n"
+        "/stockstats     - Stock photo upload counts per platform\n"
+        "/uptime         - Platform health & circuit breaker status\n"
         "/preview        - Last pin with image\n"
         "/logs           - Recent log output\n"
         "/queue          - Pending queue breakdown\n"
@@ -432,6 +434,105 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     )
     await update.message.reply_text(msg)
     logger.info("[TG BOT] /clicks report sent.")
+
+
+async def cmd_stockstats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show stock photography upload stats — today and all-time totals per platform."""
+    if not _is_admin(update): return
+    try:
+        from database import get_stock_stats_today, get_stock_stats_alltime
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+        today  = get_stock_stats_today(today_str)
+        alltime = get_stock_stats_alltime()
+
+        # Platform display config: name → (emoji, full label)
+        platforms = {
+            "shutterstock":  ("📸", "Shutterstock"),
+            "adobe":         ("🎨", "Adobe Stock"),
+            "freepik":       ("🖼️", "Freepik"),
+            "depositphotos": ("💼", "Depositphotos"),
+            "dreamstime":    ("💭", "Dreamstime"),
+            "123rf":         ("🔢", "123RF"),
+        }
+
+        lines = [
+            f"📊 *Stock Photography Stats*",
+            f"{'─' * 30}",
+            f"{'Platform':<16} {'Today':>6}  {'All-Time':>9}",
+            f"{'─' * 33}",
+        ]
+        for key, (emoji, label) in platforms.items():
+            t = today.get(key, 0)
+            a = alltime.get(key, 0)
+            today_str_val  = f"{t}" if t > 0 else "—"
+            alltime_str = f"{a:,}"
+            lines.append(f"{emoji} {label:<14} {today_str_val:>6}  {alltime_str:>9}")
+
+        lines += [
+            f"{'─' * 33}",
+            f"{'📦 Total':<16} {sum(today.values()):>6}  {alltime.get('total', 0):>9,}",
+            f"{'─' * 30}",
+            f"💡 Uploads run automatically after each Pinterest post.",
+        ]
+
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown"
+        )
+        logger.info("[TG BOT] /stockstats report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error loading stock stats: {e}")
+        logger.error(f"[TG BOT] stockstats error: {e}")
+
+
+async def cmd_uptime(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show platform health: which platforms are live vs cooling down (circuit breaker status)."""
+    if not _is_admin(update): return
+    try:
+        from circuit_breaker import get_all_cooldowns, is_cooling_down
+
+        all_platforms = [
+            ("pinterest",  "🖼️", "Pinterest"),
+            ("arena",      "🔲", "Are.na"),
+            ("bluesky",    "🦋", "Bluesky"),
+            ("mastodon",   "🐘", "Mastodon"),
+            ("pixelfed",   "📷", "Pixelfed"),
+            ("raindrop",   "💧", "Raindrop"),
+            ("freeimage",  "🆓", "Freeimage"),
+            ("imghippo",   "🦛", "Imghippo"),
+        ]
+
+        healthy = []
+        cooling = []
+        for key, emoji, label in all_platforms:
+            is_cool, reason, rem = is_cooling_down(key)
+            if is_cool:
+                cooling.append(f"  {emoji} *{label}* — ❄️ Cooldown: {rem}h left\n    _{reason[:70]}_")
+            else:
+                healthy.append(f"  {emoji} {label} ✅")
+
+        lines = [f"🛡️ *Platform Health Report*", f"{'─' * 30}"]
+
+        if healthy:
+            lines.append(f"\n🟢 *Healthy ({len(healthy)})*")
+            lines.extend(healthy)
+
+        if cooling:
+            lines.append(f"\n🔴 *Circuit Breaker Active ({len(cooling)})*")
+            lines.extend(cooling)
+            lines.append(f"\n💡 Use /resetbreaker to manually clear a cooldown.")
+        else:
+            lines.append(f"\n_All platforms are posting normally._")
+
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown"
+        )
+        logger.info("[TG BOT] /uptime report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error loading platform status: {e}")
+        logger.error(f"[TG BOT] uptime error: {e}")
 
 
 async def cmd_analytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -3143,6 +3244,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("clicks",        cmd_clicks),
             ("earnings",      cmd_clicks),
             ("analytics",     cmd_analytics),
+            ("stockstats",    cmd_stockstats),
+            ("uptime",        cmd_uptime),
             ("doctor",        cmd_doctor),
             ("healthcheck",   cmd_doctor),
             ("repairlinks",   cmd_repairlinks),
@@ -3195,6 +3298,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
                 BotCommand("analytics",     "7-day pins & revenue report"),
+                BotCommand("stockstats",    "Stock photo upload counts per platform"),
+                BotCommand("uptime",        "Platform health & circuit breaker status"),
                 BotCommand("dailyreport",   "Today's detailed pin report"),
                 BotCommand("preview",       "Last generated pin with image"),
                 BotCommand("logs",          "Show recent log output"),
