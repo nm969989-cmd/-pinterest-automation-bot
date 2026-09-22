@@ -122,6 +122,64 @@ def clear_breaker(platform: str) -> bool:
         return False
 
 
+def record_success(platform: str) -> bool:
+    """
+    Called after every successful platform post.
+    If the circuit breaker was previously tripped (e.g. recovered from a transient error),
+    auto-clears the cooldown and notifies admin that the platform has recovered.
+    This enables automatic half-open → closed state recovery without manual /resetbreaker.
+    """
+    try:
+        cooling, reason, _ = is_cooling_down(platform)
+        if cooling:
+            # Platform was tripped but managed to post — clear it and notify
+            clear_breaker(platform)
+            logger.info(
+                f"[CircuitBreaker] Auto-recovered '{platform}' — breaker cleared after successful post."
+            )
+            try:
+                from telegram_bot import notify_admin
+                notify_admin(
+                    f"✅ *Platform Auto-Recovered*\n\n"
+                    f"• *Platform*: `{platform.upper()}`\n"
+                    f"• Previous issue: `{reason[:100]}`\n"
+                    f"• *Status*: Circuit breaker auto-cleared after successful post.\n"
+                    f"_Posting will continue normally._"
+                )
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        logger.debug(f"[CircuitBreaker] record_success error for '{platform}': {e}")
+        return False
+
+
+def trip_token_expired(platform: str, renew_instructions: str = "") -> bool:
+    """
+    Trips the circuit breaker specifically for a token expiry (HTTP 401).
+    Sets a short 1-hour cooldown and sends an urgent admin alert with
+    token renewal instructions so the user can fix it without digging in logs.
+    Distinct from a rate-limit trip — this requires human action to resolve.
+    """
+    reason = f"Token expired (HTTP 401) — manual renewal required"
+    trip_breaker(platform, reason, cooldown_hours=1.0)
+    try:
+        from telegram_bot import notify_admin
+        msg = (
+            f"🔑 *Token Expired — Action Required*\n\n"
+            f"• *Platform*: `{platform.upper()}`\n"
+            f"• *Error*: HTTP 401 Unauthorized\n"
+            f"• *Impact*: Posting to {platform.capitalize()} is paused for 1 hour.\n\n"
+        )
+        if renew_instructions:
+            msg += f"*How to fix*:\n{renew_instructions}\n\n"
+        msg += f"After updating the token, use /resetbreaker to resume immediately."
+        notify_admin(msg)
+    except Exception:
+        pass
+    return True
+
+
 def get_all_cooldowns() -> dict:
     """
     Returns a dictionary of all currently active platform cooldowns.

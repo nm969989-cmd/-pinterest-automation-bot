@@ -144,7 +144,30 @@ def post_to_raindrop(image_url: str, title: str, description: str,
                 item = res.json().get("item", {})
                 drop_id = item.get("_id")
                 logger.info(f"[Raindrop] Successfully posted bookmark #{drop_id}: '{title}'")
+                # Auto-clear circuit breaker if it was previously tripped
+                try:
+                    from circuit_breaker import record_success
+                    record_success("raindrop")
+                except Exception:
+                    pass
                 return True
+            elif res.status_code == 401:
+                # Token expired or revoked — alert admin immediately, don't retry
+                logger.error("[Raindrop] HTTP 401 Unauthorized — RAINDROP_ACCESS_TOKEN is expired or revoked.")
+                try:
+                    from circuit_breaker import trip_token_expired
+                    trip_token_expired(
+                        "raindrop",
+                        renew_instructions=(
+                            "1. Go to https://app.raindrop.io/settings/integrations\n"
+                            "2. Create a new Test Token under your app\n"
+                            "3. Update RAINDROP_ACCESS_TOKEN in your Render environment variables\n"
+                            "4. Restart the bot or use /resetbreaker to resume."
+                        )
+                    )
+                except Exception:
+                    pass
+                return False
             else:
                 logger.warning(
                     f"[Raindrop] API error HTTP {res.status_code} "
@@ -157,6 +180,7 @@ def post_to_raindrop(image_url: str, title: str, description: str,
 
     logger.error(f"[Raindrop] Failed to post bookmark after {_MAX_RETRIES} attempts.")
     return False
+
 
 
 if __name__ == "__main__":

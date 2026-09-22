@@ -227,7 +227,13 @@ def post_to_mastodon(image_url: str, title: str, description: str = "",
                 post_data = res.json()
                 post_url = post_data.get("url") or f"{base_url}/statuses/{post_data.get('id')}"
                 logger.info(f"[Mastodon] Successfully posted: {post_url}")
+                try:
+                    from circuit_breaker import record_success
+                    record_success("mastodon")
+                except Exception:
+                    pass
                 return post_url
+
             elif res.status_code == 429:
                 from circuit_breaker import trip_breaker
                 trip_breaker("mastodon", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)

@@ -326,6 +326,11 @@ def post_to_bluesky(image_url: str = "", title: str = "", caption: str = "",
                     post_uri = resp_data.get("uri", "")
                     post_cid = resp_data.get("cid", "")
                     logger.info(f"[Bluesky] Post created successfully! URI: {post_uri}")
+                    try:
+                        from circuit_breaker import record_success
+                        record_success("bluesky")
+                    except Exception:
+                        pass
                     return post_uri
                 elif res.status_code == 401:
                     # Clear session cache and retry

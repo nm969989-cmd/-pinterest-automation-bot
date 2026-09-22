@@ -105,7 +105,13 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                     f"[Are.na] Block posted (id={block_id}): '{title[:60]}'"
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
+                try:
+                    from circuit_breaker import record_success
+                    record_success("arena")
+                except Exception:
+                    pass
                 return True
+
             elif res.status_code == 403:
                 # 403 = Scope / permission error (token has Read-only instead of Read + Write)
                 err_msg = ""

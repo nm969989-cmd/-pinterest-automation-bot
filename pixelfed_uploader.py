@@ -167,7 +167,24 @@ def _upload_media(image_path: str = None, image_url: str = None, description: st
             logger.info(f"[Pixelfed] Media uploaded successfully: ID={media_id}")
             return str(media_id)
         else:
-            if res.status_code == 429:
+            if res.status_code == 401:
+                logger.error("[Pixelfed] HTTP 401 Unauthorized — PIXELFED_ACCESS_TOKEN is expired or revoked.")
+                try:
+                    from circuit_breaker import trip_token_expired
+                    trip_token_expired(
+                        "pixelfed",
+                        renew_instructions=(
+                            "1. Log in to your Pixelfed instance\n"
+                            "2. Go to Settings → Applications → Personal Access Tokens\n"
+                            "3. Generate a new token with read/write access\n"
+                            "4. Update PIXELFED_ACCESS_TOKEN in Render environment variables\n"
+                            "5. Restart the bot or use /resetbreaker to resume."
+                        )
+                    )
+                except Exception:
+                    pass
+                return None
+            elif res.status_code == 429:
                 from circuit_breaker import trip_breaker
                 trip_breaker("pixelfed", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
             elif res.status_code == 403:
@@ -246,9 +263,32 @@ def post_to_pixelfed(image_url: str, title: str, description: str = "",
                 data = res.json()
                 public_url = data.get("url") or f"{base_url}/p/{data.get('id')}"
                 logger.info(f"[Pixelfed] Successfully posted: {public_url}")
+                # Auto-clear circuit breaker if previously tripped
+                try:
+                    from circuit_breaker import record_success
+                    record_success("pixelfed")
+                except Exception:
+                    pass
                 return public_url
             else:
-                if res.status_code == 429:
+                if res.status_code == 401:
+                    logger.error("[Pixelfed] HTTP 401 on status post — token expired or revoked.")
+                    try:
+                        from circuit_breaker import trip_token_expired
+                        trip_token_expired(
+                            "pixelfed",
+                            renew_instructions=(
+                                "1. Log in to your Pixelfed instance\n"
+                                "2. Go to Settings → Applications → Personal Access Tokens\n"
+                                "3. Generate a new token with read/write access\n"
+                                "4. Update PIXELFED_ACCESS_TOKEN in Render environment variables\n"
+                                "5. Restart the bot or use /resetbreaker to resume."
+                            )
+                        )
+                    except Exception:
+                        pass
+                    return None  # Don't retry on 401
+                elif res.status_code == 429:
                     from circuit_breaker import trip_breaker
                     trip_breaker("pixelfed", f"HTTP 429 Rate Limit: {res.text[:80]}", cooldown_hours=6.0)
                 elif res.status_code == 403:
