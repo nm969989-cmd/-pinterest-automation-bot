@@ -59,7 +59,7 @@ services:
       - key: TUMBLR_TAGS
         value: "anime,aesthetic,animeart,wallpaper,pinterest"
       - key: TUMBLR_ENABLED
-        value: "true"
+        value: "false"
       # Bluesky Cross-Posting
       - key: BLUESKY_HANDLE
         sync: false

@@ -25,12 +25,21 @@ _RETRY_DELAYS  = [0, 5, 15]   # seconds -- mirrors pinterest_uploader pattern
 
 
 def _get_headers() -> dict:
-    """Returns auth headers for Are.na v3 API calls."""
+    """Returns auth headers for Are.na v3 API calls, checking bot_metadata then .env."""
     from config import ARENA_ACCESS_TOKEN
-    if not ARENA_ACCESS_TOKEN:
-        raise ValueError("ARENA_ACCESS_TOKEN is not set in .env")
+    import os
+    token = ""
+    try:
+        from database import get_metadata
+        token = get_metadata("arena_access_token", "").strip()
+    except Exception:
+        pass
+    if not token:
+        token = (ARENA_ACCESS_TOKEN or os.getenv("ARENA_ACCESS_TOKEN", "")).strip()
+    if not token:
+        raise ValueError("ARENA_ACCESS_TOKEN is not set in .env or database")
     return {
-        "Authorization": f"Bearer {ARENA_ACCESS_TOKEN.strip()}",
+        "Authorization": f"Bearer {token}",
         "Content-Type":  "application/json",
     }
 
@@ -260,9 +269,10 @@ def verify_arena_write_access() -> str:
             headers=headers,
             timeout=10,
         )
-        if probe_res.status_code in (200, 201, 422):
-            # 422 = "Unprocessable Entity" (write scope confirmed but empty value rejected)
-            logger.info("[Are.na] Write-access check: token has READ + WRITE scope. ✓")
+        if probe_res.status_code in (200, 201, 400, 422):
+            # 400 = "value is required", 422 = Unprocessable Entity
+            # Both confirm authorization succeeded before validation error
+            logger.info("[Are.na] Write-access check: token has READ + WRITE scope. [OK]")
             return "write"
         elif probe_res.status_code == 403:
             logger.warning(

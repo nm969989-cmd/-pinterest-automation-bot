@@ -1013,6 +1013,36 @@ async def cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     await update.message.reply_text("Bot RESUMED. Posting is active again.")
 
 
+async def cmd_resetbreaker(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    Reset the circuit breaker cooldown for a specific platform or all platforms.
+    Usage: /resetbreaker [platform|all] or /unbreak [platform|all]
+    """
+    if not _is_admin(update): return
+    args = context.args if context and context.args else []
+    target = (args[0].lower().strip() if args else "all")
+    from circuit_breaker import clear_breaker, get_all_cooldowns
+    if target in ("all", "*"):
+        cooldowns = get_all_cooldowns()
+        for p in list(cooldowns.keys()):
+            clear_breaker(p)
+        try:
+            from jsonbin_sync import save_cloud_state
+            save_cloud_state()
+        except Exception:
+            pass
+        await update.message.reply_text("✅ All platform circuit breakers cleared. Immediate posting restored.")
+    else:
+        clear_breaker(target)
+        try:
+            from jsonbin_sync import save_cloud_state
+            save_cloud_state()
+        except Exception:
+            pass
+        await update.message.reply_text(f"✅ Circuit breaker for `{target.upper()}` cleared. Immediate posting restored.", parse_mode="Markdown")
+
+
+
 async def cmd_queue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show the real pending queue from SQLite with upcoming pin titles, schedule & countdown."""
     if not _is_admin(update): return
@@ -3494,6 +3524,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("testpost",      cmd_testpost),
             ("pause",         cmd_pause),
             ("resume",        cmd_resume),
+            ("resetbreaker",  cmd_resetbreaker),
+            ("unbreak",       cmd_resetbreaker),
             ("queue",         cmd_queue),
             ("schedule",      cmd_schedule),
             ("clearqueue",    cmd_clearqueue),
@@ -3578,6 +3610,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("testpost",      "Send a test pin via Make.com webhook"),
                 BotCommand("pause",         "Pause posting"),
                 BotCommand("resume",        "Resume posting"),
+                BotCommand("resetbreaker",  "Clear platform circuit breaker cooldown"),
                 BotCommand("post_now",      "Force-post next queued pin NOW"),
                 BotCommand("schedule",      "Today's posting schedule (Auto: 8 AM)"),
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
