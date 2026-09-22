@@ -77,13 +77,13 @@ services:
         value: "true"
       # Freeimage.host Cross-Posting
       - key: FREEIMAGE_API_KEY
-        value: "6d207e02198a847aa98d0a2a901485a5"
+        sync: false
       - key: FREEIMAGE_ENABLED
         value: "true"
 
       # Imghippo Cross-Posting
       - key: IMGHIPPO_API_KEY
-        value: "00f11d3e65f34df60a3cf9e47ecf7453"
+        sync: false
       - key: IMGHIPPO_ENABLED
         value: "true"
 
