@@ -221,6 +221,63 @@ def verify_arena_token() -> bool:
         return False
 
 
+def verify_arena_write_access() -> str:
+    """
+    Checks the scope level of the ARENA_ACCESS_TOKEN.
+    Does a lightweight test POST to detect read-only vs write-capable tokens.
+
+    Returns:
+        "write"     — token has write access (can create blocks)
+        "read_only" — token is valid but has read-only scope (403 on POST)
+        "invalid"   — token is missing or completely invalid (401)
+        "unknown"   — could not determine (network error / unexpected response)
+    """
+    from config import ARENA_CHANNEL_SLUG
+    try:
+        headers = _get_headers()
+    except ValueError:
+        return "invalid"
+
+    # First confirm the token is valid at all
+    try:
+        me_res = requests.get(f"{ARENA_API_BASE}/me", headers=headers, timeout=10)
+        if me_res.status_code == 401:
+            logger.warning("[Are.na] Write-access check: token invalid (401).")
+            return "invalid"
+        if me_res.status_code != 200:
+            logger.warning(f"[Are.na] Write-access check: unexpected HTTP {me_res.status_code} on /me.")
+            return "unknown"
+    except Exception as e:
+        logger.warning(f"[Are.na] Write-access check network error on /me: {e}")
+        return "unknown"
+
+    # Probe write access with an intentionally empty POST — a read-only token
+    # gets 403 immediately; a write-capable token gets 422 (empty value) instead.
+    try:
+        probe_res = requests.post(
+            f"{ARENA_API_BASE}/blocks",
+            json={"value": "", "channel_ids": [ARENA_CHANNEL_SLUG]},
+            headers=headers,
+            timeout=10,
+        )
+        if probe_res.status_code in (200, 201, 422):
+            # 422 = "Unprocessable Entity" (write scope confirmed but empty value rejected)
+            logger.info("[Are.na] Write-access check: token has READ + WRITE scope. ✓")
+            return "write"
+        elif probe_res.status_code == 403:
+            logger.warning(
+                "[Are.na] Write-access check: token is READ-ONLY (HTTP 403). "
+                "Regenerate token at https://dev.are.na/ with 'Read + Write' scope."
+            )
+            return "read_only"
+        else:
+            logger.warning(f"[Are.na] Write-access check: unexpected HTTP {probe_res.status_code}.")
+            return "unknown"
+    except Exception as e:
+        logger.warning(f"[Are.na] Write-access check network error on POST /blocks: {e}")
+        return "unknown"
+
+
 # -- Standalone test ----------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)

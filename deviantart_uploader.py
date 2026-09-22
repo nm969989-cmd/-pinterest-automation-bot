@@ -247,6 +247,30 @@ def post_to_deviantart(image_url: str = "", title: str = "", description: str = 
         logger.debug("[DeviantArt] DEVIANTART_ENABLED=false -- skipping post.")
         return False
 
+    # Guard: both client_id AND client_secret are required for token refresh.
+    # Without client_secret, the access token cannot be refreshed when it expires,
+    # causing every post to silently fail after the first token expiry.
+    if not DEVIANTART_CLIENT_ID or not DEVIANTART_CLIENT_SECRET:
+        missing = []
+        if not DEVIANTART_CLIENT_ID:
+            missing.append("DEVIANTART_CLIENT_ID")
+        if not DEVIANTART_CLIENT_SECRET:
+            missing.append("DEVIANTART_CLIENT_SECRET")
+        logger.error(
+            f"[DeviantArt] Cannot post — incomplete credentials: {', '.join(missing)} not set in .env. "
+            "Get them from https://www.deviantart.com/developers/apps"
+        )
+        try:
+            from circuit_breaker import trip_breaker
+            trip_breaker(
+                "deviantart",
+                f"Incomplete credentials: {', '.join(missing)} missing from .env",
+                cooldown_hours=6.0,
+            )
+        except Exception:
+            pass
+        return False
+
     if not image_url and not image_path:
         logger.warning("[DeviantArt] No image_url or image_path provided.")
         return False

@@ -150,7 +150,8 @@ def post_to_imgbb(image_path: str,
                     logger.error("[ImgBB] Access forbidden (Code 103) — ImgBB blocks cloud hosting IP addresses. Aborting retries.")
                     try:
                         from circuit_breaker import trip_breaker
-                        trip_breaker("imgbb", "HTTP 400 Code 103: Server IP blocked by ImgBB", cooldown_hours=24.0)
+                        # Cloud server IP blocks by ImgBB typically last days/weeks — use 72h cooldown
+                        trip_breaker("imgbb", "HTTP 400 Code 103: Server IP blocked by ImgBB", cooldown_hours=72.0)
                     except Exception:
                         pass
                     return None

@@ -12,6 +12,9 @@ logger = get_logger(__name__)
 # Duplicate uploads are now tracked in SQLite (see database.py)
 # Persistent across restarts — duplicates are prevented even after a crash.
 
+# Module-level board ID cache so we only fetch once per session
+_resolved_board_id: str = ""
+
 def get_board_id_dynamically(headers):
     """Fetches the board ID dynamically using the API if the user didn't provide it"""
     try:
@@ -20,14 +23,59 @@ def get_board_id_dynamically(headers):
         if res.status_code == 200:
             boards = res.json().get('items', [])
             for b in boards:
-                # Default to the first board if we can't match it perfectly, or match by name
+                # Prefer anime-themed board; fall back to first board
                 if "anime" in b.get('name', '').lower() or not PINTEREST_BOARD_ID:
                     return b.get('id')
             if boards:
-                return boards[0].get('id') # Fallback to first board
+                return boards[0].get('id')  # Fallback to first board
     except Exception as e:
         logger.error(f"Failed to fetch board ID: {e}")
     return PINTEREST_BOARD_ID
+
+
+def _resolve_board_id(board_id_override: str = "") -> str:
+    """
+    Resolves the Pinterest board ID to use for a pin.
+    Priority order:
+      1. Caller-supplied board_id_override (from board_router)
+      2. PINTEREST_BOARD_ID from .env
+      3. Dynamically fetched via Pinterest API (cached for the session)
+    Logs clearly which source was used.
+    """
+    global _resolved_board_id
+
+    # 1. Caller override (from genre board router)
+    if board_id_override and board_id_override.strip().isdigit():
+        logger.info(f"[Pinterest] Using genre-routed board_id: {board_id_override}")
+        return board_id_override.strip()
+
+    # 2. .env PINTEREST_BOARD_ID
+    if PINTEREST_BOARD_ID and PINTEREST_BOARD_ID.strip().isdigit():
+        logger.info(f"[Pinterest] Using PINTEREST_BOARD_ID from .env: {PINTEREST_BOARD_ID}")
+        return PINTEREST_BOARD_ID.strip()
+
+    # 3. Already fetched this session
+    if _resolved_board_id:
+        logger.info(f"[Pinterest] Using cached dynamically-fetched board_id: {_resolved_board_id}")
+        return _resolved_board_id
+
+    # 4. Fetch dynamically via Pinterest API
+    if PINTEREST_ACCESS_TOKEN:
+        headers = {
+            "Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        fetched = get_board_id_dynamically(headers)
+        if fetched:
+            _resolved_board_id = str(fetched)
+            logger.info(f"[Pinterest] Auto-fetched board_id from API: {_resolved_board_id} (cached for session)")
+            return _resolved_board_id
+
+    logger.warning(
+        "[Pinterest] PINTEREST_BOARD_ID is empty and dynamic fetch failed. "
+        "Make.com will use its default board. Set PINTEREST_BOARD_ID in .env to fix this."
+    )
+    return ""
 
 def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
                             anime_name: str = "", board_id: str = "",
@@ -53,12 +101,15 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
     pinterest_link = preflight_validate_destination(link, anime_name=anime_name, title=title)
     logger.info(f"[Make.com] Pre-flight destination verified: {pinterest_link[:80]}")
 
+    # Resolve the board ID — auto-fetch if PINTEREST_BOARD_ID is empty
+    resolved_board = _resolve_board_id(board_id)
+
     payload = {
         "title":       title[:100],
         "description": description[:500],
         "link":        pinterest_link,
         "image_url":   image_url,
-        "board_id":    board_id or PINTEREST_BOARD_ID or "",
+        "board_id":    resolved_board,
         "alt_text":    alt_text[:500] if alt_text else "",
     }
     delays = [0, 5, 15]  # seconds between attempts

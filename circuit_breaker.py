@@ -129,7 +129,7 @@ def get_all_cooldowns() -> dict:
     """
     active = {}
     known_platforms = [
-        "pinterest", "arena", "bluesky", "mastodon", "deviantart",
+        "pinterest", "arena", "tumblr", "bluesky", "mastodon", "deviantart",
         "pixelfed", "raindrop", "imgbb", "freeimage", "imghippo"
     ]
     for p in known_platforms:

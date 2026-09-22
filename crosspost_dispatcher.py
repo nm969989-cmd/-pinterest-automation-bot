@@ -105,6 +105,25 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception:
             pass
 
+    # 3rd-tier CDN fallback: if still no valid public URL, try Imghippo
+    if (not public_img_url or "api.telegram.org" in public_img_url or "pinimg.com" in public_img_url) and image_path and os.path.exists(image_path):
+        try:
+            from imghippo_uploader import post_to_imghippo
+            hip_hosted = post_to_imghippo(image_path=image_path, title=title, anime_name=anime_name)
+            if hip_hosted:
+                public_img_url = hip_hosted
+                logger.info(f"[Crosspost] Using Imghippo as 3rd-tier CDN URL: {public_img_url}")
+        except Exception:
+            pass
+
+    # Final warning: if we still have a Telegram URL, external platforms will fail to fetch it
+    if public_img_url and ("api.telegram.org" in public_img_url or "pinimg.com" in public_img_url):
+        logger.warning(
+            "[Crosspost] WARNING: All CDN uploads failed — public_img_url is a Telegram/Pinterest CDN "
+            "that external servers cannot fetch. Are.na, Bluesky, Mastodon posts may fail. "
+            "Check Cloudinary/Catbox/Freeimage/Imghippo connectivity."
+        )
+
     results = {
         "arena_ok": None, "arena_url": "",
         "tumblr_ok": None, "tumblr_url": "",
