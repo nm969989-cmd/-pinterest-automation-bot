@@ -450,7 +450,7 @@ class PinScheduler:
                                count_posts_today, mark_file_uploaded,
                                is_file_uploaded, is_image_url_uploaded,
                                increment_retry_count, update_pin_image_path,
-                               count_posts_on_utc_date)
+                               count_posts_on_utc_date, move_to_dead_letter)
         from pinterest_uploader import upload_to_pinterest
 
         self.is_running = True
@@ -731,6 +731,7 @@ class PinScheduler:
                                             )
                                             new_count = increment_retry_count(pin["id"])
                                             if new_count >= 3:
+                                                move_to_dead_letter(pin, fail_reason=f"Image re-download failed 3x: {re_err}")
                                                 remove_queued_pin(pin["id"])
                                                 logger.error(
                                                     f"[Scheduler] Dropped pin after 3 failed re-downloads: '{pin['title']}'"
@@ -738,11 +739,12 @@ class PinScheduler:
                                                 try:
                                                     from telegram_bot import notify_admin
                                                     notify_admin(
-                                                        f"⚠️ Pin dropped — image lost & CDN expired:\n"
-                                                        f"'{pin['title']}'\n"
+                                                        f"⚠️ Pin dead-lettered — image lost & CDN expired:\n"
+                                                        f"*{pin['title']}*\n"
                                                         f"Anime: {pin['anime_name']}\n"
                                                         f"The Telegram CDN URL has expired. "
-                                                        f"Re-send the image to re-queue it."
+                                                        f"Re-send the image to re-queue it.\n"
+                                                        f"📋 Check /deadqueue for full history."
                                                     )
                                                 except Exception:
                                                     pass
@@ -825,22 +827,22 @@ class PinScheduler:
                                     )
                                     _last_pin_post_time = time.time()
                                 else:
-                                    # Auto-retry: drop after 3 fails
+                                    # Auto-retry: move to dead-letter after 3 fails
                                     MAX_RETRIES = 3
                                     new_count = increment_retry_count(pin["id"])
                                     if new_count >= MAX_RETRIES:
-                                        logger.error(
-                                            f"[Scheduler] Pin failed {MAX_RETRIES} times, "
-                                            f"dropping: '{pin['title']}'"
-                                        )
+                                        move_to_dead_letter(pin, fail_reason=f"Pinterest upload failed {MAX_RETRIES} times")
                                         remove_queued_pin(pin["id"])
+                                        logger.error(
+                                            f"[Scheduler] Pin dead-lettered after {MAX_RETRIES} upload failures: '{pin['title']}'"
+                                        )
                                         try:
                                             from telegram_bot import notify_admin
                                             notify_admin(
-                                                f"[Bot Alert] Pin dropped after {MAX_RETRIES} failed "
-                                                f"upload attempts:\n'{pin['title']}'\n"
+                                                f"☠️ Pin dead-lettered after {MAX_RETRIES} failed "
+                                                f"upload attempts:\n*{pin['title']}*\n"
                                                 f"Anime: {pin['anime_name']}\n"
-                                                f"Check /logs for details."
+                                                f"📋 Review & retry via /deadqueue"
                                             )
                                         except Exception:
                                             pass
@@ -849,7 +851,6 @@ class PinScheduler:
                                             f"[Scheduler] Upload failed (attempt {new_count}/{MAX_RETRIES}). "
                                             f"Pin stays in queue: '{pin['title']}'"
                                         )
-                                    _last_pin_post_time = time.time()
 
                     elif self._mem_queue:
                         # Fallback: in-memory queue (approval mode)

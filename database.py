@@ -75,6 +75,23 @@ def init_db():
             except Exception:
                 pass
 
+        # ── Dead-Letter Queue (pins that exhausted all retries) ─────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dead_letter_queue (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id     TEXT,
+                image_path  TEXT,
+                title       TEXT,
+                description TEXT,
+                link        TEXT,
+                anime_name  TEXT,
+                image_url   TEXT,
+                fail_reason TEXT,          -- last error / reason for dropping
+                retry_count INTEGER DEFAULT 0,
+                failed_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # ── Affiliate Link Tracking Tables ──────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tracked_links (
@@ -905,6 +922,71 @@ def update_pin_image_path(pin_id: int, new_image_path: str):
             (new_image_path, pin_id),
         )
         conn.commit()
+
+
+def move_to_dead_letter(pin: dict, fail_reason: str = ""):
+    """
+    Moves a failed pin from pin_queue to dead_letter_queue after exhausting retries.
+    Preserves full pin metadata so the admin can review and manually re-queue via /deadqueue.
+    The pin is NOT deleted from pin_queue here — caller must call remove_queued_pin() separately.
+    """
+    with _get_conn() as conn:
+        try:
+            conn.execute("""
+                INSERT INTO dead_letter_queue
+                    (post_id, image_path, title, description, link, anime_name,
+                     image_url, fail_reason, retry_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                pin.get("post_id", ""),
+                pin.get("image_path", ""),
+                pin.get("title", ""),
+                pin.get("description", ""),
+                pin.get("link", ""),
+                pin.get("anime_name", ""),
+                pin.get("image_url", ""),
+                fail_reason[:500] if fail_reason else "Max retries exceeded",
+                pin.get("retry_count", 0),
+            ))
+            conn.commit()
+            logger.info(f"[DB] Pin moved to dead-letter queue: '{pin.get('title', '')}' — reason: {fail_reason[:80]}")
+        except Exception as e:
+            logger.error(f"[DB] move_to_dead_letter error: {e}")
+
+
+def get_dead_letter_pins(limit: int = 20) -> list:
+    """
+    Returns the most recent dead-letter pins for admin review (/deadqueue command).
+    Each row is a dict with full pin metadata plus fail_reason and failed_at.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, title, anime_name, fail_reason, retry_count, failed_at
+            FROM dead_letter_queue
+            ORDER BY failed_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    return [
+        {
+            "id": r[0], "title": r[1], "anime_name": r[2],
+            "fail_reason": r[3], "retry_count": r[4], "failed_at": r[5],
+        }
+        for r in rows
+    ]
+
+
+def count_dead_letter_pins() -> int:
+    """Returns total number of pins in the dead-letter queue."""
+    with _get_conn() as conn:
+        return conn.execute("SELECT COUNT(*) FROM dead_letter_queue").fetchone()[0]
+
+
+def clear_dead_letter_queue() -> int:
+    """Clears all entries from the dead-letter queue. Returns count deleted."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM dead_letter_queue")
+        conn.commit()
+        return conn.execute("SELECT changes()").fetchone()[0]
 
 
 def get_weekly_stats() -> dict:

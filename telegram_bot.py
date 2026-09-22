@@ -276,7 +276,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/dryrun         - Toggle dry-run on/off\n"
         "/golive         - Enable real Pinterest posting\n"
         "/clearqueue     - Clear pending queue\n"
-        "/fixqueue       - Re-upload stale CDN URLs to permanent host\n\n"
+        "/fixqueue       - Re-upload stale CDN URLs to permanent host\n"
+        "/deadqueue      - View pins that failed all retries (dead-letter)\n"
+        "/cleardead      - Clear the dead-letter queue\n\n"
         "--- SETTINGS ---\n"
         "/addchannel @ch - Add source channel\n"
         "/removechannel @ch - Remove channel\n"
@@ -1196,6 +1198,64 @@ async def cmd_clearqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
     except Exception as e:
         await update.message.reply_text(f"Error clearing queue: {e}")
         logger.error(f"[TG BOT] clearqueue error: {e}")
+
+
+async def cmd_deadqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show pins that exhausted all retries and landed in the dead-letter queue."""
+    if not _is_admin(update): return
+    try:
+        from database import get_dead_letter_pins, count_dead_letter_pins, clear_dead_letter_queue
+        total = count_dead_letter_pins()
+        if total == 0:
+            await update.message.reply_text(
+                "✅ Dead-letter queue is empty — no failed pins.\n"
+                "Pins only appear here after failing 3 upload attempts."
+            )
+            return
+
+        pins = get_dead_letter_pins(limit=10)
+        lines = [f"☠️ *Dead-Letter Queue* — {total} failed pin(s)\n{'─' * 30}"]
+        for i, p in enumerate(pins, 1):
+            failed_at = p["failed_at"][:16] if p["failed_at"] else "unknown"
+            reason = p["fail_reason"] or "unknown"
+            lines.append(
+                f"\n*{i}.* {p['title']}\n"
+                f"   🎌 Anime: {p['anime_name']}\n"
+                f"   ❌ Reason: {reason[:80]}\n"
+                f"   🔄 Retries: {p['retry_count']}  |  🕐 {failed_at}"
+            )
+        if total > 10:
+            lines.append(f"\n_...and {total - 10} more. Showing latest 10._")
+        lines.append(f"\n{'─' * 30}\n💡 Use /cleardead to flush this list.")
+
+        await update.message.reply_text(
+            "\n".join(lines),
+            parse_mode="Markdown"
+        )
+        logger.info(f"[TG BOT] Dead-letter queue viewed by admin ({total} entries).")
+    except Exception as e:
+        await update.message.reply_text(f"Error reading dead-letter queue: {e}")
+        logger.error(f"[TG BOT] deadqueue error: {e}")
+
+
+async def cmd_cleardead(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Clear all entries from the dead-letter queue."""
+    if not _is_admin(update): return
+    try:
+        from database import clear_dead_letter_queue, count_dead_letter_pins
+        total = count_dead_letter_pins()
+        if total == 0:
+            await update.message.reply_text("Dead-letter queue is already empty.")
+            return
+        cleared = clear_dead_letter_queue()
+        await update.message.reply_text(
+            f"🗑️ Dead-letter queue cleared.\n"
+            f"Removed {cleared} failed pin record(s)."
+        )
+        logger.info(f"[TG BOT] Dead-letter queue cleared by admin: {cleared} entries.")
+    except Exception as e:
+        await update.message.reply_text(f"Error clearing dead-letter queue: {e}")
+        logger.error(f"[TG BOT] cleardead error: {e}")
 
 
 async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -3076,6 +3136,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("schedule",      cmd_schedule),
             ("clearqueue",    cmd_clearqueue),
             ("fixqueue",      cmd_fixqueue),
+            ("deadqueue",     cmd_deadqueue),
+            ("cleardead",     cmd_cleardead),
             ("scrape",        cmd_scrape),
             ("post_now",      cmd_postnow),
             ("clicks",        cmd_clicks),
@@ -3154,6 +3216,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("fixqueue",      "Re-upload stale CDN URLs to permanent host"),
+                BotCommand("deadqueue",     "View pins that failed all retries"),
+                BotCommand("cleardead",     "Clear the dead-letter queue"),
                 BotCommand("arena",         "Are.na channel stats & block count"),
                 BotCommand("arena_test",    "Post test block to Are.na channel"),
                 BotCommand("bluesky",       "Bluesky profile stats & follower count"),
