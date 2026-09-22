@@ -301,15 +301,6 @@ def get_platform_tags(
         selected.extend(random.sample(remaining, min(len(remaining), random.randint(3, 4))))
         return selected
 
-    elif plat == "deviantart":
-        # DeviantArt: Clean keywords WITHOUT '#'
-        clean_anime = re.sub(r'[^a-zA-Z0-9]', '', anime_name).lower()
-        base = ["anime", "digitalart", "illustration", "aesthetic", "wallpaper", "artwork"]
-        if clean_anime:
-            base.insert(0, clean_anime)
-        if char_tag:
-            base.insert(1, char_tag.lstrip("#").lower())
-        return base[:8]
 
     # Default / Pinterest
     return get_optimized_hashtags(anime_name, genre, character_name, include_disclosure=False).split()
@@ -372,7 +363,7 @@ def format_platform_caption(
         parts.append(tags_str)
         return "\n\n".join(parts)
 
-    # 4. DeviantArt / General
+    # 4. General
     return clean_body
 
 

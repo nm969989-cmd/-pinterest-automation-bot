@@ -23,12 +23,9 @@ try:
     print(f"  • Queue Status    : {queue['new']} new | {queue['backlog']} backlog | {queue['total']} total")
     print(f"  • Pinterest Uploads: {stats['pinterest']}")
     print(f"  • Freeimage.host   : {stats['freeimage']}")
-    print(f"  • ImgBB            : {stats['imgbb']}")
     print(f"  • Imghippo         : {stats['imghippo']}")
     print(f"  • Pixelfed         : {stats['pixelfed']}")
-    print(f"  • DeviantArt       : {stats['deviantart']}")
     print(f"  • Are.na           : {stats['arena']}")
-    print(f"  • Tumblr           : {stats['tumblr']}")
     print(f"  • Bluesky          : {stats['bluesky']}")
     print(f"  • Raindrop.io      : {stats['raindrop']}")
     print(f"  • Mastodon         : {stats['mastodon']}")
@@ -60,15 +57,6 @@ with _get_conn() as conn:
     else:
         print("  (No Imghippo posts yet)")
 
-    print("\n🖼️ RECENT IMGBB POSTS (Last 3):")
-    cur.execute("SELECT filename, posted_at, title, post_url FROM imgbb_posts ORDER BY id DESC LIMIT 3")
-    rows = cur.fetchall()
-    if rows:
-        for r in rows:
-            print(f"  • [{r['posted_at']}] {r['title'][:40]} | File: {r['filename']}")
-            print(f"    Post URL: {r['post_url']}")
-    else:
-        print("  (No ImgBB posts yet)")
 
     print("\n📷 RECENT FREEIMAGE POSTS (Last 3):")
     cur.execute("SELECT filename, posted_at, title, post_url FROM freeimage_posts ORDER BY id DESC LIMIT 3")

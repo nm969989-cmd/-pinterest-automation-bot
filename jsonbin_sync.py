@@ -128,13 +128,6 @@ def save_cloud_state() -> bool:
                     "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 500"
                 ).fetchall()
             ]
-            # Tumblr posts (last 500 to keep JSON size reasonable)
-            tumblr = [
-                {"filename": r[0], "post_id": r[1], "blog": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_id, blog, image_url, posted_at FROM tumblr_posts ORDER BY id DESC LIMIT 500"
-                ).fetchall()
-            ]
             # Bluesky posts (last 500 to keep JSON size reasonable)
             bluesky = [
                 {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
@@ -150,7 +143,6 @@ def save_cloud_state() -> bool:
             "bot_metadata":    metadata,
             "tracked_links":   tracked,
             "arena_posts":     arena,
-            "tumblr_posts":    tumblr,
             "bluesky_posts":   bluesky,
         }
 
@@ -164,7 +156,7 @@ def save_cloud_state() -> bool:
             logger.info(
                 f"[JSONBin] Synced: {len(posts)} posts, {len(uploads)} uploads, "
                 f"{len(queue)} queued, {len(tracked)} tracked links, "
-                f"{len(arena)} arena, {len(tumblr)} tumblr, {len(bluesky)} bluesky"
+                f"{len(arena)} arena, {len(bluesky)} bluesky"
             )
             return True
         else:
@@ -258,17 +250,6 @@ def restore_db_from_cloud():
                      for a in arena_posts if a.get("filename")]
                 )
 
-            # Restore Tumblr posts
-            tumblr_posts = state.get("tumblr_posts", [])
-            if tumblr_posts:
-                conn.executemany(
-                    "INSERT OR IGNORE INTO tumblr_posts "
-                    "(filename, post_id, blog, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
-                    [(t.get("filename",""), t.get("post_id",""),
-                      t.get("blog",""), t.get("image_url",""),
-                      t.get("posted_at") or "2000-01-01 00:00:00")
-                     for t in tumblr_posts if t.get("filename")]
-                )
 
             # Restore Bluesky posts
             bluesky_posts = state.get("bluesky_posts", [])

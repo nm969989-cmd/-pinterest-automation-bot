@@ -150,22 +150,6 @@ def init_db():
             ON arena_posts (filename)
         """)
 
-        # ── Tumblr Cross-Post Tracking ────────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tumblr_posts (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename    TEXT UNIQUE,
-                post_id     TEXT,
-                blog        TEXT,
-                image_url   TEXT,
-                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tumblr_filename
-            ON tumblr_posts (filename)
-        """)
-
         # ── Bluesky Cross-Post Tracking ───────────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS bluesky_posts (
@@ -214,22 +198,6 @@ def init_db():
             ON mastodon_posts (filename)
         """)
 
-        # ── DeviantArt Cross-Post Tracking ────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS deviantart_posts (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename    TEXT UNIQUE,
-                itemid      INTEGER,
-                title       TEXT,
-                image_url   TEXT,
-                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_deviantart_filename
-            ON deviantart_posts (filename)
-        """)
-
         # ── Pixelfed Cross-Post Tracking ─────────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pixelfed_posts (
@@ -260,22 +228,6 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_freeimage_filename
             ON freeimage_posts (filename)
-        """)
-
-        # ── ImgBB Cross-Post Tracking ────────────────────────────────────────
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS imgbb_posts (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename    TEXT UNIQUE,
-                post_url    TEXT,
-                title       TEXT,
-                image_url   TEXT,
-                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_imgbb_filename
-            ON imgbb_posts (filename)
         """)
 
         # ── Imghippo Cross-Post Tracking ─────────────────────────────────────
@@ -322,29 +274,6 @@ def mark_arena_posted(filename: str, block_id: int = 0,
         conn.commit()
 
 
-# ── Tumblr Cross-Post Tracking ────────────────────────────────────────────────
-
-def is_tumblr_posted(filename: str) -> bool:
-    """Returns True if this image was already posted to Tumblr (prevents duplicates)."""
-    with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM tumblr_posts WHERE filename = ?", (filename,)
-        ).fetchone()
-        return row is not None
-
-
-def mark_tumblr_posted(filename: str, post_id: str = "",
-                       blog: str = "", image_url: str = "") -> None:
-    """Records a successful Tumblr post. Ignores duplicates (INSERT OR IGNORE)."""
-    with _get_conn() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO tumblr_posts (filename, post_id, blog, image_url)
-            VALUES (?, ?, ?, ?)
-            """,
-            (filename, post_id, blog, image_url)
-        )
-        conn.commit()
 
 
 def get_arena_stats(today_str: str = None) -> dict:
@@ -372,31 +301,6 @@ def get_arena_stats(today_str: str = None) -> dict:
         ]
     }
 
-
-def get_tumblr_stats(today_str: str = None) -> dict:
-    """Returns today's and all-time Tumblr posting statistics."""
-    if not today_str:
-        import datetime as _dt
-        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-    with _get_conn() as conn:
-        today_count = conn.execute("""
-            SELECT COUNT(*) FROM tumblr_posts
-            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
-        """, (today_str,)).fetchone()[0]
-        total_count = conn.execute("SELECT COUNT(*) FROM tumblr_posts").fetchone()[0]
-        recent = conn.execute("""
-            SELECT filename, post_id, blog, image_url, posted_at
-            FROM tumblr_posts
-            ORDER BY id DESC LIMIT 5
-        """).fetchall()
-    return {
-        "today": today_count,
-        "total": total_count,
-        "recent": [
-            {"filename": r[0], "post_id": r[1], "blog": r[2], "image_url": r[3], "posted_at": r[4]}
-            for r in recent
-        ]
-    }
 
 
 def get_bluesky_stats(today_str: str = None) -> dict:
@@ -550,55 +454,6 @@ def get_mastodon_stats(today_str: str = None) -> dict:
     }
 
 
-# ── DeviantArt Cross-Post Tracking ──────────────────────────────────────────
-
-def is_deviantart_posted(filename: str) -> bool:
-    """Returns True if this image was already posted to DeviantArt (prevents duplicates)."""
-    with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM deviantart_posts WHERE filename = ?", (filename,)
-        ).fetchone()
-        return row is not None
-
-
-def mark_deviantart_posted(filename: str, itemid: int = 0,
-                           title: str = "", image_url: str = "") -> None:
-    """Records a successful DeviantArt post. Ignores duplicates (INSERT OR IGNORE)."""
-    with _get_conn() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO deviantart_posts (filename, itemid, title, image_url)
-            VALUES (?, ?, ?, ?)
-            """,
-            (filename, itemid, title, image_url)
-        )
-        conn.commit()
-
-
-def get_deviantart_stats(today_str: str = None) -> dict:
-    """Returns today's and all-time DeviantArt posting statistics."""
-    if not today_str:
-        import datetime as _dt
-        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-    with _get_conn() as conn:
-        today_count = conn.execute("""
-            SELECT COUNT(*) FROM deviantart_posts
-            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
-        """, (today_str,)).fetchone()[0]
-        total_count = conn.execute("SELECT COUNT(*) FROM deviantart_posts").fetchone()[0]
-        recent = conn.execute("""
-            SELECT filename, title, image_url, posted_at
-            FROM deviantart_posts
-            ORDER BY id DESC LIMIT 5
-        """).fetchall()
-    return {
-        "today": today_count,
-        "total": total_count,
-        "recent": [
-            {"filename": r[0], "title": r[1], "image_url": r[2], "posted_at": r[3]}
-            for r in recent
-        ]
-    }
 
 
 # ── Pixelfed Cross-Post Tracking ─────────────────────────────────────────────
@@ -653,7 +508,7 @@ def get_pixelfed_stats(today_str: str = None) -> dict:
 
 
 def get_multi_platform_stats(today_str: str = None) -> dict:
-    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Tumblr, Bluesky, Raindrop, Mastodon, Pixelfed, DeviantArt, Freeimage, ImgBB, Imghippo)."""
+    """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, Imghippo)."""
     if not today_str:
         import datetime as _dt
         today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
@@ -661,14 +516,11 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     pins_today = get_today_uploads(today_str)
     all_time_pins = get_all_time_stats()
     arena_stats = get_arena_stats(today_str)
-    tumblr_stats = get_tumblr_stats(today_str)
     bluesky_stats = get_bluesky_stats(today_str)
     raindrop_stats = get_raindrop_stats(today_str)
     mastodon_stats = get_mastodon_stats(today_str)
     pixelfed_stats = get_pixelfed_stats(today_str)
-    deviantart_stats = get_deviantart_stats(today_str)
     freeimage_stats = get_freeimage_stats(today_str)
-    imgbb_stats = get_imgbb_stats(today_str)
     imghippo_stats = get_imghippo_stats(today_str)
 
     return {
@@ -679,14 +531,11 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
             "pins": pins_today,
         },
         "arena": arena_stats,
-        "tumblr": tumblr_stats,
         "bluesky": bluesky_stats,
         "raindrop": raindrop_stats,
         "mastodon": mastodon_stats,
         "pixelfed": pixelfed_stats,
-        "deviantart": deviantart_stats,
         "freeimage": freeimage_stats,
-        "imgbb": imgbb_stats,
         "imghippo": imghippo_stats,
     }
 
@@ -742,55 +591,6 @@ def get_freeimage_stats(today_str: str = None) -> dict:
     }
 
 
-# ── ImgBB Cross-Post Tracking ────────────────────────────────────────────────
-
-def is_imgbb_posted(filename: str) -> bool:
-    """Returns True if this image was already posted to ImgBB (prevents duplicates)."""
-    with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM imgbb_posts WHERE filename = ?", (filename,)
-        ).fetchone()
-        return row is not None
-
-
-def mark_imgbb_posted(filename: str, post_url: str = "",
-                      title: str = "", image_url: str = "") -> None:
-    """Records a successful ImgBB upload. Ignores duplicates (INSERT OR IGNORE)."""
-    with _get_conn() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO imgbb_posts (filename, post_url, title, image_url)
-            VALUES (?, ?, ?, ?)
-            """,
-            (filename, post_url, title, image_url)
-        )
-        conn.commit()
-
-
-def get_imgbb_stats(today_str: str = None) -> dict:
-    """Returns today's and all-time ImgBB upload statistics."""
-    if not today_str:
-        import datetime as _dt
-        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-    with _get_conn() as conn:
-        today_count = conn.execute("""
-            SELECT COUNT(*) FROM imgbb_posts
-            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
-        """, (today_str,)).fetchone()[0]
-        total_count = conn.execute("SELECT COUNT(*) FROM imgbb_posts").fetchone()[0]
-        recent = conn.execute("""
-            SELECT filename, title, post_url, posted_at
-            FROM imgbb_posts
-            ORDER BY id DESC LIMIT 5
-        """).fetchall()
-    return {
-        "today": today_count,
-        "total": total_count,
-        "recent": [
-            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
-            for r in recent
-        ]
-    }
 
 
 # ── Imghippo Cross-Post Tracking ─────────────────────────────────────────────

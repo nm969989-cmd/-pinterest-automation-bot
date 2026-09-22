@@ -115,29 +115,6 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _arena_e:
         arena_status = f"🟡 Check failed ({_arena_e})"
 
-    # 9. Tumblr Cross-Post Status
-    tumblr_status = "⚪ Disabled"
-    try:
-        cooling, c_reason, c_rem = is_cooling_down("tumblr")
-        if cooling:
-            tumblr_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif config.TUMBLR_ENABLED and config.TUMBLR_ACCESS_TOKEN:
-            from tumblr_uploader import verify_tumblr_token, get_tumblr_blog_info
-            tok_ok = verify_tumblr_token()
-            if tok_ok:
-                tinfo = get_tumblr_blog_info()
-                if tinfo:
-                    tumblr_status = f"🟢 Active ({tinfo['posts']:,} posts, {tinfo['followers']:,} followers)"
-                else:
-                    tumblr_status = "🟡 Token OK — blog info unavailable"
-            else:
-                tumblr_status = "🔴 Token Invalid"
-                warnings.append("Tumblr token is invalid — check TUMBLR_ACCESS_TOKEN in .env")
-        elif config.TUMBLR_ENABLED and not config.TUMBLR_ACCESS_TOKEN:
-            tumblr_status = "🔴 Token Missing"
-            warnings.append("TUMBLR_ENABLED=true but TUMBLR_ACCESS_TOKEN is empty in .env")
-    except Exception as _tmblr_e:
-        tumblr_status = f"🟡 Check failed ({_tmblr_e})"
 
     # 10. Bluesky Cross-Post Status
     bluesky_status = "⚪ Disabled"
@@ -207,27 +184,6 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _masto_e:
         mastodon_status = f"🟡 Check failed ({_masto_e})"
 
-    # 13. DeviantArt Cross-Post Status
-    deviantart_status = "⚪ Disabled"
-    try:
-        cooling, c_reason, c_rem = is_cooling_down("deviantart")
-        if cooling:
-            deviantart_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif config.DEVIANTART_ENABLED and (config.DEVIANTART_ACCESS_TOKEN or config.DEVIANTART_REFRESH_TOKEN):
-            from deviantart_uploader import verify_deviantart_token, get_deviantart_user_info
-            da_ok = verify_deviantart_token()
-            if da_ok:
-                da_info = get_deviantart_user_info()
-                da_user = da_info.get("username", "user")
-                deviantart_status = f"🟢 Active (@{da_user})"
-            else:
-                deviantart_status = "🔴 Token Invalid"
-                warnings.append("DeviantArt token is invalid — run 'python get_deviantart_token.py'")
-        elif config.DEVIANTART_ENABLED and not config.DEVIANTART_ACCESS_TOKEN and not config.DEVIANTART_REFRESH_TOKEN:
-            deviantart_status = "🔴 Credentials Missing"
-            warnings.append("DEVIANTART_ENABLED=true but credentials are empty in .env")
-    except Exception as _da_e:
-        deviantart_status = f"🟡 Check failed ({_da_e})"
 
     # 14. Pixelfed Cross-Post Status
     pixelfed_status = "⚪ Disabled"
@@ -267,21 +223,6 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _fi_e:
         freeimage_status = f"🟡 Check failed ({_fi_e})"
 
-    # 16. ImgBB Cross-Post Status
-    imgbb_status = "⚪ Disabled"
-    try:
-        cooling, c_reason, c_rem = is_cooling_down("imgbb")
-        if cooling:
-            imgbb_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif getattr(config, "IMGBB_ENABLED", False):
-            from imgbb_uploader import verify_imgbb_token
-            ibb_ok = verify_imgbb_token()
-            if ibb_ok:
-                imgbb_status = "🟢 Active (API Key Verified)"
-            else:
-                imgbb_status = "🟡 Reachable"
-    except Exception as _ibb_e:
-        imgbb_status = f"🟡 Check failed ({_ibb_e})"
 
     # 17. Imghippo Cross-Post Status
     imghippo_status = "⚪ Disabled"
@@ -331,14 +272,11 @@ def run_full_system_diagnostic() -> dict:
         "pa_api_status": pa_api_status,
         "tracker_status": tracker_status,
         "arena_status": arena_status,
-        "tumblr_status": tumblr_status,
         "bluesky_status": bluesky_status,
         "raindrop_status": raindrop_status,
         "mastodon_status": mastodon_status,
-        "deviantart_status": deviantart_status,
         "pixelfed_status": pixelfed_status,
         "freeimage_status": freeimage_status,
-        "imgbb_status": imgbb_status,
         "imghippo_status": imghippo_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
         "all_cooldowns": all_cooldowns,
@@ -364,7 +302,7 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         cb_lines = [f"  • {p.capitalize()}: 🟡 Cooldown Active ({info['remaining_hours']}h left — {info['reason']})" for p, info in all_cooldowns.items()]
         cb_section = "🛡️ Platform Circuit Breakers (Cooldown Active):\n" + "\n".join(cb_lines) + "\n\n"
     else:
-        cb_section = "🛡️ Platform Circuit Breakers:\n  • Status: 🟢 All Clear (All 10 platforms active & protected)\n\n"
+        cb_section = "🛡️ Platform Circuit Breakers:\n  • Status: 🟢 All Clear (All 7 platforms active & protected)\n\n"
 
     report = (
         f"{header_title}\n"
@@ -393,14 +331,11 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"🌐 Integrations & Webhooks:\n"
         f"  • Make.com Webhook   : {diag['webhook_status']}\n"
         f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"
-        f"  • Tumblr Cross-Post  : {diag.get('tumblr_status', 'N/A')}\n"
         f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
         f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}\n"
         f"  • Mastodon           : {diag.get('mastodon_status', 'N/A')}\n"
-        f"  • DeviantArt         : {diag.get('deviantart_status', 'N/A')}\n"
         f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}\n"
         f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}\n"
-        f"  • ImgBB              : {diag.get('imgbb_status', 'N/A')}\n"
         f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}\n"
         f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
