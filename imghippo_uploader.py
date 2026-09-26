@@ -119,15 +119,39 @@ def post_to_imghippo(image_path: str,
             if res.status_code == 200:
                 try:
                     data = res.json()
-                    if data.get("success"):
-                        file_url = data.get("data", {}).get("url") or data.get("data", {}).get("view_url")
+                    # Imghippo API returns {"status": "success", "data": {...}}
+                    # (NOT {"success": true}) — check both forms for safety
+                    is_success = (
+                        data.get("status") == "success"
+                        or data.get("success") is True
+                        or data.get("success") == "success"
+                    )
+                    if is_success:
+                        file_url = (
+                            data.get("data", {}).get("url")
+                            or data.get("data", {}).get("view_url")
+                        )
                         if file_url:
                             logger.info(f"[Imghippo] Upload successful -> {file_url}")
                             return file_url
+                        # Success reported but the expected URL is absent. Record the
+                        # condition so the final summary does not print None.
+                        last_error = f"HTTP 200 success without image URL: {str(data)[:200]}"
+                        logger.warning(f"[Imghippo] Success=true but no URL in data: {data}")
+                    else:
+                        last_error = (
+                            "Upload rejected: "
+                            f"status={data.get('status')!r}, success={data.get('success')!r}"
+                        )
+                        logger.warning(
+                            f"[Imghippo] Upload not successful. "
+                            f"status={data.get('status')!r}, success={data.get('success')!r}, "
+                            f"raw={res.text[:300]}"
+                        )
                 except Exception as json_err:
-                    logger.warning(f"[Imghippo] JSON parse error: {json_err} (raw: {res.text[:100]})")
+                    logger.warning(f"[Imghippo] JSON parse error: {json_err} (raw: {res.text[:200]})")
             else:
-                logger.warning(f"[Imghippo] Upload returned HTTP {res.status_code}: {res.text[:200]}")
+                logger.warning(f"[Imghippo] Upload returned HTTP {res.status_code}: {res.text[:300]}")
                 last_error = f"HTTP {res.status_code}"
                 # If out of credits (HTTP 402), abort immediately without wasting 16s on retries and trip circuit breaker
                 if res.status_code == 402 or "not enough credits" in res.text.lower():

@@ -589,8 +589,8 @@ class PinScheduler:
                             f"Posted: {today_posted_hb} | Expected by now: {expected_hb}\n"
                             f"🛡️ *Anti-Burst Pacing Active*: Catch-up pins spaced 12–18 mins apart."
                         )
-                    except Exception:
-                        pass
+                    except Exception as _notify_err:
+                        logger.warning(f"[Scheduler] notify_admin failed during heartbeat recovery: {_notify_err}")
                 elif missed_hb == 0 and slots_passed_hb > 0:
                     logger.info(
                         f"[Scheduler] Heartbeat OK — schedule on track: "
@@ -792,11 +792,25 @@ class PinScheduler:
 
                                     # ── Run cross-posts FIRST so results can be included in notification ──
                                     from crosspost_dispatcher import dispatch_all_crossposts
-                                    cp_res = dispatch_all_crossposts(pin, image_path)
+                                    try:
+                                        cp_res = dispatch_all_crossposts(pin, image_path)
+                                    except Exception as cp_err:
+                                        # Never let a cross-post failure kill the scheduler
+                                        # worker loop (the pin is already posted to
+                                        # Pinterest at this point). Fall back to empty
+                                        # results so the admin notification + the stock
+                                        # dispatch below still run (BUG 3).
+                                        logger.error(
+                                            f"[Scheduler] Cross-post dispatch failed for "
+                                            f"'{pin.get('title', '?')}': {cp_err}",
+                                            exc_info=True,
+                                        )
+                                        cp_res = {}
 
                                     # ── Notify admin (after cross-posts so results are known) ────────────
-                                    self._notify_pin_posted(
-                                        title=pin["title"],
+                                    try:
+                                        self._notify_pin_posted(
+                                            title=pin["title"],
                                         anime_name=pin["anime_name"],
                                         link=pin["link"],
                                         image_path=image_path,
@@ -818,13 +832,30 @@ class PinScheduler:
                                         imghippo_ok=cp_res.get("imghippo_ok"),
                                         imghippo_url=cp_res.get("imghippo_url", ""),
                                     )
+                                    except Exception as _notify_err:
+                                        # Keep the posting slot (and stock dispatch below)
+                                        # alive even when admin notification breaks.
+                                        logger.error(
+                                            f"[Scheduler] Pin-posted notification failed for "
+                                            f"'{pin.get('title', '?')}': {_notify_err}",
+                                            exc_info=True,
+                                        )
 
                                     # Auto-dispatch to configured stock photography platforms
-                                    _dispatch_stock_uploads_async(
-                                        image_path=image_path,
-                                        title=pin["title"],
-                                        caption=pin["anime_name"],
-                                    )
+                                    try:
+                                        _dispatch_stock_uploads_async(
+                                            image_path=image_path,
+                                            title=pin["title"],
+                                            caption=pin["anime_name"],
+                                        )
+                                    except Exception as _stock_err:
+                                        # A stock-dispatch failure must never abort the
+                                        # posting slot (BUG 3).
+                                        logger.error(
+                                            f"[Scheduler] Stock dispatch failed for "
+                                            f"'{pin.get('title', '?')}': {_stock_err}",
+                                            exc_info=True,
+                                        )
                                     _last_pin_post_time = time.time()
                                 else:
                                     # Auto-retry: move to dead-letter after 3 fails
@@ -876,16 +907,30 @@ class PinScheduler:
             time.sleep(30)  # Check every 30 seconds
 
     def start(self):
-        if not self.is_running:
-            self.thread = threading.Thread(target=self._worker_loop, daemon=True)
-            self.thread.start()
-            mins = self._minutes_to_next_slot()
-            logger.info(f"[Scheduler] Next posting slot in ~{mins} minutes.")
+        self.thread = _start_scheduler_thread(self.thread)
+        mins = self._minutes_to_next_slot()
+        logger.info(f"[Scheduler] Next posting slot in ~{mins} minutes.")
 
     def stop(self):
         self.is_running = False
         if self.thread:
             self.thread.join(timeout=2)
+
+
+def _start_scheduler_thread(old_thread):
+    """Start (or restart) the PinScheduler worker thread idempotently.
+
+    Returns the live Thread. Restarts a thread only when the old one is gone
+    or failed — keeping it a fresh watchdog-safe factory (BUG 2 + BUG 3).
+    """
+    if old_thread is not None and old_thread.is_alive():
+        return old_thread
+    scheduler.is_running = True
+    thread = threading.Thread(
+        target=scheduler._worker_loop, daemon=True, name="SchedulerWorker"
+    )
+    thread.start()
+    return thread
 
 
 # Global instance

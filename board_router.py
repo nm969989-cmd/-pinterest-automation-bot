@@ -175,7 +175,6 @@ _ANIME_GENRE = {
     "cowboy bebop":                             "fantasy",
     "trigun":                                   "fantasy",
     "fullmetal panic":                          "fantasy",
-    "sword art online":                         "fantasy",
     "ao no exorcist":                           "fantasy",
     "blue exorcist":                            "fantasy",
     "noragami":                                 "fantasy",

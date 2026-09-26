@@ -21,6 +21,7 @@ import os
 import time
 import random
 import requests
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from logger import get_logger
 from hashtag_optimizer import format_platform_caption, get_platform_tags
@@ -352,16 +353,32 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             executor.submit(fn): platform
             for platform, fn in platform_tasks.items()
         }
-        for future in as_completed(future_to_platform, timeout=60):
-            platform = future_to_platform[future]
-            try:
-                ok, url = future.result()
-                results[f"{platform}_ok"] = ok
-                results[f"{platform}_url"] = url or ""
-            except Exception as e:
-                logger.error(f"[Crosspost] Unexpected error in {platform} worker: {e}")
-                results[f"{platform}_ok"] = False
-                results[f"{platform}_url"] = ""
+        try:
+            iterator = as_completed(future_to_platform, timeout=60)
+            for future in iterator:
+                platform = future_to_platform[future]
+                try:
+                    ok, url = future.result()
+                    results[f"{platform}_ok"] = ok
+                    results[f"{platform}_url"] = url or ""
+                except Exception as e:
+                    # Keep the loop alive so a slow/hung slow platform can no longer
+                    # wipe out every other platform's result (BUG 3).
+                    unfinished = sum(1 for f in future_to_platform if not f.done())
+                    logger.error(
+                        f"[Crosspost] Unexpected error in {platform} worker: {e} "
+                        f"({unfinished} workers still pending)"
+                    )
+                    results[f"{platform}_ok"] = False
+                    results[f"{platform}_url"] = ""
+        except concurrent.futures.TimeoutError:
+            # One or more platform workers exceeded the 60 s collection budget.
+            # Return the partial results collected so far instead of raising.
+            unfinished = sorted(p for f, p in future_to_platform.items() if not f.done())
+            logger.error(
+                "[Crosspost] Platform workers exceeded 60s collection budget; "
+                f"returning partial results. Unfinished: {unfinished or ['unknown']}"
+            )
 
     elapsed = time.monotonic() - t_start
     logger.info(f"[Crosspost] All platform posts completed in {elapsed:.1f}s (parallel)")

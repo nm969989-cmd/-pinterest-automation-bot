@@ -83,17 +83,21 @@ def get_memory_mb() -> float:
 _watched_threads: list[dict] = []
 
 
-def register_thread(name: str, factory_fn, *args, **kwargs):
+def register_thread(name: str, factory_fn, *args, thread=None, **kwargs):
     """
     Register a thread to be monitored. If it dies, the watchdog restarts it.
     factory_fn must return a running threading.Thread.
+
+    thread: optional already-running Thread for this registration. Passing it
+    prevents the watchdog from immediately restarting a live thread on its
+    first pass (used at startup for threads the caller launched itself).
     """
     _watched_threads.append({
         "name":       name,
         "factory":    factory_fn,
         "args":       args,
         "kwargs":     kwargs,
-        "thread":     None,
+        "thread":     thread,
         "restarts":   0,
     })
     logger.info(f"[Watchdog] Registered thread: {name}")

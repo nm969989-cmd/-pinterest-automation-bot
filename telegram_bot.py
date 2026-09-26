@@ -164,10 +164,6 @@ def get_post_confirmation_keyboard(
         btn_txt = "🐘 View on Mastodon" if (mastodon_url and "/@" in mastodon_url and mastodon_url != "https://mastodon.social/@muthelyrics") else "🐘 Mastodon Feed"
         platform_btns.append(InlineKeyboardButton(btn_txt, url=m_link))
 
-    if getattr(config, "", False):
-        t_blog = getattr(config, "", "animeasthet07")
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=t_link))
-
     if getattr(config, "ARENA_ENABLED", False):
         a_slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
         a_link = arena_url or (f"https://www.are.na/channel/{a_slug}" if a_slug else "https://www.are.na/manoj-muthelyrics")
@@ -1850,7 +1846,6 @@ _loop_ref = None
 
 def notify_admin(message: str):
     """Send a plain text notification to the admin from any thread."""
-    global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
@@ -1871,7 +1866,6 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int):
     import config
     if not config.CLICK_NOTIFICATION:
         return
-    global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
@@ -2215,7 +2209,6 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     Send a rich Telegram notification after every successful Pinterest post.
     Sends the actual image + details with 1-tap buttons for all 10 social & image hosting platforms.
     """
-    global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
@@ -2305,7 +2298,6 @@ def send_pin_approval_request(image_path: str, title: str, description: str, lin
     Sends a photo message to the admin with [Post to Pinterest] and [Discard] buttons.
     Called from the main pipeline when AUTO_POST_MODE=false.
     """
-    global _app_ref, _loop_ref
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         logger.warning("[TG BOT] Cannot send approval request: bot not ready.")
@@ -2552,7 +2544,6 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
         # Freeimage status
         freeimage_status = "DISABLED (FREEIMAGE_ENABLED=false)"
-        from config import FREEIMAGE_ENABLED
         if FREEIMAGE_ENABLED:
             from freeimage_uploader import verify_freeimage_token
             freeimage_status = "🟢 ACTIVE (API Key Verified)" if verify_freeimage_token() else "🟡 REACHABLE"
@@ -3353,18 +3344,17 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
         # it tries to install Unix signal handlers (set_wakeup_fd) which only
         # work in the main thread. We use the low-level async API instead.
         async def _async_polling():
-            # Retry loop: if a Conflict error still occurs despite the pre-start
-            # getUpdates kick above, we wait and re-kick via HTTP before retrying.
-            # Exponential backoff: 5s, 10s, 20s, 35s, 35s, 35s, 35s, 35s.
+            # Retry loop: recovers from Conflict errors AND any other transient
+            # error (network drop, SSL, timeout, etc.) so the bot never goes
+            # permanently silent while Render keeps the process alive.
+            # Conflict: exponential 5→35s + session kick.
+            # Other errors: exponential backoff 10→60s, unlimited retries.
             #
             # nonlocal required: we reassign 'app' in the except block.
-            # Without nonlocal, Python treats 'app' as local throughout the
-            # function and raises UnboundLocalError on the first 'async with app:'.
-            # NOTE: _app_ref is a module global, not local to _run(), so we
-            # cannot use nonlocal for it — we use 'global _app_ref' inline below.
             nonlocal app
             import aiohttp
-            for poll_attempt in range(8):
+            poll_attempt = 0
+            while True:
                 try:
                     async with app:
                         # Register the command menu
@@ -3373,22 +3363,25 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                         await app.updater.start_polling(drop_pending_updates=True)
                         await app.start()
                         logger.info("[TG BOT] Polling started successfully (thread-safe mode).")
+                        poll_attempt = 0  # Reset backoff counter on successful start
                         # Keep running until the loop is stopped
                         while True:
                             await asyncio.sleep(60)
                 except asyncio.CancelledError:
+                    logger.info("[TG BOT] Polling cancelled — shutting down.")
                     break
                 except Exception as e:
+                    poll_attempt += 1
                     err_str = str(e)
-                    if "Conflict" in err_str and poll_attempt < 7:
-                        # Exponential backoff capped at 35s
-                        wait_s = min(5 * (2 ** poll_attempt), 35)
+
+                    if "Conflict" in err_str:
+                        # Another instance is still polling — kick it out first
+                        wait_s = min(5 * (2 ** min(poll_attempt - 1, 6)), 35)
                         logger.warning(
                             f"[TG BOT] Conflict error — old instance still holds the session. "
                             f"Re-kicking via getUpdates then retrying in {wait_s}s "
-                            f"(attempt {poll_attempt+1}/8)"
+                            f"(attempt {poll_attempt})"
                         )
-                        # Async HTTP kick: evict old poller via getUpdates(timeout=0)
                         try:
                             async with aiohttp.ClientSession() as sess:
                                 async with sess.get(
@@ -3403,25 +3396,32 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                                         logger.warning(f"[TG BOT] Async kick returned: {kick_data}")
                         except Exception as kick_e:
                             logger.warning(f"[TG BOT] Async kick error: {kick_e}")
-
                         await asyncio.sleep(wait_s)
-                        # Re-build app with fresh connection for next attempt
-                        app = Application.builder().token(token).build()
-                        global _app_ref
-                        _app_ref = app
-                        for cmd, handler in handlers:
-                            app.add_handler(CommandHandler(cmd, handler))
-                        app.add_handler(CallbackQueryHandler(handle_approval_callback))
-                        if _TG_AVAILABLE:
-                            app.add_handler(
-                                MessageHandler(
-                                    filters.PHOTO | filters.Document.IMAGE,
-                                    handle_admin_photo_upload
-                                )
-                            )
                     else:
-                        logger.error(f"[TG BOT] Polling error: {e}")
-                        break
+                        # Network drop, SSL error, timeout, or any other transient error.
+                        # PREVIOUSLY this hit 'break' and killed the bot permanently.
+                        # Now we retry with exponential backoff (10s → 60s) indefinitely.
+                        wait_s = min(10 * (2 ** min(poll_attempt - 1, 5)), 60)
+                        logger.warning(
+                            f"[TG BOT] Polling error (attempt {poll_attempt}) — "
+                            f"auto-recovering in {wait_s}s: {e}"
+                        )
+                        await asyncio.sleep(wait_s)
+
+                    # Re-build app with fresh connection pool for next attempt
+                    app = Application.builder().token(token).build()
+                    global _app_ref
+                    _app_ref = app
+                    for cmd, handler in handlers:
+                        app.add_handler(CommandHandler(cmd, handler))
+                    app.add_handler(CallbackQueryHandler(handle_approval_callback))
+                    if _TG_AVAILABLE:
+                        app.add_handler(
+                            MessageHandler(
+                                filters.PHOTO | filters.Document.IMAGE,
+                                handle_admin_photo_upload
+                            )
+                        )
 
         loop.run_until_complete(_async_polling())
         # ────────────────────────────────────────────────────────────────────

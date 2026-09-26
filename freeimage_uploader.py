@@ -36,21 +36,60 @@ def _get_api_key() -> str:
 
 
 def verify_freeimage_token() -> bool:
-    """Verifies API connectivity to Freeimage.host."""
+    """Verifies the Freeimage.host API key with a real 1x1 probe upload.
+
+    The public GET /api docs endpoint always answers HTTP 200 for anybody and
+    does not validate the key, so it cannot be used for verification. A minimal
+    probe upload exercises the real upload endpoint with the configured key: valid
+    and invalid keys produce different structured responses.
+    """
     api_key = _get_api_key()
     if not api_key:
         return False
     try:
-        # Check API response
-        res = requests.get(
-            "https://freeimage.host/api",
+        probe = _probe_payload()
+        res = requests.post(
+            _API_URL,
+            data={"key": api_key, "action": "upload", "format": "json"},
+            files={"source": ("graphify-key-probe.png", probe, "image/png")},
             headers=_HEADERS,
-            timeout=8
+            timeout=25,
         )
-        return res.status_code == 200 and api_key in res.text
+        return _is_valid_key_response(res, api_key)
     except Exception as e:
         logger.warning(f"[Freeimage] Connectivity check failed: {e}")
         return False
+
+
+def _probe_payload() -> bytes:
+    """Return a minimal valid 1x1 PNG used only to validate the API key."""
+    return (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+        b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB\x82"
+    )
+
+
+def _is_valid_key_response(res, api_key: str) -> bool:
+    """Return True only when the response proves the API key is accepted."""
+    try:
+        data = res.json()
+    except Exception as json_err:
+        logger.warning(f"[Freeimage] Key probe parse error: {json_err}")
+        return False
+    if res.status_code == 200 and isinstance(data, dict):
+        image = data.get("image")
+        status_code = data.get("status_code")
+        if isinstance(image, dict) and image.get("url"):
+            return True
+        if status_code in (200, "200"):
+            return True
+    logger.warning(
+        "[Freeimage] API key rejected: "
+        f"status={res.status_code} response={str(data)[:200]} "
+        f"key={api_key[:6]}...{api_key[-4:] if len(api_key) > 10 else ''}"
+    )
+    return False
 
 
 def get_freeimage_info() -> dict:
@@ -118,8 +157,13 @@ def post_to_freeimage(image_path: str,
                     if viewer_url:
                         logger.info(f"[Freeimage] Upload successful -> {viewer_url}")
                         return viewer_url
+                    # HTTP 200 but no URL in response — log raw so we can diagnose API changes
+                    logger.warning(
+                        f"[Freeimage] HTTP 200 but no viewer URL found in response. "
+                        f"image={img_data} raw={res.text[:200]}"
+                    )
                 except Exception as json_err:
-                    logger.warning(f"[Freeimage] JSON parse error: {json_err} (raw text: {res.text[:100]})")
+                    logger.warning(f"[Freeimage] JSON parse error: {json_err} (raw text: {res.text[:200]})")
             else:
                 logger.warning(f"[Freeimage] Upload returned HTTP {res.status_code}: {res.text[:200]}")
                 last_error = f"HTTP {res.status_code}"
