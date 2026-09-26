@@ -1607,7 +1607,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
         stale_note = f"\n🗑 Skipped {stale_dropped} stale pin(s) with expired CDN URLs." if stale_dropped else ""
 
-        success = upload_to_pinterest(
+        pin_status = upload_to_pinterest(
             image_path=image_path,
             title=pin["title"],
             description=pin["description"],
@@ -1615,6 +1615,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             anime_name=pin["anime_name"],
             board_id=pin.get("board_id", ""),
         )
+        success = bool(pin_status)  # tri-state: "live" / "queued" / False
 
         if success:
             _state["posts_today"] = _state.get("posts_today", 0) + 1
@@ -1653,8 +1654,15 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 )
 
             target_url = get_tracked_target_url(pin["link"])
+            if pin_status == "live":
+                _hdr = f"📌 {pin_type} pin posted!{stale_note}"
+            else:
+                _hdr = (
+                    f"📤 {pin_type} pin sent to Pinterest queue (via Make.com){stale_note}\n"
+                    f"⚠️ Make.com accepted it — check Created tab to confirm it's live."
+                )
             confirm_text = (
-                f"📌 {pin_type} pin posted!{stale_note}\n"
+                f"{_hdr}\n"
                 f"{'─' * 26}\n"
                 f"📝 {pin['title']}\n"
                 f"🎌 {pin['anime_name']} • {remaining} left in queue"
@@ -1763,8 +1771,9 @@ async def cmd_testpost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         )
         if success:
             await update.message.reply_text(
-                "Test pin posted successfully!\n"
-                "Check your Pinterest board — the pin should be live now."
+                "✅ Test pin accepted by Make.com!\n"
+                "Webhook returned OK — the Pinterest module runs next.\n"
+                "Check Make History + your Created tab to confirm it went live."
             )
             _state["posts_today"] += 1
             _state["posts_total"] += 1
@@ -1805,7 +1814,8 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
                 _state["posts_total"] += 1
                 await query.edit_message_caption(
                     caption=(
-                        f"Posted to Pinterest!\n\n"
+                        f"📤 Sent to Pinterest queue via Make.com!\n"
+                        f"(Webhook accepted — verify in Created tab before assuming live)\n\n"
                         f"Title: {pin['title']}\n"
                         f"Link: {pin['link']}"
                     )
@@ -1958,12 +1968,24 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             board_id=board_id,
         )
 
-        if uploaded_ok:
+        if uploaded_ok == "live":
             mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
             status_header = "📌 Live on Pinterest! (Uploaded Successfully)"
             action_note = "Your pin is live on Pinterest right now."
+        elif uploaded_ok == "queued" or uploaded_ok is True:
+            # Make.com webhook accepted — pin is NOT yet on Pinterest.
+            # Keep counters but tell the truth so user checks Created tab / Make history.
+            mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
+            _state["posts_today"] = _state.get("posts_today", 0) + 1
+            _state["posts_total"] = _state.get("posts_total", 0) + 1
+            status_header = "📤 Sent to Pinterest queue (via Make.com)"
+            action_note = "Make.com accepted it — check Make History + your Created tab in a few minutes."
+
+        # Cross-post + confirm prep run for BOTH "live" and "queued" outcomes
+        # (previously nested under the queued branch only → NameError on the "live" path)
+        if uploaded_ok:
 
             # ── Cross-post to all enabled platforms (same as scheduler) ──────────
             _arena_result = False
@@ -2127,17 +2149,30 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             status_header = "📥 Queued for Posting (#1 in line)"
             action_note = "Queued! Tap [ 🚀 Post Now ] below to publish immediately."
             _cross_lines = ""  # No cross-post for queued items
+            # Init cross-post vars so the button builder below never NameErrors
+            _pixelfed_result = None; _freeimage_result = None; _imghippo_result = None
+            _pix_url = None; _fi_url = None; _hippo_url = None
 
 
         board_label = f" • {genre.title()}" if genre else ""
         char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
 
-        if uploaded_ok:
+        if uploaded_ok == "live":
             confirm_text = (
                 f"📌 Live on Pinterest!\n"
                 f"{'─' * 26}\n"
                 f"📝 {title}\n"
                 f"🎌 {anime_name}{char_label}{board_label}"
+                f"{_cross_lines}"
+            )
+        elif uploaded_ok:
+            # Make webhook accepted — pin NOT verified live yet
+            confirm_text = (
+                f"📤 Sent to Pinterest queue (via Make.com)\n"
+                f"{'─' * 26}\n"
+                f"📝 {title}\n"
+                f"🎌 {anime_name}{char_label}{board_label}\n"
+                f"⚠️ Make accepted it — check Make History + Created tab to confirm it's live."
                 f"{_cross_lines}"
             )
         else:
@@ -2204,9 +2239,12 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              mastodon_ok=None, mastodon_url: str = "",
                              pixelfed_ok=None, pixelfed_url: str = "",
                              freeimage_ok=None, freeimage_url: str = "",
-                             imghippo_ok=None, imghippo_url: str = ""):
+                             imghippo_ok=None, imghippo_url: str = "",
+                             pin_live: bool = True):
     """
     Send a rich Telegram notification after every successful Pinterest post.
+    pin_live=False → Make.com accepted the webhook but the pin is NOT yet
+    confirmed on Pinterest; header says "queue" instead of "Posted".
     Sends the actual image + details with 1-tap buttons for all 10 social & image hosting platforms.
     """
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
@@ -2246,11 +2284,14 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🦛 Imghippo  {_platform_icon(imghippo_ok)}"
         )
 
+    _hdr = "📌 Pin Posted!" if pin_live else "📤 Sent to Pinterest Queue!"
+    _live_note = "" if pin_live else "\n⚠️ Make accepted the webhook — verify pin in Created tab."
     caption = (
-        f"📌 Pin Posted! ({bar} {posted_today}/{actual_max})\n"
+        f"{_hdr} ({bar} {posted_today}/{actual_max})\n"
         f"{'─' * 26}\n"
         f"📝 {title}\n"
         f"🎌 {anime_name} • {time_ist} IST"
+        f"{_live_note}"
         f"{cross_lines}"
     )
 

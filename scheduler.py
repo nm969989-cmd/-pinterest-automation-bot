@@ -411,9 +411,13 @@ class PinScheduler:
                             mastodon_ok=None, mastodon_url: str = "",
                             pixelfed_ok=None, pixelfed_url: str = "",
                             freeimage_ok=None, freeimage_url: str = "",
-                            imghippo_ok=None, imghippo_url: str = ""):
+                            imghippo_ok=None, imghippo_url: str = "",
+                            pin_live: bool = True):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
+
+        pin_live=False → Make.com accepted the webhook but the pin is NOT yet
+        confirmed on Pinterest; forwarded so the admin header can say "queue".
         """
         try:
             from telegram_bot import notify_admin_pin_posted
@@ -440,6 +444,7 @@ class PinScheduler:
                 freeimage_url=freeimage_url,
                 imghippo_ok=imghippo_ok,
                 imghippo_url=imghippo_url,
+                pin_live=pin_live,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -771,7 +776,7 @@ class PinScheduler:
                                     f"{pin['title'].replace('-', ' ')}"
                                 )[:500]
 
-                                success = upload_to_pinterest(
+                                pin_status = upload_to_pinterest(
                                     image_path=image_path,
                                     title=pin["title"],
                                     description=pin["description"],
@@ -780,6 +785,9 @@ class PinScheduler:
                                     board_id=pin.get("board_id", ""),
                                     alt_text=alt_text,
                                 )
+                                # Tri-state: "live"/"queued"/False. Both live+queued dequeue.
+                                success = bool(pin_status)
+                                pin_is_live = (pin_status == "live")
                                 if success:
                                     remove_queued_pin(pin["id"])
                                     now_ist = _ist_now().strftime("%I:%M %p")
@@ -817,6 +825,7 @@ class PinScheduler:
                                         pin_type=pin_type,
                                         posted_today=counts_after,
                                         time_ist=now_ist,
+                                        pin_live=pin_is_live,
                                         arena_ok=cp_res.get("arena_ok"),
                                         arena_url=cp_res.get("arena_url", ""),
                                         bluesky_ok=cp_res.get("bluesky_ok"),

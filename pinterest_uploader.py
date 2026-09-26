@@ -77,11 +77,56 @@ def _resolve_board_id(board_id_override: str = "") -> str:
     )
     return ""
 
+def _verify_public_image_url(url: str, timeout: int = 15) -> bool:
+    """
+    Pre-flight check: Pinterest/Make can only fetch images that are publicly
+    reachable. A Cloudinary/Catbox URL that 404s/blocks HEAD requests produces
+    exactly the reported symptom: Telegram says 'Live' but nothing (or a blank)
+    appears on the Pinterest Created tab.
+    Returns True if the URL looks fetchable, False otherwise.
+    """
+    if not url or not url.startswith("https://"):
+        logger.error(f"[Pinterest] Refusing to send non-HTTPS image_url to Make: {url!r}")
+        return False
+    # Try HEAD first (cheap), fall back to ranged GET (some hosts block HEAD).
+    try:
+        head = requests.head(url, timeout=timeout, allow_redirects=True)
+        ctype = (head.headers.get("Content-Type", "") or "").lower()
+        if head.status_code == 200 and ("image" in ctype or "octet" in ctype or ctype == ""):
+            return True
+        logger.warning(
+            f"[Pinterest] image_url HEAD check: {head.status_code} "
+            f"ctype={ctype or '?'} url={url[:100]} — trying ranged GET"
+        )
+    except Exception as e:
+        logger.warning(f"[Pinterest] image_url HEAD check failed ({e}) — trying ranged GET")
+    try:
+        g = requests.get(url, timeout=timeout, stream=True,
+                         headers={"Range": "bytes=0-1023", "User-Agent": "Mozilla/5.0"})
+        ctype = (g.headers.get("Content-Type", "") or "").lower()
+        if g.status_code in (200, 206) and ("image" in ctype or "octet" in ctype):
+            g.close()
+            return True
+        logger.error(
+            f"[Pinterest] image_url NOT publicly fetchable: "
+            f"GET {g.status_code} ctype={ctype or '?'} url={url[:120]}"
+        )
+        g.close()
+    except Exception as e:
+        logger.error(f"[Pinterest] image_url NOT reachable: {e} url={url[:120]}")
+    return False
+
+
 def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
                             anime_name: str = "", board_id: str = "",
-                            alt_text: str = "") -> bool:
+                            alt_text: str = "") -> str | bool:
     """
     Posts a pin via Make.com Custom Webhook -> Pinterest: Create a Pin module.
+    RETURN CONTRACT (fixes false "Live on Pinterest!"):
+      str   = hosted image_url on HTTP 2xx. The pin is NOT confirmed on
+              Pinterest yet — the Make scenario may still fail.
+              upload_to_pinterest() maps this to "queued" (never "live").
+      False = failed. Do not claim live.
     Retries up to 3 times with exponential backoff on failure.
     board_id is passed in the payload so Make.com can route to the correct board.
     alt_text is passed for Pinterest visual search SEO (Pinterest supports it).
@@ -94,6 +139,9 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
     image_url = upload_image_to_host(image_path)
     if not image_url:
         logger.error("[Make.com] Could not get public image URL, aborting.")
+        return False
+    if not _verify_public_image_url(image_url):
+        logger.error(f"[Make] image_url unreachable, aborting pin '{title}': {image_url[:120]}")
         return False
 
     # Step 2: POST to Make.com webhook with retry (3 attempts)
@@ -120,7 +168,7 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
             res = requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=20)
             if res.status_code in (200, 201, 204):
                 logger.info(
-                    f"[Make.com] Pin posted successfully: '{title}'"
+                    f"[Make.com] Webhook accepted (HTTP {res.status_code}), pin queued for creation: '{title}'"
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
                 return image_url  # Return URL so caller can store it
@@ -141,6 +189,8 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
                         board_id="", alt_text=""):
     """
     Master upload function.
+    TRI-STATE RETURN: "live" = real pin on Pinterest (direct API),
+    "queued" = Make webhook accepted (NOT yet on Pinterest), False = failed.
     Routes to Make.com webhook (instant public pins) if MAKE_WEBHOOK_URL is set,
     otherwise falls back to the official Pinterest API v5.
     board_id overrides PINTEREST_BOARD_ID for multi-board routing.
@@ -179,7 +229,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         )
         if image_url:
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
-            return True
+            return "queued"
         return False
 
     # ── Route: Official Pinterest API v5 (fallback) ───────────────────────────
@@ -279,7 +329,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         if res.status_code in (200, 201):
             logger.info(f"Successfully uploaded pin: {title}")
             mark_file_uploaded(filename, title)  # Persist to SQLite
-            return True
+            return "live"
         else:
             logger.error(f"Failed to create pin: {res.text}")
             return False
