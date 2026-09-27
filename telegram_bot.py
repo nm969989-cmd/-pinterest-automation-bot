@@ -792,11 +792,15 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
         logger.info("[TG BOT] Daily summary & 8 AM Schedule scheduler started.")
         sent_today = None
         sent_schedule_today = None
+        sent_health_today = None    # BUG-FIX: prevent repeated health-check firing
+        sent_repair_today = None    # BUG-FIX: prevent repeated link-repair firing
         while True:
             now_utc = datetime.datetime.utcnow()
 
             # 08:00 AM IST = 02:30 UTC -> Daily Morning Schedule
-            if now_utc.hour == 2 and now_utc.minute == 30 and now_utc.date() != sent_schedule_today:
+            # BUG-FIX: Use ±2 min window (28-32) instead of exact minute==30
+            # because time.sleep(55) can drift and skip the window entirely.
+            if now_utc.hour == 2 and 28 <= now_utc.minute <= 32 and now_utc.date() != sent_schedule_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id and _loop_ref:
                     sent_schedule_today = now_utc.date()
@@ -809,9 +813,10 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
 
             # 10:00 PM IST = 16:30 UTC -> Daily Nightly Summary Report
             # At 10 PM IST all 5 posting slots (9AM/1PM/4PM/6PM/8PM IST) are fully done.
-            if now_utc.hour == 16 and now_utc.minute == 30 and now_utc.date() != sent_today:
+            # BUG-FIX: Use ±2 min window + add missing _loop_ref guard (was crashing if loop not ready)
+            if now_utc.hour == 16 and 28 <= now_utc.minute <= 32 and now_utc.date() != sent_today:
                 chat_id = _get_chat_id()
-                if _app_ref and chat_id:
+                if _app_ref and chat_id and _loop_ref:  # BUG-FIX: was missing _loop_ref check
                     sent_today = now_utc.date()
                     logger.info(f"[TG BOT] Sending nightly daily report to {chat_id} (10 PM IST)...")
                     asyncio.run_coroutine_threadsafe(
@@ -820,11 +825,12 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                 else:
                     logger.warning("[TG BOT] Nightly report skipped — admin chat ID not set yet.")
 
-
             # 10:00 AM IST = 04:30 UTC -> Automated 3-Day Health Check
-            if now_utc.hour == 4 and now_utc.minute == 30:
+            # BUG-FIX: Use ±2 min window + sent_health_today guard to prevent repeated firing
+            if now_utc.hour == 4 and 28 <= now_utc.minute <= 32 and now_utc.date() != sent_health_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id and _loop_ref:
+                    sent_health_today = now_utc.date()
                     try:
                         from doctor import check_and_run_scheduled_health_check
                         check_and_run_scheduled_health_check(_app_ref, _loop_ref, chat_id)
@@ -832,16 +838,18 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
                         logger.error(f"[TG BOT] Scheduled health check error: {e}")
 
             # 10:30 AM IST = 05:00 UTC -> Automated Monthly Self-Healing Link Audit (1st of month)
-            if now_utc.hour == 5 and now_utc.minute == 0:
+            # BUG-FIX: Use ±2 min window + sent_repair_today guard to prevent repeated firing
+            if now_utc.hour == 5 and 0 <= now_utc.minute <= 4 and now_utc.date() != sent_repair_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id and _loop_ref:
+                    sent_repair_today = now_utc.date()
                     try:
                         from link_healer import check_and_run_monthly_repair
                         check_and_run_monthly_repair(_app_ref, _loop_ref, chat_id)
                     except Exception as e:
                         logger.error(f"[TG BOT] Scheduled monthly link repair error: {e}")
 
-            time.sleep(55)  # Check every ~1 min
+            time.sleep(45)  # BUG-FIX: reduced from 55s to 45s for tighter timing within the ±2 min window
 
     t = threading.Thread(target=_loop, daemon=True, name="DailySummary")
     t.start()
@@ -3471,6 +3479,12 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
     thread.start()
     logger.info("[TG BOT] Bot thread launched.")
 
-    # Start daily summary scheduler (sends report at 9 PM IST every day)
-    _start_daily_summary_thread(token, admin_chat_id or "")
+    # Start daily summary scheduler (sends report at 10 PM IST every day)
+    # BUG-FIX: Small delay so _loop_ref is set by _run() before the summary
+    # thread's first wake cycle. Without this, the first minute-window check
+    # runs with _loop_ref=None and silently skips the first scheduled send.
+    def _deferred_summary_start():
+        time.sleep(20)  # Wait for _run() to assign _loop_ref
+        _start_daily_summary_thread(token, admin_chat_id or "")
+    threading.Thread(target=_deferred_summary_start, daemon=True, name="SummaryStartDefer").start()
 
