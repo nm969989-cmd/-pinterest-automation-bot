@@ -794,22 +794,52 @@ def _start_daily_summary_thread(token: str, admin_chat_id: str):
         sent_schedule_today = None
         sent_health_today = None    # BUG-FIX: prevent repeated health-check firing
         sent_repair_today = None    # BUG-FIX: prevent repeated link-repair firing
+        # BUG-FIX: Track if the 8 AM window was missed while _loop_ref was None,
+        # so we can send it as soon as the bot is ready (within the same UTC day).
+        missed_schedule_utc_date = None
         while True:
             now_utc = datetime.datetime.utcnow()
 
             # 08:00 AM IST = 02:30 UTC -> Daily Morning Schedule
-            # BUG-FIX: Use ±2 min window (28-32) instead of exact minute==30
-            # because time.sleep(55) can drift and skip the window entirely.
-            if now_utc.hour == 2 and 28 <= now_utc.minute <= 32 and now_utc.date() != sent_schedule_today:
+            # BUG-FIX: Widened from ±2 min (28-32) to ±10 min (20-40) so that the
+            # 20-second _loop_ref initialization delay cannot silently skip the window.
+            # Root cause of missing morning messages on restart days.
+            if now_utc.hour == 2 and 20 <= now_utc.minute <= 40 and now_utc.date() != sent_schedule_today:
                 chat_id = _get_chat_id()
                 if _app_ref and chat_id and _loop_ref:
                     sent_schedule_today = now_utc.date()
+                    missed_schedule_utc_date = None  # cleared — no longer missed
                     logger.info(f"[TG BOT] Sending 8:00 AM daily schedule to {chat_id}...")
                     asyncio.run_coroutine_threadsafe(
                         _send_daily_morning_schedule(chat_id), _loop_ref
                     )
                 else:
-                    logger.warning("[TG BOT] 8 AM schedule skipped — admin chat ID not set yet.")
+                    # BUG-FIX: Mark as missed so catch-up fires when bot becomes ready.
+                    missed_schedule_utc_date = now_utc.date()
+                    logger.warning(
+                        "[TG BOT] 8 AM schedule window hit but bot not ready yet "
+                        "(_app_ref/_loop_ref not set) — will send as soon as ready."
+                    )
+
+            # BUG-FIX: Missed-window catch-up: if the 8 AM window passed while the
+            # bot was still initializing, send the morning message as soon as possible
+            # (within the same UTC day, before 10:00 UTC = 3:30 PM IST).
+            if (
+                missed_schedule_utc_date == now_utc.date()
+                and now_utc.date() != sent_schedule_today
+                and now_utc.hour < 10  # only catch up before 3:30 PM IST
+                and _app_ref and _loop_ref
+            ):
+                chat_id = _get_chat_id()
+                if chat_id:
+                    sent_schedule_today = now_utc.date()
+                    missed_schedule_utc_date = None
+                    logger.info(
+                        f"[TG BOT] Sending missed 8:00 AM morning schedule (catch-up) to {chat_id}..."
+                    )
+                    asyncio.run_coroutine_threadsafe(
+                        _send_daily_morning_schedule(chat_id), _loop_ref
+                    )
 
             # 10:00 PM IST = 16:30 UTC -> Daily Nightly Summary Report
             # At 10 PM IST all 5 posting slots (9AM/1PM/4PM/6PM/8PM IST) are fully done.

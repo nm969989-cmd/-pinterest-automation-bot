@@ -1,5 +1,7 @@
 import os
+import time
 import datetime
+import threading
 from flask import Flask, jsonify
 from threading import Thread
 import logging
@@ -94,6 +96,28 @@ def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, threaded=True)
 
+
+def _self_ping_loop():
+    """
+    Pings our own /ping endpoint every 10 minutes to prevent Render free tier
+    from spinning down the instance. Without this, the bot goes offline after
+    ~15 minutes of inactivity, causing missed posts and morning messages.
+    """
+    # Wait for Flask to fully start before attempting the first ping
+    time.sleep(30)
+    port = int(os.environ.get('PORT', 8080))
+    url = f"http://localhost:{port}/ping"
+    while True:
+        try:
+            import requests as _req
+            _req.get(url, timeout=8)
+        except Exception:
+            pass  # Non-critical — don't log to avoid noise
+        time.sleep(600)  # ping every 10 minutes
+
+
 def keep_alive():
     t = Thread(target=run, daemon=True)
     t.start()
+    # Self-ping to prevent Render free-tier spin-down (kills posts & morning messages)
+    threading.Thread(target=_self_ping_loop, daemon=True, name="SelfPing").start()
