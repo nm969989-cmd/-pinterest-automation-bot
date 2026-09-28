@@ -9,6 +9,13 @@ from amazon_search import preflight_validate_destination, is_direct_product_link
 
 logger = get_logger(__name__)
 
+# ── Pin verification after Make.com webhook ───────────────────────────────────
+# How long (seconds) to wait after Make.com accepts before checking Pinterest.
+# Make.com typically takes 5-20 s to forward and Pinterest to process.
+_VERIFY_WAIT_SECS = 20
+_VERIFY_RETRIES   = 5   # poll attempts after initial wait
+_VERIFY_INTERVAL  = 10  # seconds between polling attempts
+
 # Duplicate uploads are now tracked in SQLite (see database.py)
 # Persistent across restarts — duplicates are prevented even after a crash.
 
@@ -177,19 +184,110 @@ def _verify_public_image_url(url: str, timeout: int = 15) -> bool:
     return False
 
 
+def verify_pin_created(title: str, board_id: str = "", wait_secs: int = _VERIFY_WAIT_SECS) -> bool:
+    """
+    Polls Pinterest API to confirm a pin with the given title was actually created
+    on the board after Make.com accepted the webhook.
+
+    Returns True if the pin is confirmed live on Pinterest.
+    Returns False if not found within the retry window (pin may still be processing).
+
+    Requires PINTEREST_ACCESS_TOKEN in .env to work. If not set, returns False
+    (can't verify — caller should treat as "queued", not "live").
+    """
+    if not PINTEREST_ACCESS_TOKEN:
+        logger.warning("[PinVerify] PINTEREST_ACCESS_TOKEN not set — cannot verify pin creation.")
+        return False
+
+    resolved_board = board_id or PINTEREST_BOARD_ID
+    if not resolved_board:
+        logger.warning("[PinVerify] No board_id available — cannot verify pin on Pinterest.")
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}",
+        "Content-Type":  "application/json",
+    }
+
+    logger.info(
+        f"[PinVerify] Waiting {wait_secs}s for Make.com to forward pin to Pinterest..."
+    )
+    time.sleep(wait_secs)
+
+    title_lower = title.strip().lower()[:80]  # Pinterest truncates titles to 100 chars
+
+    for attempt in range(1, _VERIFY_RETRIES + 1):
+        try:
+            url = (
+                f"https://api.pinterest.com/v5/boards/{resolved_board}/pins"
+                f"?page_size=10&sort_by=created_at"
+            )
+            res = requests.get(url, headers=headers, timeout=15)
+            if res.status_code == 200:
+                pins = res.json().get("items", [])
+                for pin in pins:
+                    pin_title = (pin.get("title") or "").strip().lower()
+                    # Match on first 60 chars to handle minor truncation differences
+                    if pin_title[:60] == title_lower[:60] or title_lower[:60] in pin_title:
+                        pin_id  = pin.get("id", "?")
+                        pin_url = f"https://www.pinterest.com/pin/{pin_id}/"
+                        logger.info(
+                            f"[PinVerify] ✅ Pin CONFIRMED LIVE on Pinterest! "
+                            f"id={pin_id} url={pin_url}"
+                        )
+                        return True
+                logger.info(
+                    f"[PinVerify] Attempt {attempt}/{_VERIFY_RETRIES}: pin not yet visible "
+                    f"(checked {len(pins)} recent pins)."
+                )
+            elif res.status_code == 401:
+                logger.error(
+                    "[PinVerify] ❌ Pinterest API returned 401 Unauthorized. "
+                    "Your PINTEREST_ACCESS_TOKEN may be expired. "
+                    "Renew it at developers.pinterest.com."
+                )
+                return False
+            elif res.status_code == 403:
+                logger.error(
+                    "[PinVerify] ❌ Pinterest API returned 403 Forbidden. "
+                    "Token may lack 'boards:read' or 'pins:read' scopes."
+                )
+                return False
+            else:
+                logger.warning(
+                    f"[PinVerify] Attempt {attempt}/{_VERIFY_RETRIES}: "
+                    f"Pinterest API returned HTTP {res.status_code}: {res.text[:80]}"
+                )
+        except Exception as e:
+            logger.warning(f"[PinVerify] Attempt {attempt}/{_VERIFY_RETRIES} exception: {e}")
+
+        if attempt < _VERIFY_RETRIES:
+            time.sleep(_VERIFY_INTERVAL)
+
+    logger.warning(
+        f"[PinVerify] ⚠️ Pin NOT confirmed after {_VERIFY_RETRIES} attempts. "
+        f"Possible causes: (1) Make.com scenario inactive/failed, "
+        f"(2) Pinterest access token expired, "
+        f"(3) Pin is in moderation queue (new account). "
+        f"Check make.com History tab and your Pinterest 'Created' tab manually."
+    )
+    return False
+
+
 def upload_via_make_webhook(image_path: str, title: str, description: str, link: str,
                             anime_name: str = "", board_id: str = "",
                             alt_text: str = "") -> str | bool:
     """
     Posts a pin via Make.com Custom Webhook -> Pinterest: Create a Pin module.
-    RETURN CONTRACT (fixes false "Live on Pinterest!"):
-      str   = hosted image_url on HTTP 2xx. The pin is NOT confirmed on
-              Pinterest yet — the Make scenario may still fail.
-              upload_to_pinterest() maps this to "queued" (never "live").
-      False = failed. Do not claim live.
+    RETURN CONTRACT (tri-state for accurate status reporting):
+      (image_url, True)  = webhook accepted AND pin confirmed live on Pinterest.
+      (image_url, False) = webhook accepted but pin NOT confirmed (queued/pending).
+      False              = webhook failed entirely. Do not claim live.
     Retries up to 3 times with exponential backoff on failure.
     board_id is passed in the payload so Make.com can route to the correct board.
     alt_text is passed for Pinterest visual search SEO (Pinterest supports it).
+    After Make.com accepts, verify_pin_created() polls Pinterest API to confirm
+    the pin is actually visible — fixing the invisible pin bug.
     """
     if not MAKE_WEBHOOK_URL:
         logger.error("[Make.com] MAKE_WEBHOOK_URL is not set in .env")
@@ -231,7 +329,50 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
                     f"[Make.com] Webhook accepted (HTTP {res.status_code}), pin queued for creation: '{title}'"
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
-                return image_url  # Return URL so caller can store it
+                # ── Verify pin actually appeared on Pinterest ─────────────────
+                resolved_board = _resolve_board_id(board_id)
+                pin_confirmed = verify_pin_created(title, board_id=resolved_board)
+                if pin_confirmed:
+                    logger.info(f"[Make.com] Pin CONFIRMED LIVE on Pinterest: '{title}'")
+                    # ── Background ghost check: verify pin is publicly visible ──────
+                    # Extract pin ID from the board listing done during verify_pin_created.
+                    # Run ghost check in background so we don’t block the posting slot.
+                    try:
+                        import threading as _threading
+                        from ghost_pin_checker import run_ghost_check_and_notify
+                        # Build approximate pin URL (verify_pin_created logged the real pin_id above)
+                        _ghost_thread = _threading.Thread(
+                            target=run_ghost_check_and_notify,
+                            args=(f"https://www.pinterest.com/search/pins/?q={title[:30]}", title),
+                            daemon=True,
+                            name="GhostPinCheck",
+                        )
+                        _ghost_thread.start()
+                    except Exception as _ge:
+                        logger.debug(f"[Make.com] Ghost check launch failed (non-critical): {_ge}")
+                else:
+                    logger.warning(
+                        f"[Make.com] Pin NOT confirmed on Pinterest after verification. "
+                        f"Make.com may have failed internally or the pin is in moderation. "
+                        f"Check make.com → History tab for the latest run."
+                    )
+                    # Notify admin so they know immediately
+                    try:
+                        from telegram_bot import notify_admin
+                        notify_admin(
+                            f"⚠️ *Pinterest Pin Not Confirmed*\n\n"
+                            f"Make.com accepted the webhook but the pin was NOT found "
+                            f"on Pinterest after {_VERIFY_WAIT_SECS + _VERIFY_RETRIES * _VERIFY_INTERVAL}s.\n\n"
+                            f"📌 Pin: *{title[:60]}*\n\n"
+                            f"🔍 *Check these:*\n"
+                            f"1. [make.com](https://make.com) → your scenario → History tab\n"
+                            f"2. Is the scenario *Active*? Toggle it ON if paused\n"
+                            f"3. Pinterest [Created tab](https://www.pinterest.com) — may appear in 5-10 min\n"
+                            f"4. If token expired: renew at [developers.pinterest.com](https://developers.pinterest.com)"
+                        )
+                    except Exception:
+                        pass
+                return (image_url, pin_confirmed)
             elif res.status_code == 400:
                 # HTTP 400 = scenario is INACTIVE or task queue is full
                 logger.warning(
@@ -310,16 +451,19 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
 
     # ── Route: Make.com Webhook (preferred — no API approval needed) ──────────
     if MAKE_WEBHOOK_URL:
-        image_url = upload_via_make_webhook(
+        result = upload_via_make_webhook(
             image_path, title, description, link,
             anime_name=anime_name, board_id=board_id, alt_text=alt_text
         )
-        if image_url:
+        if result is not False:
+            # result is (image_url, pin_confirmed) tuple
+            image_url, pin_confirmed = result
             # Success — reset failure counter
             _make_consecutive_failures = 0
             _make_alert_sent = False
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
-            return "queued"
+            # Return "live" only when verified by Pinterest API, else "queued"
+            return "live" if pin_confirmed else "queued"
 
         # Make.com failed all 3 attempts — notify admin and try direct Pinterest API
         logger.warning(

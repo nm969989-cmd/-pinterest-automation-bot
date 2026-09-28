@@ -92,6 +92,221 @@ def redirect_link(code):
         )
 
 
+@app.route('/p/<code>')
+def bridge_page(code):
+    """
+    🌉 Clean Bridge / Showcase Landing Page — Bypass Pinterest Affiliate Flagging.
+
+    Instead of linking directly to Amazon (which Pinterest's algorithm detects and
+    shadowbans), each pin links to THIS page on your own domain. Pinterest's algorithm
+    sees a legitimate independent website, not an affiliate redirect.
+
+    The page shows:
+      - Anime title and description
+      - The high-quality pin image (loaded from Cloudinary CDN)
+      - A prominent "Shop on Amazon" CTA button (with affiliate tag)
+      - Beautiful, mobile-first design optimized for Pinterest click-throughs
+
+    URL pattern: https://your-app.onrender.com/p/<code>
+    """
+    from flask import request
+    user_agent = request.headers.get('User-Agent', '')
+    referrer   = request.referrer or ''
+
+    # Look up pin metadata (title, anime, target URL)
+    target_url = ""
+    anime_name = "Anime"
+    title      = "Anime Merchandise"
+    try:
+        from database import _get_conn
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT target_url, anime_name, title FROM tracked_links WHERE code = ?",
+                (code,)
+            ).fetchone()
+        if row:
+            target_url = row[0] or ""
+            anime_name = row[1] or "Anime"
+            title      = row[2] or "Anime Merchandise"
+    except Exception:
+        pass
+
+    if not target_url:
+        from config import AMAZON_AFFILIATE_TAG
+        tag        = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+        target_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+
+    # ── Record bridge PAGE VISIT (funnel analytics — separate from Amazon click) ──
+    # The /r/<code> route records the Amazon click when the user taps "Shop on Amazon"
+    # Here we record that the user LANDED on the bridge page (from Pinterest or elsewhere)
+    try:
+        from pinterest_analytics import record_bridge_visit
+        record_bridge_visit(code, anime_name, title, user_agent, referrer)
+    except Exception:
+        pass
+
+    # Render the showcase landing page
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} | Anime Shop</title>
+  <meta name="description" content="Official anime merchandise for {anime_name}. Posters, figures, and collectibles on Amazon." />
+  <meta property="og:title" content="{title}" />
+  <meta property="og:description" content="Shop official {anime_name} merchandise — posters, figures &amp; collectibles." />
+  <meta property="og:type" content="product" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    :root {{
+      --bg:      #0f0f14;
+      --surface: #1a1a24;
+      --card:    #22222f;
+      --accent:  #e60026;
+      --gold:    #f59e0b;
+      --text:    #f0f0f5;
+      --sub:     #9090aa;
+      --radius:  18px;
+    }}
+    body {{
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+    }}
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(230,0,38,.15);
+      border: 1px solid rgba(230,0,38,.4);
+      color: #ff6680;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: 5px 12px;
+      border-radius: 999px;
+      margin-bottom: 20px;
+    }}
+    .card {{
+      background: var(--card);
+      border-radius: var(--radius);
+      max-width: 480px;
+      width: 100%;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06);
+      animation: rise .45s cubic-bezier(.22,.68,0,1.2);
+    }}
+    @keyframes rise {{
+      from {{ opacity:0; transform: translateY(30px) scale(.97); }}
+      to   {{ opacity:1; transform: translateY(0)   scale(1);    }}
+    }}
+    .anime-tag {{
+      display: block;
+      background: linear-gradient(90deg, var(--accent), #ff6047);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 7px 20px;
+    }}
+    .card-body {{ padding: 24px 24px 28px; }}
+    .pin-title {{
+      font-size: 1.4rem;
+      font-weight: 900;
+      line-height: 1.25;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #fff 40%, #c9b8ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }}
+    .pin-desc {{
+      font-size: .88rem;
+      color: var(--sub);
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }}
+    .cta-btn {{
+      display: block;
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #f59e0b, #f97316);
+      color: #fff;
+      font-size: 1.05rem;
+      font-weight: 800;
+      border: none;
+      border-radius: 12px;
+      text-decoration: none;
+      text-align: center;
+      letter-spacing: .02em;
+      box-shadow: 0 8px 28px rgba(245,158,11,.35);
+      transition: transform .15s, box-shadow .15s;
+    }}
+    .cta-btn:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 12px 36px rgba(245,158,11,.5);
+    }}
+    .cta-icon {{ margin-right: 8px; }}
+    .disclosure {{
+      margin-top: 14px;
+      font-size: .72rem;
+      color: #60607a;
+      text-align: center;
+    }}
+    footer {{
+      margin-top: 32px;
+      font-size: .75rem;
+      color: #40404f;
+      text-align: center;
+    }}
+  </style>
+</head>
+<body>
+  <div class="badge">✨ Anime Merchandise</div>
+  <div class="card">
+    <span class="anime-tag">🎌 {anime_name}</span>
+    <div class="card-body">
+      <h1 class="pin-title">{title}</h1>
+      <p class="pin-desc">
+        Official {anime_name} merchandise curated for fans. Posters, figures, and collectibles — delivered by Amazon.
+      </p>
+      <a class="cta-btn" href="{target_url}" rel="sponsored noopener" target="_blank">
+        <span class="cta-icon">🛒</span> Shop on Amazon India
+      </a>
+      <p class="disclosure">
+        #ad — As an Amazon Associate, we earn from qualifying purchases. This supports our free content. 🙏
+      </p>
+    </div>
+  </div>
+  <footer>AnimAnoizing · Anime Art &amp; Merch Community</footer>
+</body>
+</html>"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route('/verify_public/<pin_id>')
+def verify_pin_public_route(pin_id):
+    """
+    🔍 Ghost Pin Inspector — checks if a Pinterest pin is publicly visible.
+    Usage: GET /verify_public/<pin_id>
+    Returns JSON with visibility status.
+    """
+    try:
+        from ghost_pin_checker import check_pin_by_id
+        result = check_pin_by_id(pin_id, expected_title="")
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e), "pin_id": pin_id}), 500
+
+
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, threaded=True)

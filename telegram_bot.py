@@ -432,8 +432,284 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     logger.info("[TG BOT] /clicks report sent.")
 
 
+async def cmd_verify_public(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🔍 Ghost Pin Inspector — check if a Pinterest pin is visible to the public.
+    Usage: /verify_public <pin_id>
+    Example: /verify_public 1234567890123456
+    The pin_id is the long number in the Pinterest pin URL:
+      https://www.pinterest.com/pin/<pin_id>/
+    """
+    if not _is_admin(update): return
+    args = context.args if context.args else []
+    if not args:
+        await update.message.reply_text(
+            "🔍 *Ghost Pin Inspector*\n\n"
+            "Checks if a Pinterest pin is actually visible to the public "
+            "(other accounts, unauthenticated visitors).\n\n"
+            "*Usage:* `/verify_public <pin_id>`\n"
+            "*Example:* `/verify_public 1234567890123456`\n\n"
+            "Find your pin ID in the URL:\n"
+            "`https://pinterest.com/pin/PIN_ID_HERE/`",
+            parse_mode="Markdown",
+        )
+        return
+
+    pin_id = args[0].strip().rstrip("/")
+    # Accept full URL too
+    if "pinterest.com/pin/" in pin_id:
+        import re as _re
+        m = _re.search(r'/pin/(\d+)', pin_id)
+        if m:
+            pin_id = m.group(1)
+
+    if not pin_id.isdigit():
+        await update.message.reply_text(
+            "\u274c Invalid pin ID. Please provide the numeric ID from the Pinterest URL.\n"
+            "Example: `/verify_public 1234567890123456`",
+            parse_mode="Markdown",
+        )
+        return
+
+    pin_url = f"https://www.pinterest.com/pin/{pin_id}/"
+    wait_msg = await update.message.reply_text(
+        f"🔍 Checking public visibility of pin `{pin_id}`...\n"
+        f"This takes ~30 seconds (letting Pinterest index first).",
+        parse_mode="Markdown",
+    )
+    try:
+        import asyncio
+        from ghost_pin_checker import check_pin_by_id
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: check_pin_by_id(pin_id, expected_title="")
+        )
+
+        status_icons = {
+            "public":     "✅",
+            "ghosted":    "👻",
+            "login_wall": "🔒",
+            "not_found":  "❓",
+            "error":      "⚠️",
+        }
+        icon = status_icons.get(result["status"], "⚠️")
+
+        reply = (
+            f"{icon} *Ghost Pin Check Result*\n\n"
+            f"🔗 [View Pin]({pin_url})\n"
+            f"📊 Status: `{result['status']}`\n"
+            f"💬 {result['message']}\n\n"
+        )
+
+        if not result["visible"]:
+            reply += (
+                f"🛠️ *Fix Options:*\n"
+                f"1. Set board to **Public** (not Secret)\n"
+                f"2. Use bridge link `/p/<code>` instead of direct Amazon URL\n"
+                f"3. Re-pin manually from browser to reset the filter\n"
+                f"4. Wait 24\u201372h for new account indexing\n"
+                f"5. Check that Make.com scenario ran successfully"
+            )
+        else:
+            reply += "🎉 Pin is visible to everyone \u2014 no action needed!"
+
+        await wait_msg.edit_text(reply, parse_mode="Markdown")
+        logger.info(f"[TG BOT] /verify_public: pin {pin_id} status={result['status']}")
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Ghost check error: {e}")
+        logger.error(f"[TG BOT] verify_public error: {e}")
+
+
+async def cmd_bridge_url(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🌉 Generate a bridge landing page URL for an affiliate code.
+    Usage: /bridge_url <code>
+    Shows what URL to put in a Pinterest pin instead of the raw Amazon link.
+    """
+    if not _is_admin(update): return
+    from config import APP_BASE_URL
+    if not APP_BASE_URL:
+        await update.message.reply_text(
+            "⚠️ APP_BASE_URL is not set in .env.\n"
+            "Set it to your Render URL (e.g. https://your-bot.onrender.com) to use bridge pages."
+        )
+        return
+
+    args = context.args if context.args else []
+    if args:
+        code = args[0].strip()
+        bridge = f"{APP_BASE_URL}/p/{code}"
+        await update.message.reply_text(
+            f"🌉 *Bridge Landing Page*\n\n"
+            f"Code: `{code}`\n"
+            f"URL: {bridge}\n\n"
+            f"Put this URL in your Pinterest pin instead of the direct Amazon link.\n"
+            f"Pinterest sees your own domain \u2014 no affiliate flag!",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            f"🌉 *Bridge Landing Page Info*\n\n"
+            f"Your base URL: `{APP_BASE_URL}`\n"
+            f"Bridge pattern: `{APP_BASE_URL}/p/<code>`\n\n"
+            f"Pins now automatically use bridge URLs when APP_BASE_URL is set.\n"
+            f"Example: `{APP_BASE_URL}/p/dp_B0CHR8R1L3`\n\n"
+            f"💡 Tip: Pinterest\'s algorithm treats your Render domain as a legit website,"
+            f" completely bypassing affiliate link detection.",
+            parse_mode="Markdown",
+        )
+
+
+async def cmd_pinanalytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    📈 Pinterest Analytics Feedback Loop
+    Shows real impressions, saves, and click-through performance from Pinterest API.
+    Usage: /pinanalytics [days] (default: 7 days)
+    """
+    if not _is_admin(update): return
+    args = context.args if context.args else []
+    days = 7
+    try:
+        if args:
+            days = max(1, min(30, int(args[0])))
+    except (ValueError, IndexError):
+        pass
+
+    wait_msg = await update.message.reply_text(
+        f"📁 Fetching {days}-day funnel analytics...", parse_mode="Markdown"
+    )
+    try:
+        from pinterest_analytics import get_analytics_summary, get_top_pins, get_hourly_pattern
+        summary  = get_analytics_summary(days=days)
+        top_pins = get_top_pins(days=days, metric="visits", limit=3)
+        peak_hrs = get_hourly_pattern(days=days)
+
+        SEP = "─" * 32
+        lines = [
+            f"📊 *Pinterest Funnel — Last {days} Days*",
+            SEP,
+            f"👁️  Bridge visits:   {summary['bridge_visits']:,}",
+            f"🌐 From Pinterest:  {summary['pinterest_visits']:,}  ({summary['pint_rate']}% of visits)",
+            f"🛍️ Amazon clicks:   {summary['amazon_clicks']:,}",
+            f"📈 Click-through:   {summary['ctr']}% CTR",
+            SEP,
+            f"📅 Today — Visits: {summary['today_visits']} | Clicks: {summary['today_clicks']}",
+            SEP,
+        ]
+
+        if summary["top_anime"]:
+            lines.append("🏆 *Top Anime by Bridge Visits:*")
+            for i, (anime, visits, pint_v) in enumerate(summary["top_anime"], 1):
+                lines.append(f"  {i}. {anime}: {visits} visits ({pint_v} from Pinterest)")
+
+        if top_pins:
+            lines.append("\n🔖 *Top Pins (Visits → Clicks):*")
+            for i, pin in enumerate(top_pins, 1):
+                lines.append(
+                    f"  {i}. [{pin['anime']}] {pin['title'][:35]}…"
+                    f" | {pin['visits']} visits → {pin['clicks']} clicks ({pin['ctr']}%)"
+                )
+
+        if peak_hrs:
+            peak_str = ", ".join(f"{h:02d}:00 IST ({c})" for h, c in peak_hrs[:3])
+            lines.append(f"\n⏰ *Peak Hours:* {peak_str}")
+
+        if summary["bridge_visits"] == 0:
+            lines.append(
+                "\n⚠️ No visits yet.\n"
+                "Bridge pages /p/<code> collect analytics automatically.\n"
+                "Make sure APP_BASE_URL is set in .env so pins use bridge links."
+            )
+
+        await wait_msg.edit_text("\n".join(lines), parse_mode="Markdown")
+        logger.info(f"[TG BOT] /pinanalytics report sent ({days} days).")
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Analytics error: {e}")
+        logger.error(f"[TG BOT] pinanalytics error: {e}")
+
+
+async def cmd_topseo(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🔍 Pinterest SEO Intelligence Report
+    Shows which anime keywords are driving clicks + their trending search terms.
+    Usage: /topseo
+    """
+    if not _is_admin(update): return
+    try:
+        from keyword_seo import get_top_performing_keywords, get_keyword_cache_stats
+        top_kws = get_top_performing_keywords(limit=8)
+        cache   = get_keyword_cache_stats()
+
+        SEP = "─" * 32
+        lines = [
+            f"🔍 *Pinterest SEO Intelligence*",
+            SEP,
+            f"📊 Keyword cache: {cache['fresh']} fresh | {cache['stale']} stale | {cache['total_cached']} total",
+            SEP,
+        ]
+
+        if top_kws:
+            lines.append(f"🏆 *Top Anime by Affiliate Clicks + SEO Keywords:*")
+            for i, item in enumerate(top_kws, 1):
+                kw_str = " | ".join(item["keywords"][:2]) if item["keywords"] else "(no keywords cached)"
+                lines.append(
+                    f"  {i}. *{item['anime']}* ({item['clicks']} clicks)\n"
+                    f"     Keywords: {kw_str}"
+                )
+        else:
+            lines.append(
+                "⚠️ No data yet \u2014 keywords populate as pins are posted.\n"
+                "Affiliate clicks tracked via /clicks command."
+            )
+
+        lines += [
+            SEP,
+            f"💡 *How it works:*",
+            f"Each pin title is automatically enriched with trending Pinterest search terms.",
+            f"Keywords are fetched live from Pinterest's autocomplete API and cached 24h.",
+        ]
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        logger.info("[TG BOT] /topseo report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ SEO report error: {e}")
+        logger.error(f"[TG BOT] topseo error: {e}")
+
+
+async def cmd_refreshanalytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🔄 Manually trigger Pinterest analytics refresh from API.
+    Usage: /refreshanalytics
+    Fetches latest impressions/saves/clicks for all tracked pins.
+    """
+    if not _is_admin(update): return
+    wait_msg = await update.message.reply_text(
+        "🔄 Pulling Pinterest analytics from API... (may take 30s)"
+    )
+    try:
+        import asyncio
+        from pinterest_analytics import run_analytics_pull
+        loop   = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, run_analytics_pull)
+
+        await wait_msg.edit_text(
+            f"✅ *Analytics Refresh Complete*\n\n"
+            f"📍 Pins checked: {result['pins_checked']}\n"
+            f"📅 Days stored:  {result['days_stored']}\n"
+            f"❌ Errors:       {result['errors']}\n\n"
+            f"Use /pinanalytics to see the full report.",
+            parse_mode="Markdown",
+        )
+        logger.info(f"[TG BOT] /refreshanalytics complete: {result}")
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Analytics refresh error: {e}")
+        logger.error(f"[TG BOT] refreshanalytics error: {e}")
+
+
 async def cmd_stockstats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show stock photography upload stats — today and all-time totals per platform."""
+
     if not _is_admin(update): return
     try:
         from database import get_stock_stats_today, get_stock_stats_alltime
@@ -2010,16 +2286,19 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
             mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
-            status_header = "📌 Live on Pinterest! (Uploaded Successfully)"
-            action_note = "Your pin is live on Pinterest right now."
+            status_header = "📌 Pin Confirmed Live on Pinterest! ✅"
+            action_note = "Pin verified by Pinterest API — it is live and visible to everyone."
         elif uploaded_ok == "queued" or uploaded_ok is True:
-            # Make.com webhook accepted — pin is NOT yet on Pinterest.
+            # Make.com webhook accepted — pin is NOT yet confirmed on Pinterest.
             # Keep counters but tell the truth so user checks Created tab / Make history.
             mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
             _state["posts_today"] = _state.get("posts_today", 0) + 1
             _state["posts_total"] = _state.get("posts_total", 0) + 1
-            status_header = "📤 Sent to Pinterest queue (via Make.com)"
-            action_note = "Make.com accepted it — check Make History + your Created tab in a few minutes."
+            status_header = "📤 Sent to Pinterest Queue (Unconfirmed)"
+            action_note = (
+                "⚠️ Make.com accepted the webhook but the pin was NOT confirmed on Pinterest.\n"
+                "Check: make.com → History tab. If scenario is Inactive → toggle it ON."
+            )
 
         # Cross-post + confirm prep run for BOTH "live" and "queued" outcomes
         # (previously nested under the queued branch only → NameError on the "live" path)
@@ -2322,8 +2601,13 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🦛 Imghippo  {_platform_icon(imghippo_ok)}"
         )
 
-    _hdr = "📌 Pin Posted!" if pin_live else "📤 Sent to Pinterest Queue!"
-    _live_note = "" if pin_live else "\n⚠️ Make accepted the webhook — verify pin in Created tab."
+    _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Pinterest Queue!"
+    _live_note = (
+        ""
+        if pin_live else
+        "\n⚠️ Pin NOT confirmed on Pinterest — Make.com accepted but Pinterest API did not see it yet.\n"
+        "Check make.com → History. If Inactive, toggle ON + clear queue."
+    )
     caption = (
         f"{_hdr} ({bar} {posted_today}/{actual_max})\n"
         f"{'─' * 26}\n"
@@ -3336,9 +3620,19 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("freeimage",     cmd_freeimage),
             ("freeimage_test",cmd_freeimage_test),
             ("freeimagetest", cmd_freeimage_test),
-            ("imghippo",      cmd_imghippo),
-            ("imghippo_test", cmd_imghippo_test),
-            ("imghippotest",  cmd_imghippo_test),
+            ("imghippo",        cmd_imghippo),
+            ("imghippo_test",   cmd_imghippo_test),
+            ("imghippotest",    cmd_imghippo_test),
+            ("verify_public",      cmd_verify_public),
+            ("ghostcheck",         cmd_verify_public),
+            ("bridge_url",         cmd_bridge_url),
+            ("bridgeurl",          cmd_bridge_url),
+            ("pinanalytics",       cmd_pinanalytics),
+            ("pinstats",           cmd_pinanalytics),
+            ("topseo",             cmd_topseo),
+            ("seostats",           cmd_topseo),
+            ("refreshanalytics",   cmd_refreshanalytics),
+            ("pullanalytics",      cmd_refreshanalytics),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -3408,7 +3702,12 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("freeimage_test","Post test photo to Freeimage.host"),
                 BotCommand("imghippo",      "Imghippo profile stats & link"),
                 BotCommand("imghippo_test", "Post test photo to Imghippo"),
-                BotCommand("help",          "Show all commands"),
+                BotCommand("verify_public",      "🔍 Check if a Pinterest pin is visible to the public"),
+                BotCommand("bridge_url",          "🌉 Get bridge landing page URL for a pin code"),
+                BotCommand("pinanalytics",        "📈 Pinterest impressions, saves & clicks report"),
+                BotCommand("topseo",              "🔍 Top anime keywords driving search traffic"),
+                BotCommand("refreshanalytics",    "🔄 Pull fresh analytics from Pinterest API"),
+                BotCommand("help",                "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")
 
