@@ -80,7 +80,7 @@ def save_cloud_state() -> bool:
         import sqlite3
         from database import DB_PATH
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
             # Processed posts (last 500 only to keep JSON small)
             posts = [
                 row[0] for row in conn.execute(

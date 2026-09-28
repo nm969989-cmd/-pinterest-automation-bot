@@ -169,13 +169,13 @@ def main():
         logger.info("[TG BOT] No TELEGRAM_BOT_TOKEN set, control bot disabled.")
 
     # 3. Start Scheduler (smart time-slot posting)
+    scheduler.start()
     try:
         from crash_protection import register_thread
         from scheduler import _start_scheduler_thread
-        register_thread("scheduler", _start_scheduler_thread, scheduler.thread)
+        register_thread("scheduler", _start_scheduler_thread, thread=scheduler.thread)
     except Exception as _reg_err:
         logger.warning(f"[Main] Watchdog registration failed (non-critical): {_reg_err}")
-    scheduler.start()
     logger.info("Upload scheduler started.")
 
     # 4. Start JSONBin sync thread (saves state every 30 min)
