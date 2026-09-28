@@ -475,6 +475,12 @@ class PinScheduler:
         _last_pin_post_time: float = 0.0  # Epoch timestamp of last post (for human pacing)
         _next_catchup_delay: float = 15 * 60 + random.randint(-180, 180)  # Safe 12-18 min interval
 
+        # ── Make.com webhook health check ─────────────────────────────────────
+        # Run once at startup, then every 6 hours, so a deactivated scenario
+        # is caught BEFORE it causes a full day of missed posts.
+        _MAKE_HEALTH_INTERVAL = 6 * 3600  # 6 hours in seconds
+        _last_make_health_check: float = 0.0  # Force an immediate check on first loop pass
+
         # ── Full startup schedule recovery ────────────────────────────────────
         # On every restart (Render deploy, spin-down, crash), we check ALL slots
         # that were scheduled for today and count how many posts were actually made.
@@ -546,6 +552,16 @@ class PinScheduler:
         while self.is_running:
             now = datetime.datetime.utcnow()
             today_ist = _today_ist()
+
+            # ── Make.com webhook health check (every 6 hours) ─────────────────
+            now_ts_loop = time.time()
+            if now_ts_loop - _last_make_health_check >= _MAKE_HEALTH_INTERVAL:
+                _last_make_health_check = now_ts_loop
+                try:
+                    from pinterest_uploader import check_make_health
+                    check_make_health()
+                except Exception as _hc_err:
+                    logger.warning(f"[Scheduler] Make.com health check error: {_hc_err}")
 
             # ── Live heartbeat: check if schedule is behind every 30 min ──────
             # Even without a restart, a slot can silently fail (Pinterest API
@@ -926,19 +942,23 @@ class PinScheduler:
             self.thread.join(timeout=2)
 
 
-def _start_scheduler_thread(old_thread):
+def _start_scheduler_thread(old_thread=None):
     """Start (or restart) the PinScheduler worker thread idempotently.
 
     Returns the live Thread. Restarts a thread only when the old one is gone
     or failed — keeping it a fresh watchdog-safe factory (BUG 2 + BUG 3).
     """
+    if scheduler.thread is not None and scheduler.thread.is_alive():
+        return scheduler.thread
     if old_thread is not None and old_thread.is_alive():
+        scheduler.thread = old_thread
         return old_thread
     scheduler.is_running = True
     thread = threading.Thread(
         target=scheduler._worker_loop, daemon=True, name="SchedulerWorker"
     )
     thread.start()
+    scheduler.thread = thread
     return thread
 
 

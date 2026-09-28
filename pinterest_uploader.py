@@ -15,6 +15,66 @@ logger = get_logger(__name__)
 # Module-level board ID cache so we only fetch once per session
 _resolved_board_id: str = ""
 
+# ── Make.com health tracking ──────────────────────────────────────────────────
+# Counts consecutive Make.com 400 failures across posting slots.
+# Resets to 0 on any success. Triggers a Telegram admin alert after 2 failures
+# so the user knows to activate the scenario — before a full day is missed.
+_make_consecutive_failures: int = 0
+_make_alert_sent: bool = False  # Only send one alert per "down" period
+
+
+def check_make_health() -> bool:
+    """Probe the Make.com webhook with an empty OPTIONS/HEAD check.
+
+    Since Make.com webhooks don't support HEAD, we send a minimal POST and
+    check the response code. Returns True if the webhook is healthy (2xx),
+    False if it's down (400 = inactive/queue full, other = error).
+    Sends a Telegram admin alert if unhealthy.
+    Called periodically by the scheduler (every 6 h) so problems surface
+    BEFORE a posting slot is missed.
+    """
+    global _make_alert_sent
+    if not MAKE_WEBHOOK_URL:
+        return True  # Not using Make.com — nothing to check
+    try:
+        res = requests.post(MAKE_WEBHOOK_URL, json={"_health_check": True}, timeout=10)
+        if res.status_code in (200, 201, 204):
+            if _make_alert_sent:
+                # Recovered — send a "back online" notification
+                try:
+                    from telegram_bot import notify_admin
+                    notify_admin("✅ *Make.com Webhook Recovered*\n\nThe scenario is active again and accepting pins.")
+                except Exception:
+                    pass
+            _make_alert_sent = False
+            logger.info("[Make.com] Health check ✅ — webhook is active.")
+            return True
+        else:
+            logger.warning(
+                f"[Make.com] Health check ❌ — HTTP {res.status_code}: {res.text[:80]}. "
+                f"Scenario may be INACTIVE. Go to make.com and activate it."
+            )
+            if not _make_alert_sent:
+                _make_alert_sent = True
+                try:
+                    from telegram_bot import notify_admin
+                    notify_admin(
+                        "🚨 *Make.com Scenario is DOWN*\n\n"
+                        f"Health check failed: HTTP {res.status_code} — scenario is likely *Inactive*.\n\n"
+                        "📋 *Fix now (30 seconds):*\n"
+                        "1. Open [make.com](https://make.com)\n"
+                        "2. Click your *Integration Webhooks, Pinterest* scenario\n"
+                        "3. Toggle the switch to **Active**\n"
+                        "4. Click *Delete old data* when prompted\n\n"
+                        "⚠️ Pins are currently NOT posting until you fix this."
+                    )
+                except Exception:
+                    pass
+            return False
+    except Exception as e:
+        logger.warning(f"[Make.com] Health check failed with exception: {e}")
+        return False
+
 def get_board_id_dynamically(headers):
     """Fetches the board ID dynamically using the API if the user didn't provide it"""
     try:
@@ -189,6 +249,25 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
             logger.warning(f"[Make.com] Attempt {attempt}/3 exception: {e}")
 
     logger.error(f"[Make.com] All 3 attempts failed for '{title}'. Pin will retry next slot.")
+    # Increment persistent failure counter so health checker knows we're degraded
+    global _make_consecutive_failures, _make_alert_sent
+    _make_consecutive_failures += 1
+    if _make_consecutive_failures >= 2 and not _make_alert_sent:
+        _make_alert_sent = True
+        try:
+            from telegram_bot import notify_admin
+            notify_admin(
+                f"🚨 *Make.com Down — {_make_consecutive_failures} Consecutive Failures*\n\n"
+                "Pins are not posting. Scenario is likely *Inactive*.\n\n"
+                "📋 *Fix (30 seconds):*\n"
+                "1. Open [make.com](https://make.com)\n"
+                "2. Click your *Integration Webhooks, Pinterest* scenario\n"
+                "3. Toggle to **Active**\n"
+                "4. Click *Delete old data*\n\n"
+                "Bot will retry automatically on next slot."
+            )
+        except Exception:
+            pass
     return False
 
 
@@ -236,6 +315,9 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
             anime_name=anime_name, board_id=board_id, alt_text=alt_text
         )
         if image_url:
+            # Success — reset failure counter
+            _make_consecutive_failures = 0
+            _make_alert_sent = False
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
             return "queued"
 
