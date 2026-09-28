@@ -19,7 +19,7 @@ def get_board_id_dynamically(headers):
     """Fetches the board ID dynamically using the API if the user didn't provide it"""
     try:
         url = "https://api.pinterest.com/v5/boards"
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, timeout=15)
         if res.status_code == 200:
             boards = res.json().get('items', [])
             for b in boards:
@@ -172,6 +172,14 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
                 return image_url  # Return URL so caller can store it
+            elif res.status_code == 400:
+                # HTTP 400 = scenario is INACTIVE or task queue is full
+                logger.warning(
+                    f"[Make.com] Attempt {attempt}/3 failed: HTTP 400 — "
+                    f"scenario is likely INACTIVE or queue is full. "
+                    f"Go to make.com and activate your Pinterest scenario. "
+                    f"Response: {res.text[:100]}"
+                )
             else:
                 logger.warning(
                     f"[Make.com] Attempt {attempt}/3 failed: "
@@ -230,7 +238,31 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         if image_url:
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
             return "queued"
-        return False
+
+        # Make.com failed all 3 attempts — notify admin and try direct Pinterest API
+        logger.warning(
+            f"[Pinterest] Make.com failed for '{title}'. "
+            f"{'Falling back to Pinterest API v5.' if PINTEREST_ACCESS_TOKEN else 'No PINTEREST_ACCESS_TOKEN — pin will retry next slot.'}"
+        )
+        try:
+            from telegram_bot import notify_admin
+            notify_admin(
+                "⚠️ *Make.com Webhook Down*\n\n"
+                "Make.com rejected the last pin upload (HTTP 400 — scenario may be *Inactive* or queue is full).\n\n"
+                "📋 *Action Required:*\n"
+                "1. Go to [make.com](https://make.com) → your Pinterest scenario\n"
+                "2. Toggle it to **Active** if it's paused\n"
+                "3. Clear the queue if 50+ records are waiting\n\n"
+                f"Pin affected: *{title[:60]}*\n"
+                + ("✅ Retrying via direct Pinterest API v5..." if PINTEREST_ACCESS_TOKEN else "❌ No PINTEREST_ACCESS_TOKEN set — pin will retry next slot.")
+            )
+        except Exception:
+            pass
+
+        if not PINTEREST_ACCESS_TOKEN:
+            return False
+        # else: fall through to direct Pinterest API v5 below
+
 
     # ── Route: Official Pinterest API v5 (fallback) ───────────────────────────
     if not PINTEREST_ACCESS_TOKEN:
@@ -265,7 +297,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         # 1. Register media upload
         media_url = "https://api.pinterest.com/v5/media"
         media_data = {"media_type": "image"}
-        media_res = requests.post(media_url, headers=headers, json=media_data)
+        media_res = requests.post(media_url, headers=headers, json=media_data, timeout=30)
         
         if media_res.status_code not in (200, 201):
             logger.error(f"Failed to register media: {media_res.text}")
@@ -280,7 +312,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         with open(image_path, 'rb') as f:
             files = {'file': f}
             # upload_params contains necessary S3 form fields
-            s3_res = requests.post(upload_url, data=upload_params, files=files)
+            s3_res = requests.post(upload_url, data=upload_params, files=files, timeout=60)
             
         if s3_res.status_code not in (200, 204):
             logger.error(f"Failed to upload to S3: {s3_res.text}")
@@ -292,7 +324,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         media_ready = False
         
         for _ in range(max_retries):
-            status_res = requests.get(status_url, headers=headers)
+            status_res = requests.get(status_url, headers=headers, timeout=15)
             if status_res.status_code == 200:
                 status = status_res.json().get("status")
                 if status == "succeeded":
@@ -324,7 +356,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
             "alt_text":    alt_text[:500] if alt_text else "",
         }
         
-        res = requests.post(url, headers=headers, json=pin_data)
+        res = requests.post(url, headers=headers, json=pin_data, timeout=30)
         
         if res.status_code in (200, 201):
             logger.info(f"Successfully uploaded pin: {title}")
