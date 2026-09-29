@@ -314,21 +314,34 @@ def run():
 
 def _self_ping_loop():
     """
-    Pings our own /ping endpoint every 10 minutes to prevent Render free tier
+    Pings our own /ping endpoint every 8 minutes to prevent Render free tier
     from spinning down the instance. Without this, the bot goes offline after
     ~15 minutes of inactivity, causing missed posts and morning messages.
+
+    Also pings EXTERNAL_PING_URL if set (e.g. cron-job.org or UptimeRobot URL)
+    which provides an external heartbeat even when self-ping fails.
     """
     # Wait for Flask to fully start before attempting the first ping
     time.sleep(30)
     port = int(os.environ.get('PORT', 8080))
-    url = f"http://localhost:{port}/ping"
+    local_url = f"http://localhost:{port}/ping"
+    # Optional external ping URL (set in Render env vars or .env)
+    # Example: https://cron-job.org or your own UptimeRobot URL
+    external_url = os.environ.get('EXTERNAL_PING_URL', '').strip()
     while True:
         try:
             import requests as _req
-            _req.get(url, timeout=8)
+            _req.get(local_url, timeout=8)
         except Exception:
             pass  # Non-critical — don't log to avoid noise
-        time.sleep(600)  # ping every 10 minutes
+        # Also ping external URL if configured
+        if external_url:
+            try:
+                import requests as _req
+                _req.get(external_url, timeout=10)
+            except Exception:
+                pass
+        time.sleep(480)  # ping every 8 minutes (well within 15-min Render spin-down)
 
 
 def keep_alive():
