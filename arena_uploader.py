@@ -179,6 +179,14 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                     "image URL may be invalid or already posted."
                 )
                 return False   # No point retrying a 422
+            elif res.status_code == 401:
+                logger.warning("[Are.na] Unauthorized (HTTP 401): Token expired or invalid.")
+                try:
+                    from circuit_breaker import trip_breaker
+                    trip_breaker("arena", "HTTP 401: Are.na access token invalid or expired", cooldown_hours=48.0)
+                except Exception:
+                    pass
+                return False
             elif res.status_code == 402 or (res.status_code == 403 and "limit" in res.text.lower()):
                 # 402 / quota 403 = Paid-plan or free 200-block channel limit reached
                 logger.error(

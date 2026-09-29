@@ -153,6 +153,17 @@ def post_to_imghippo(image_path: str,
             else:
                 logger.warning(f"[Imghippo] Upload returned HTTP {res.status_code}: {res.text[:300]}")
                 last_error = f"HTTP {res.status_code}"
+                # If invalid API key (HTTP 401), abort immediately and trip circuit breaker
+                if res.status_code == 401 or "api key" in res.text.lower():
+                    reason = "HTTP 401: Invalid or missing Imghippo API Key"
+                    logger.error(f"[Imghippo] {reason}. Aborting retries.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("imghippo", reason, cooldown_hours=48.0)
+                    except Exception:
+                        pass
+                    return None
+
                 # If out of credits (HTTP 402), abort immediately without wasting 16s on retries and trip circuit breaker
                 if res.status_code == 402 or "not enough credits" in res.text.lower():
                     # Parse actual credit info from response for a clearer alert

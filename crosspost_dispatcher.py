@@ -54,6 +54,8 @@ def _handle_platform_error(platform: str, err: object):
         trip_breaker(platform, f"HTTP 403 / Access Blocked: {str(err)[:80]}", cooldown_hours=12.0)
     elif any(k in err_str for k in ["402", "not enough credits", "credit", "quota"]):
         trip_breaker(platform, f"HTTP 402 Quota Exhausted: {str(err)[:80]}", cooldown_hours=24.0)
+    elif any(k in err_str for k in ["401", "unauthorized", "please provide api key", "token invalid", "missing_api_key"]):
+        trip_breaker(platform, f"HTTP 401 Auth Expired: {str(err)[:80]}", cooldown_hours=48.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
