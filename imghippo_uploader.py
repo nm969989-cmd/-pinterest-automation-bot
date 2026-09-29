@@ -155,12 +155,48 @@ def post_to_imghippo(image_path: str,
                 last_error = f"HTTP {res.status_code}"
                 # If out of credits (HTTP 402), abort immediately without wasting 16s on retries and trip circuit breaker
                 if res.status_code == 402 or "not enough credits" in res.text.lower():
-                    logger.error("[Imghippo] Free tier quota exhausted (0 credits remaining). Aborting retries.")
+                    # Parse actual credit info from response for a clearer alert
+                    remaining = 0
+                    plan_credits = 0
                     try:
-                        from circuit_breaker import trip_breaker
-                        trip_breaker("imghippo", "HTTP 402: Free tier quota exhausted (0 credits remaining)", cooldown_hours=24.0)
+                        err_data = res.json().get("data", {})
+                        remaining = err_data.get("remaining", 0)
+                        plan_credits = err_data.get("plan_credits", 0)
                     except Exception:
                         pass
+
+                    reason = (
+                        f"HTTP 402: Free tier quota exhausted "
+                        f"(plan_credits={plan_credits}, remaining={remaining})"
+                    )
+                    logger.error(f"[Imghippo] {reason}. Aborting retries.")
+
+                    # Use a long cooldown — free plan gives 0 credits permanently,
+                    # so a 24h reset won't help. Alert the admin to take action.
+                    cooldown = 48.0 if plan_credits == 0 else 24.0
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("imghippo", reason, cooldown_hours=cooldown)
+                    except Exception:
+                        pass
+
+                    # Notify admin so they know exactly what happened and how to fix it
+                    try:
+                        from telegram_bot import notify_admin
+                        fix_msg = (
+                            "🦛 *Imghippo Upload Failed — Out of Credits*\n\n"
+                            f"• Plan credits: `{plan_credits}` (permanent quota)\n"
+                            f"• Remaining: `{remaining}`\n\n"
+                            "📋 *Fix options:*\n"
+                            "1. Upgrade Imghippo to a paid plan at imghippo.com/dashboard\n"
+                            "2. OR set `IMGHIPPO_ENABLED=false` in .env to disable this platform\n"
+                            "3. Imghippo uploads will resume automatically in 48h if you upgrade.\n\n"
+                            "_Other platforms (Freeimage, Cloudinary) are unaffected._"
+                        )
+                        notify_admin(fix_msg)
+                    except Exception:
+                        pass
+
                     return None
 
         except requests.exceptions.RequestException as req_err:

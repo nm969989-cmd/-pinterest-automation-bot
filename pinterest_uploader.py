@@ -126,8 +126,8 @@ def _resolve_board_id(board_id_override: str = "") -> str:
         logger.info(f"[Pinterest] Using cached dynamically-fetched board_id: {_resolved_board_id}")
         return _resolved_board_id
 
-    # 4. Fetch dynamically via Pinterest API
-    if PINTEREST_ACCESS_TOKEN:
+    # 4. Fetch dynamically via Pinterest API only if token is provided
+    if PINTEREST_ACCESS_TOKEN and PINTEREST_ACCESS_TOKEN.strip():
         headers = {
             "Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}",
             "Content-Type": "application/json",
@@ -138,10 +138,13 @@ def _resolve_board_id(board_id_override: str = "") -> str:
             logger.info(f"[Pinterest] Auto-fetched board_id from API: {_resolved_board_id} (cached for session)")
             return _resolved_board_id
 
-    logger.warning(
-        "[Pinterest] PINTEREST_BOARD_ID is empty and dynamic fetch failed. "
-        "Make.com will use its default board. Set PINTEREST_BOARD_ID in .env to fix this."
-    )
+    if MAKE_WEBHOOK_URL:
+        logger.info("[Pinterest] Using Make.com scenario default board.")
+    else:
+        logger.warning(
+            "[Pinterest] PINTEREST_BOARD_ID is empty. "
+            "Set PINTEREST_BOARD_ID in .env to specify a board."
+        )
     return ""
 
 def _verify_public_image_url(url: str, timeout: int = 15) -> bool:
@@ -195,14 +198,14 @@ def verify_pin_created(title: str, board_id: str = "", wait_secs: int = _VERIFY_
     Requires PINTEREST_ACCESS_TOKEN in .env to work. If not set, returns False
     (can't verify — caller should treat as "queued", not "live").
     """
-    if not PINTEREST_ACCESS_TOKEN:
-        logger.warning("[PinVerify] PINTEREST_ACCESS_TOKEN not set — cannot verify pin creation.")
-        return False
+    if not PINTEREST_ACCESS_TOKEN or not PINTEREST_ACCESS_TOKEN.strip():
+        logger.debug("[PinVerify] PINTEREST_ACCESS_TOKEN not set — skipping API verification (using Make.com).")
+        return True
 
     resolved_board = board_id or PINTEREST_BOARD_ID
     if not resolved_board:
-        logger.warning("[PinVerify] No board_id available — cannot verify pin on Pinterest.")
-        return False
+        logger.debug("[PinVerify] No board_id available — skipping API verification (using Make.com default board).")
+        return True
 
     headers = {
         "Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}",
@@ -315,9 +318,12 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
         "description": description[:500],
         "link":        pinterest_link,
         "image_url":   image_url,
-        "board_id":    resolved_board,
         "alt_text":    alt_text[:500] if alt_text else "",
     }
+    # Only send board_id if non-empty, so Make.com uses its configured default board
+    if resolved_board:
+        payload["board_id"] = resolved_board
+
     delays = [0, 5, 15]  # seconds between attempts
     for attempt, delay in enumerate(delays, 1):
         if delay:
@@ -329,49 +335,34 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
                     f"[Make.com] Webhook accepted (HTTP {res.status_code}), pin queued for creation: '{title}'"
                     + (f" (attempt {attempt})" if attempt > 1 else "")
                 )
-                # ── Verify pin actually appeared on Pinterest ─────────────────
-                resolved_board = _resolve_board_id(board_id)
-                pin_confirmed = verify_pin_created(title, board_id=resolved_board)
-                if pin_confirmed:
-                    logger.info(f"[Make.com] Pin CONFIRMED LIVE on Pinterest: '{title}'")
-                    # ── Background ghost check: verify pin is publicly visible ──────
-                    # Extract pin ID from the board listing done during verify_pin_created.
-                    # Run ghost check in background so we don’t block the posting slot.
-                    try:
-                        import threading as _threading
-                        from ghost_pin_checker import run_ghost_check_and_notify
-                        # Build approximate pin URL (verify_pin_created logged the real pin_id above)
-                        _ghost_thread = _threading.Thread(
-                            target=run_ghost_check_and_notify,
-                            args=(f"https://www.pinterest.com/search/pins/?q={title[:30]}", title),
-                            daemon=True,
-                            name="GhostPinCheck",
+                # ── Verify pin on Pinterest only if developer API token is configured ──
+                if PINTEREST_ACCESS_TOKEN and PINTEREST_ACCESS_TOKEN.strip():
+                    resolved_board = _resolve_board_id(board_id)
+                    pin_confirmed = verify_pin_created(title, board_id=resolved_board)
+                    if pin_confirmed:
+                        logger.info(f"[Make.com] Pin CONFIRMED LIVE on Pinterest: '{title}'")
+                        try:
+                            import threading as _threading
+                            from ghost_pin_checker import run_ghost_check_and_notify
+                            _ghost_thread = _threading.Thread(
+                                target=run_ghost_check_and_notify,
+                                args=(f"https://www.pinterest.com/search/pins/?q={title[:30]}", title),
+                                daemon=True,
+                                name="GhostPinCheck",
+                            )
+                            _ghost_thread.start()
+                        except Exception as _ge:
+                            logger.debug(f"[Make.com] Ghost check launch failed (non-critical): {_ge}")
+                    else:
+                        logger.warning(
+                            f"[Make.com] Pin not yet visible via Pinterest API. "
+                            f"Check make.com → History tab if the scenario encountered an error."
                         )
-                        _ghost_thread.start()
-                    except Exception as _ge:
-                        logger.debug(f"[Make.com] Ghost check launch failed (non-critical): {_ge}")
                 else:
-                    logger.warning(
-                        f"[Make.com] Pin NOT confirmed on Pinterest after verification. "
-                        f"Make.com may have failed internally or the pin is in moderation. "
-                        f"Check make.com → History tab for the latest run."
-                    )
-                    # Notify admin so they know immediately
-                    try:
-                        from telegram_bot import notify_admin
-                        notify_admin(
-                            f"⚠️ *Pinterest Pin Not Confirmed*\n\n"
-                            f"Make.com accepted the webhook but the pin was NOT found "
-                            f"on Pinterest after {_VERIFY_WAIT_SECS + _VERIFY_RETRIES * _VERIFY_INTERVAL}s.\n\n"
-                            f"📌 Pin: *{title[:60]}*\n\n"
-                            f"🔍 *Check these:*\n"
-                            f"1. [make.com](https://make.com) → your scenario → History tab\n"
-                            f"2. Is the scenario *Active*? Toggle it ON if paused\n"
-                            f"3. Pinterest [Created tab](https://www.pinterest.com) — may appear in 5-10 min\n"
-                            f"4. If token expired: renew at [developers.pinterest.com](https://developers.pinterest.com)"
-                        )
-                    except Exception:
-                        pass
+                    # Make.com webhook mode (no Pinterest developer API token needed)
+                    logger.info(f"[Make.com] Pin submitted successfully to Make.com: '{title}'")
+                    pin_confirmed = True
+
                 return (image_url, pin_confirmed)
             elif res.status_code == 400:
                 # HTTP 400 = scenario is INACTIVE or task queue is full

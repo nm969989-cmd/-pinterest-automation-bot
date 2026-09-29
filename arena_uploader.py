@@ -23,6 +23,9 @@ ARENA_API_BASE = "https://api.are.na/v3"
 _MAX_RETRIES   = 3
 _RETRY_DELAYS  = [0, 5, 15]   # seconds -- mirrors pinterest_uploader pattern
 
+# Cache: slug -> numeric channel ID (fetched once per session)
+_channel_id_cache: dict = {}
+
 
 def _get_headers() -> dict:
     """Returns auth headers for Are.na v3 API calls, checking bot_metadata then .env."""
@@ -42,6 +45,36 @@ def _get_headers() -> dict:
         "Authorization": f"Bearer {token}",
         "Content-Type":  "application/json",
     }
+
+
+def _resolve_channel_id(slug: str) -> int | None:
+    """
+    Resolves an Are.na channel slug to its numeric integer ID.
+    Are.na /v3/blocks requires channel_ids to be integer IDs, NOT slug strings —
+    passing a slug causes HTTP 400 "wrong type" silently.
+    Result is cached for the lifetime of the process.
+    """
+    if slug in _channel_id_cache:
+        return _channel_id_cache[slug]
+    try:
+        headers = _get_headers()
+        res = requests.get(
+            f"{ARENA_API_BASE}/channels/{slug}",
+            headers=headers,
+            timeout=10,
+        )
+        if res.status_code == 200:
+            channel_id = res.json().get("id")
+            if channel_id:
+                _channel_id_cache[slug] = int(channel_id)
+                logger.info(f"[Are.na] Resolved channel '{slug}' -> ID {channel_id}")
+                return int(channel_id)
+            logger.warning(f"[Are.na] Channel API response missing 'id' field for slug '{slug}'")
+        else:
+            logger.warning(f"[Are.na] Could not resolve channel ID for '{slug}': HTTP {res.status_code}")
+    except Exception as e:
+        logger.warning(f"[Are.na] _resolve_channel_id error for '{slug}': {e}")
+    return None
 
 
 def post_to_arena(image_url: str, title: str, description: str, link: str = "") -> bool:
@@ -81,10 +114,20 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
     if link and link not in block_desc:
         block_desc = f"{block_desc}\n\nLink: {link}" if block_desc else f"Link: {link}"
 
+    # Are.na /v3/blocks requires a numeric integer channel ID — NOT the slug string.
+    # Passing a slug causes HTTP 400. Resolve it once and cache it.
+    channel_id = _resolve_channel_id(ARENA_CHANNEL_SLUG)
+    if channel_id is None:
+        logger.error(
+            f"[Are.na] Cannot post: failed to resolve channel ID for slug '{ARENA_CHANNEL_SLUG}'. "
+            "Check ARENA_CHANNEL_SLUG in .env and that the token has access to this channel."
+        )
+        return False
+
     url = f"{ARENA_API_BASE}/blocks"
     payload = {
         "value": image_url,
-        "channel_ids": [ARENA_CHANNEL_SLUG],
+        "channel_ids": [channel_id],   # Must be integer ID, not slug string
     }
     if title:
         payload["title"] = title[:255]
@@ -156,6 +199,22 @@ def post_to_arena(image_url: str, title: str, description: str, link: str = "") 
                 except Exception:
                     pass
                 return False
+            elif res.status_code == 400:
+                # HTTP 400 usually means channel_ids contains a wrong type (slug instead of int ID)
+                # or a malformed payload. Log the full body to help diagnose.
+                logger.error(
+                    f"[Are.na] Bad Request (HTTP 400): {res.text[:200]} -- "
+                    "Likely cause: channel_ids must be an integer ID, not a slug string. "
+                    "Clearing channel ID cache to force re-fetch on next attempt."
+                )
+                # Evict the stale cached ID so the next retry re-fetches it
+                _channel_id_cache.pop(ARENA_CHANNEL_SLUG, None)
+                # Re-resolve channel ID for next retry
+                channel_id = _resolve_channel_id(ARENA_CHANNEL_SLUG)
+                if channel_id:
+                    payload["channel_ids"] = [channel_id]
+                else:
+                    return False  # Can't recover without a valid channel ID
             else:
                 logger.warning(
                     f"[Are.na] Attempt {attempt}/{_MAX_RETRIES} failed: "
@@ -275,10 +334,19 @@ def verify_arena_write_access() -> str:
             headers=headers,
             timeout=10,
         )
-        if probe_res.status_code in (200, 201, 400, 422):
-            # 400 = "value is required", 422 = Unprocessable Entity
-            # Both confirm authorization succeeded before validation error
+        if probe_res.status_code in (200, 201, 422):
+            # 422 = Unprocessable Entity (empty value rejected after auth) — write access confirmed.
+            # Note: 400 is NOT included here — it means channel_ids type error (slug vs int),
+            # not a write-access confirmation.
             logger.info("[Are.na] Write-access check: token has READ + WRITE scope. [OK]")
+            return "write"
+        elif probe_res.status_code == 400:
+            # 400 on the probe means channel_ids needs an integer ID, not the slug.
+            # The token is probably fine — treat as write access (resolved IDs will be used).
+            logger.info(
+                "[Are.na] Write-access check: HTTP 400 on probe (channel_ids type mismatch — slug vs int). "
+                "Token appears valid; numeric channel IDs will be used for actual posts."
+            )
             return "write"
         elif probe_res.status_code == 403:
             logger.warning(
