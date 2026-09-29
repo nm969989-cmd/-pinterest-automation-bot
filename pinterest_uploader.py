@@ -314,11 +314,16 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
     resolved_board = _resolve_board_id(board_id)
 
     payload = {
-        "title":       title[:100],
-        "description": description[:500],
-        "link":        pinterest_link,
-        "image_url":   image_url,
-        "alt_text":    alt_text[:500] if alt_text else "",
+        "title":           title[:100],
+        "description":     description[:500],
+        "link":            pinterest_link,
+        "destination_url": pinterest_link,
+        "image_url":       image_url,
+        "url":             image_url,           # Required by Make.com Pinterest "Create a Pin" module
+        "media_url":       image_url,
+        "photo_url":       image_url,
+        "image":           image_url,
+        "alt_text":        alt_text[:500] if alt_text else "",
     }
     # Only send board_id if non-empty, so Make.com uses its configured default board
     if resolved_board:
