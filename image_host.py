@@ -84,6 +84,10 @@ def upload_image_to_host(image_path: str) -> str | None:
     Cloudinary is first because it's permanent, configured, and never goes down.
     Anonymous hosts (Catbox/0x0.st) silently fail and cause blank Pinterest pins.
     """
+    # If already a public URL, no upload needed
+    if image_path and (image_path.startswith("http://") or image_path.startswith("https://")):
+        return image_path
+
     # Pre-flight: ensure the file actually exists
     if not os.path.exists(image_path):
         logger.error(
