@@ -39,7 +39,9 @@ def _upload_to_cloudinary(image_path: str) -> str | None:
     try:
         import hashlib, time
         timestamp = str(int(time.time()))
-        params    = {"folder": "pinterest-bot", "timestamp": timestamp}
+        # Include resource_type in params — some Cloudinary account configs
+        # require it in the signature, and omitting it causes a 401 mismatch.
+        params    = {"folder": "pinterest-bot", "resource_type": "image", "timestamp": timestamp}
 
         # Cloudinary requires all params sorted alphabetically + api_secret appended
         sig_str   = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + api_secret
@@ -51,10 +53,11 @@ def _upload_to_cloudinary(image_path: str) -> str | None:
             res = requests.post(
                 upload_url,
                 data={
-                    "api_key":   api_key,
-                    "timestamp": timestamp,
-                    "signature": signature,
-                    "folder":    "pinterest-bot",
+                    "api_key":       api_key,
+                    "timestamp":     timestamp,
+                    "signature":     signature,
+                    "folder":        "pinterest-bot",
+                    "resource_type": "image",
                 },
                 files={"file": f},
                 timeout=30,

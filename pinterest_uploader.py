@@ -174,7 +174,7 @@ def _verify_public_image_url(url: str, timeout: int = 15) -> bool:
         g = requests.get(url, timeout=timeout, stream=True,
                          headers={"Range": "bytes=0-1023", "User-Agent": "Mozilla/5.0"})
         ctype = (g.headers.get("Content-Type", "") or "").lower()
-        if g.status_code in (200, 206) and ("image" in ctype or "octet" in ctype):
+        if g.status_code in (200, 206) and ("image" in ctype or "octet" in ctype or ctype == ""):
             g.close()
             return True
         logger.error(
@@ -454,7 +454,8 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
         if result is not False:
             # result is (image_url, pin_confirmed) tuple
             image_url, pin_confirmed = result
-            # Success — reset failure counter
+            # Success — reset failure counter (must use global, not local variable)
+            global _make_consecutive_failures, _make_alert_sent
             _make_consecutive_failures = 0
             _make_alert_sent = False
             mark_file_uploaded(filename, title, anime_name, image_url if isinstance(image_url, str) else "")
