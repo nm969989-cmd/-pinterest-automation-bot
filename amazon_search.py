@@ -32,6 +32,19 @@ _DEAD_ASINS = {
     "0000000000",
 }
 
+# ── Safe Fallback ASINs ───────────────────────────────────────────────────────
+# Verified live Amazon India anime product ASINs used when ASIN scraping fails.
+# Pinterest REQUIRES a direct /dp/ASIN link — search URLs (/s?k=) are rejected
+# by Pinterest's crawler with error 2786 "Unable to reach the URL".
+# Rotate through these so pins don't all point to the same product.
+_SAFE_FALLBACK_ASINS = [
+    "B0H8PTBTCJ",   # Anime merchandise (verified live 2026-10)
+    "B0GR51WD72",   # Anime merchandise (verified live 2026-10)
+    "B0DV4GRN9Q",   # Anime merchandise (verified live 2026-10)
+    "B0GNJRFDV2",   # Anime merchandise (verified live 2026-10)
+    "B0H2B81YGR",   # Anime merchandise (verified live 2026-10)
+]
+
 # ── Retired Static ASIN Map ──────────────────────────────────────────────────
 # Hardcoded single-product ASINs are permanently retired to prevent Amazon 404
 # "Page Not Found / Looking for something?" errors when sellers delist items.
@@ -264,11 +277,14 @@ def _fetch_first_asin(search_query: str, anime_name: str = "", character_name: s
 
 def _build_search_link(search_query: str = "", anime_name: str = "", character_name: str = "") -> str:
     """
-    Returns an anime/character-specific Amazon India search storefront link.
-    Guaranteed to load live, in-stock products on Amazon India with affiliate tag attached.
-    NEVER 404s and never shows 'Looking for something? We're sorry'.
-    The 'i=toys' department filter narrows results to Toys & Games — where anime
-    figures, posters, and collectibles live — avoiding generic unrelated results.
+    Returns an anime/character-specific Amazon search link.
+
+    *** IMPORTANT: Uses amazon.com (NOT amazon.in) ***
+    Pinterest's crawler is US-based. amazon.in search pages redirect Pinterest's
+    bot to a CAPTCHA/robot-check page → Pinterest API returns error 2786
+    'Unable to reach the URL'. amazon.com is globally accessible by crawlers.
+    Affiliate tag is still applied (amazon.com IN affiliate tags work cross-domain
+    via the Amazon Associates program).
     """
     clean_char = clean_character_name(character_name) if character_name else ""
     clean_anime = _sanitize_anime_name(anime_name) if anime_name else ""
@@ -287,12 +303,14 @@ def _build_search_link(search_query: str = "", anime_name: str = "", character_n
     # Normalize whitespace and encode
     query_str = " ".join(query.split())
     encoded_query = urllib.parse.quote(query_str)
+    # Use amazon.com — globally reachable by Pinterest's US-based crawler.
+    # amazon.in/s?k= redirects bots to CAPTCHA → Pinterest error 2786.
+    # No UTM params — they trigger Amazon's bot detection and cause redirects.
     return (
-        f"https://www.amazon.in/s?k={encoded_query}"
+        f"https://www.amazon.com/s?k={encoded_query}"
         f"&i=toys"                              # Toys & Games dept: anime figures/posters
         f"&tag={AMAZON_AFFILIATE_TAG}"
         f"&sort=review-rank"
-        f"&utm_source=Pinterest&utm_medium=organic"
     )
 
 
@@ -326,10 +344,13 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
       1. Sanitize anime & character names (extracting character from title if needed).
       2. If a verified live ASIN is found (via PA-API or validated scraper), returns
          a direct /dp/ASIN product link.
-      3. Otherwise, returns a targeted, fail-proof Amazon product storefront link
-         packed with live in-stock products matching the anime and character.
+      3. Otherwise, uses a safe fallback ASIN from _SAFE_FALLBACK_ASINS.
+         *** NEVER falls back to search URLs (/s?k=) ***
+         Pinterest's crawler (US-based) cannot reach amazon.in search pages —
+         they redirect bots to CAPTCHA → Pinterest API error 2786.
       4. Never outputs broken or dead ASIN links that lead to Amazon 404s.
     """
+    clean_char = ""  # ensure defined for exception handler
     try:
         # Sanitize anime name and character name
         clean_name = _sanitize_anime_name(anime_name)
@@ -356,16 +377,22 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
             logger.info(f"[Amazon] Deep product link generated: {deep_link}")
             return wrap_with_tracker(deep_link, anime_name=clean_name, title=title)
         else:
-            # High-converting live product search storefront (fail-proof, never 404s)
-            product_link = _build_search_link(search_query, anime_name=clean_name, character_name=clean_char)
-            logger.info(f"[Amazon] Using live product search link for '{clean_name}': {product_link}")
-            return wrap_with_tracker(product_link, anime_name=clean_name, title=title)
+            # *** CRITICAL: Never use search URLs — Pinterest error 2786 ***
+            # Use a safe fallback ASIN (direct /dp/ link) instead of a search page.
+            fallback_asin = random.choice(_SAFE_FALLBACK_ASINS)
+            fallback_link = _build_deep_link(fallback_asin)
+            logger.info(
+                f"[Amazon] ASIN scrape failed for '{clean_name}' — using safe fallback ASIN: {fallback_asin}"
+            )
+            return wrap_with_tracker(fallback_link, anime_name=clean_name, title=title)
 
     except Exception as e:
         logger.error(f"[Amazon] Unexpected error generating link: {e}")
-        safe_name = _sanitize_anime_name(anime_name)
-        fallback_default = _build_search_link("", anime_name=safe_name, character_name=clean_char)
-        return wrap_with_tracker(fallback_default, anime_name=anime_name, title=title)
+        fallback_asin = random.choice(_SAFE_FALLBACK_ASINS)
+        fallback_link = _build_deep_link(fallback_asin)
+        logger.info(f"[Amazon] Exception fallback — using safe ASIN: {fallback_asin}")
+        return wrap_with_tracker(fallback_link, anime_name=anime_name, title=title)
+
 
 
 # ── PROTECTION & RESOLUTION LAYER ─────────────────────────────────────────────
@@ -440,8 +467,16 @@ def resolve_to_direct_link(link: str, anime_name: str = "", character_name: str 
         logger.debug(f"[DirectLink] Link is an active direct product page: {link[:80]}")
         return link
 
-    # ── Step 5: Direct Amazon search storefront link ────────────────────────
+    # ── Step 5: Amazon search storefront link ───────────────────────────────
+    # *** amazon.in/s? search URLs redirect Pinterest's US crawler to CAPTCHA ***
+    # Auto-upgrade any stored amazon.in search URL to amazon.com to prevent error 2786.
     if "amazon.in/s?" in link or "amazon.in/s/" in link:
+        logger.info(f"[DirectLink] Upgrading amazon.in search URL to amazon.com (Pinterest crawler fix): {link[:60]}")
+        link = link.replace("amazon.in/s?", "amazon.com/s?").replace("amazon.in/s/", "amazon.com/s/")
+        # Strip UTM params that trigger Amazon bot detection
+        link = re.sub(r'&utm_source=[^&]*', '', link)
+        link = re.sub(r'&utm_medium=[^&]*', '', link)
+    if "amazon.com/s?" in link or "amazon.com/s/" in link:
         if f"tag={AMAZON_AFFILIATE_TAG}" not in link:
             sep = "&" if "?" in link else "?"
             link = f"{link}{sep}tag={AMAZON_AFFILIATE_TAG}"

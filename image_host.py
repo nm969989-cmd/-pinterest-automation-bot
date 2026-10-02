@@ -39,25 +39,27 @@ def _upload_to_cloudinary(image_path: str) -> str | None:
     try:
         import hashlib, time
         timestamp = str(int(time.time()))
-        # Include resource_type in params — some Cloudinary account configs
-        # require it in the signature, and omitting it causes a 401 mismatch.
-        params    = {"folder": "pinterest-bot", "resource_type": "image", "timestamp": timestamp}
+        # *** FIX: resource_type must NOT be in the signature params. ***
+        # Cloudinary only signs upload params (folder, timestamp).
+        # Confirmed by Cloudinary's own 401 error: "String to sign - 'folder=...&timestamp=...'".
+        # resource_type is passed as a form field but NOT included in the signature.
+        params    = {"folder": "pinterest-bot", "timestamp": timestamp}
 
         # Cloudinary requires all params sorted alphabetically + api_secret appended
         sig_str   = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + api_secret
         signature = hashlib.sha1(sig_str.encode()).hexdigest()
 
+        # resource_type goes in the URL path (not the signature)
         upload_url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
 
         with open(image_path, "rb") as f:
             res = requests.post(
                 upload_url,
                 data={
-                    "api_key":       api_key,
-                    "timestamp":     timestamp,
-                    "signature":     signature,
-                    "folder":        "pinterest-bot",
-                    "resource_type": "image",
+                    "api_key":   api_key,
+                    "timestamp": timestamp,
+                    "signature": signature,
+                    "folder":    "pinterest-bot",
                 },
                 files={"file": f},
                 timeout=30,
