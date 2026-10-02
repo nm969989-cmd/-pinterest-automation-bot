@@ -44,7 +44,7 @@ services:
       - key: ARENA_CHANNEL_SLUG
         sync: false
       - key: ARENA_ENABLED
-        value: "true"
+        value: "false"
 
       # Bluesky Cross-Posting
       - key: BLUESKY_HANDLE
@@ -85,7 +85,7 @@ services:
       - key: IMGHIPPO_API_KEY
         sync: false
       - key: IMGHIPPO_ENABLED
-        value: "true"
+        value: "false"
 
 
 
