@@ -124,6 +124,11 @@ def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
     ])
 
 
+def _is_valid_http_url(url: str) -> bool:
+    """Helper to ensure Telegram InlineKeyboardButton never receives non-HTTP or invalid URLs."""
+    return bool(url and isinstance(url, str) and url.strip().startswith(("http://", "https://")))
+
+
 def get_post_confirmation_keyboard(
     amazon_url: str = "",
     pinterest_url: str = "",
@@ -143,53 +148,69 @@ def get_post_confirmation_keyboard(
     rows = []
 
     # Row 1: Pinterest + Amazon
-    p_url = pinterest_url or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
-    row1 = [InlineKeyboardButton("📌 View Pinterest", url=p_url)]
-    if amazon_url and amazon_url.startswith("http"):
+    row1 = []
+    p_url = pinterest_url if _is_valid_http_url(pinterest_url) else getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+    if _is_valid_http_url(p_url):
+        row1.append(InlineKeyboardButton("📌 View Pinterest", url=p_url))
+    if _is_valid_http_url(amazon_url):
         amazon_label = "🎯 Amazon Product" if "/dp/" in amazon_url else "🔍 Browse Amazon"
         row1.append(InlineKeyboardButton(amazon_label, url=amazon_url))
-    rows.append(row1)
+    if row1:
+        rows.append(row1)
 
     # Secondary platforms (paired 2 per row)
     platform_btns = []
 
     if getattr(config, "BLUESKY_ENABLED", False):
         b_handle = getattr(config, "BLUESKY_HANDLE", "muthelyrics.bsky.social")
-        b_link = bluesky_url or f"https://bsky.app/profile/{b_handle}"
+        fallback_bsky = f"https://bsky.app/profile/{b_handle}"
+        b_link = bluesky_url if _is_valid_http_url(bluesky_url) else fallback_bsky
         btn_txt = "🦋 View on Bluesky" if (bluesky_url and "/post/" in bluesky_url) else "🦋 Bluesky Feed"
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=b_link))
+        if _is_valid_http_url(b_link):
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=b_link))
 
     if getattr(config, "MASTODON_ENABLED", False):
-        m_link = mastodon_url or "https://mastodon.social/@muthelyrics"
-        btn_txt = "🐘 View on Mastodon" if (mastodon_url and "/@" in mastodon_url and mastodon_url != "https://mastodon.social/@muthelyrics") else "🐘 Mastodon Feed"
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=m_link))
+        fallback_masto = "https://mastodon.social/@muthelyrics"
+        m_link = mastodon_url if _is_valid_http_url(mastodon_url) else fallback_masto
+        btn_txt = "🐘 View on Mastodon" if (mastodon_url and "/@" in mastodon_url and mastodon_url != fallback_masto) else "🐘 Mastodon Feed"
+        if _is_valid_http_url(m_link):
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=m_link))
 
     if getattr(config, "ARENA_ENABLED", False):
         a_slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
-        a_link = arena_url or (f"https://www.are.na/channel/{a_slug}" if a_slug else "https://www.are.na/manoj-muthelyrics")
-        platform_btns.append(InlineKeyboardButton("🔮 View on Are.na", url=a_link))
+        fallback_arena = f"https://www.are.na/channel/{a_slug}" if a_slug else "https://www.are.na/manoj-muthelyrics"
+        a_link = arena_url if _is_valid_http_url(arena_url) else fallback_arena
+        if _is_valid_http_url(a_link):
+            platform_btns.append(InlineKeyboardButton("🔮 View on Are.na", url=a_link))
 
     if getattr(config, "RAINDROP_ENABLED", False):
         r_col = getattr(config, "RAINDROP_COLLECTION_ID", "")
-        r_link = raindrop_url or (f"https://raindrop.io/collection/{r_col}" if r_col else "https://app.raindrop.io")
-        platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=r_link))
-
+        fallback_raindrop = f"https://raindrop.io/collection/{r_col}" if r_col else "https://app.raindrop.io"
+        r_link = raindrop_url if _is_valid_http_url(raindrop_url) else fallback_raindrop
+        if _is_valid_http_url(r_link):
+            platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=r_link))
 
     if getattr(config, "PIXELFED_ENABLED", False):
-        pix_link = pixelfed_url or f"{getattr(config, 'PIXELFED_INSTANCE_URL', 'https://pixelfed.social')}/PinterestAutomationBot"
+        inst = getattr(config, "PIXELFED_INSTANCE_URL", "https://pixelfed.social")
+        fallback_pix = f"{inst}/PinterestAutomationBot"
+        pix_link = pixelfed_url if _is_valid_http_url(pixelfed_url) else fallback_pix
         btn_txt = "📷 View on Pixelfed" if (pixelfed_url and "/p/" in pixelfed_url) else "📷 Pixelfed Profile"
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=pix_link))
+        if _is_valid_http_url(pix_link):
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=pix_link))
 
     if getattr(config, "FREEIMAGE_ENABLED", False):
-        fi_link = freeimage_url or "https://freeimage.host/muthelyrics"
+        fallback_fi = "https://freeimage.host/muthelyrics"
+        fi_link = freeimage_url if _is_valid_http_url(freeimage_url) else fallback_fi
         btn_txt = "🖼️ View on Freeimage" if (freeimage_url and "/i/" in freeimage_url) else "🖼️ Freeimage Gallery"
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=fi_link))
-
+        if _is_valid_http_url(fi_link):
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=fi_link))
 
     if getattr(config, "IMGHIPPO_ENABLED", False):
-        hippo_link = imghippo_url or "https://www.imghippo.com/dashboard"
+        fallback_hippo = "https://www.imghippo.com/dashboard"
+        hippo_link = imghippo_url if _is_valid_http_url(imghippo_url) else fallback_hippo
         btn_txt = "🦛 View on Imghippo" if (imghippo_url and "/files/" in imghippo_url) else "🦛 Imghippo Gallery"
-        platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
+        if _is_valid_http_url(hippo_link):
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
 
     # Append platforms in pairs of 2
     for i in range(0, len(platform_btns), 2):
@@ -505,7 +526,7 @@ async def cmd_verify_public(update: "Update", context: "ContextTypes.DEFAULT_TYP
         if not result["visible"]:
             reply += (
                 f"🛠️ *Fix Options:*\n"
-                f"1. Set board to **Public** (not Secret)\n"
+                f"1. Set board to *Public* (not Secret)\n"
                 f"2. Use bridge link `/p/<code>` instead of direct Amazon URL\n"
                 f"3. Re-pin manually from browser to reset the filter\n"
                 f"4. Wait 24\u201372h for new account indexing\n"
@@ -1993,14 +2014,27 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 freeimage_url=cp_res.get("freeimage_url", ""),
                 imghippo_url=cp_res.get("imghippo_url", ""),
             )
+            sent_photo = False
             if image_path and os.path.exists(image_path):
                 try:
                     with open(image_path, "rb") as img_file:
                         await msg.reply_photo(photo=img_file, caption=confirm_text[:1024], reply_markup=confirm_markup)
-                except Exception:
+                    sent_photo = True
+                except Exception as _e:
+                    logger.warning(f"[TG BOT] /post_now file photo failed: {_e}")
+
+            if not sent_photo and pin.get("image_url") and pin["image_url"].startswith(("http://", "https://")):
+                try:
+                    await msg.reply_photo(photo=pin["image_url"], caption=confirm_text[:1024], reply_markup=confirm_markup)
+                    sent_photo = True
+                except Exception as _e:
+                    logger.warning(f"[TG BOT] /post_now CDN photo failed: {_e}")
+
+            if not sent_photo:
+                try:
                     await msg.reply_text(confirm_text, reply_markup=confirm_markup)
-            else:
-                await msg.reply_text(confirm_text, reply_markup=confirm_markup)
+                except Exception:
+                    await msg.reply_text(confirm_text)
             logger.info(f"[TG BOT] /post_now: posted '{pin['title']}' (skipped {stale_dropped} stale)")
         else:
             # Upload failed — re-queue this pin
@@ -2168,14 +2202,19 @@ _app_ref  = None
 _loop_ref = None
 
 
-def notify_admin(message: str):
-    """Send a plain text notification to the admin from any thread."""
+def notify_admin(message: str, parse_mode: str = "Markdown"):
+    """Send a Markdown-formatted notification to the admin from any thread."""
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
     try:
         asyncio.run_coroutine_threadsafe(
-            _app_ref.bot.send_message(chat_id=admin_id, text=message),
+            _app_ref.bot.send_message(
+                chat_id=admin_id,
+                text=message,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True,
+            ),
             _loop_ref
         )
     except Exception as e:
@@ -2557,7 +2596,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              pixelfed_ok=None, pixelfed_url: str = "",
                              freeimage_ok=None, freeimage_url: str = "",
                              imghippo_ok=None, imghippo_url: str = "",
-                             pin_live: bool = True):
+                             pin_live: bool = True,
+                             image_url: str = ""):
     """
     Send a rich Telegram notification after every successful Pinterest post.
     pin_live=False → Make.com accepted the webhook but the pin is NOT yet
@@ -2629,8 +2669,10 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     )
 
     async def _send():
-        try:
-            if image_path and os.path.exists(image_path):
+        sent = False
+        # Tier 1: Try local image file
+        if image_path and os.path.exists(image_path):
+            try:
                 with open(image_path, "rb") as img:
                     await _app_ref.bot.send_photo(
                         chat_id=admin_id,
@@ -2638,14 +2680,49 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                         caption=caption[:1024],
                         reply_markup=reply_markup,
                     )
-            else:
+                sent = True
+                logger.info(f"[TG BOT] Pin photo sent successfully via local file to {admin_id}")
+            except Exception as e:
+                logger.warning(f"[TG BOT] Local photo notification failed ({e}) — falling back to CDN URL")
+
+        # Tier 2: Try public CDN URL (Cloudinary / Catbox)
+        if not sent and image_url and image_url.startswith(("http://", "https://")):
+            try:
+                await _app_ref.bot.send_photo(
+                    chat_id=admin_id,
+                    photo=image_url,
+                    caption=caption[:1024],
+                    reply_markup=reply_markup,
+                )
+                sent = True
+                logger.info(f"[TG BOT] Pin photo sent successfully via CDN URL to {admin_id}")
+            except Exception as e:
+                logger.warning(f"[TG BOT] CDN photo notification failed ({e}) — falling back to text")
+
+        # Tier 3: Send text message with interactive buttons
+        if not sent:
+            try:
                 await _app_ref.bot.send_message(
                     chat_id=admin_id,
                     text=caption,
                     reply_markup=reply_markup,
                 )
-        except Exception as e:
-            logger.warning(f"[TG BOT] Pin notification failed: {e}")
+                sent = True
+                logger.info(f"[TG BOT] Pin notification sent as text with buttons to {admin_id}")
+            except Exception as e:
+                logger.warning(f"[TG BOT] Text notification with buttons failed ({e}) — trying stripped markup")
+
+        # Tier 4: Send pure text message without buttons (emergency fallback)
+        if not sent:
+            try:
+                await _app_ref.bot.send_message(
+                    chat_id=admin_id,
+                    text=caption,
+                )
+                sent = True
+                logger.info(f"[TG BOT] Pin notification sent as plain text fallback to {admin_id}")
+            except Exception as e:
+                logger.error(f"[TG BOT] Critical: all notification attempts failed for '{title}': {e}")
 
     try:
         asyncio.run_coroutine_threadsafe(_send(), _loop_ref)

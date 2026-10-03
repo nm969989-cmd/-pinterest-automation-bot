@@ -412,7 +412,8 @@ class PinScheduler:
                             pixelfed_ok=None, pixelfed_url: str = "",
                             freeimage_ok=None, freeimage_url: str = "",
                             imghippo_ok=None, imghippo_url: str = "",
-                            pin_live: bool = True):
+                            pin_live: bool = True,
+                            image_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
 
@@ -445,6 +446,7 @@ class PinScheduler:
                 imghippo_ok=imghippo_ok,
                 imghippo_url=imghippo_url,
                 pin_live=pin_live,
+                image_url=image_url,
             )
         except Exception as e:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
@@ -842,6 +844,7 @@ class PinScheduler:
                                             posted_today=counts_after,
                                             time_ist=now_ist,
                                             pin_live=pin_is_live,
+                                            image_url=pin.get("image_url", ""),
                                             arena_ok=cp_res.get("arena_ok"),
                                             arena_url=cp_res.get("arena_url", ""),
                                             bluesky_ok=cp_res.get("bluesky_ok"),

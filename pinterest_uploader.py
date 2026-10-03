@@ -31,11 +31,21 @@ _make_alert_sent: bool = False  # Only send one alert per "down" period
 
 
 def check_make_health() -> bool:
-    """Probe the Make.com webhook with an empty OPTIONS/HEAD check.
+    """Probe the Make.com webhook — uses GET so nothing gets queued.
 
-    Since Make.com webhooks don't support HEAD, we send a minimal POST and
-    check the response code. Returns True if the webhook is healthy (2xx),
-    False if it's down (400 = inactive/queue full, other = error).
+    Make.com webhooks return 405 Method Not Allowed for GET requests on
+    active scenarios (without queuing anything), and 400 for inactive ones.
+
+    *** ROOT CAUSE FIX ***
+    Previously we sent POST {"_health_check": True}. When the scenario was
+    inactive that POST got queued. On reactivation Make.com processed it
+    through Pinterest "Create a Pin" -> BundleValidationError (missing
+    image_url / url) -> auto-deactivation again -> endless loop.
+
+    Using GET avoids all queuing: Make.com rejects it at the HTTP layer before
+    any module runs.
+
+    Returns True if the webhook is healthy (active), False otherwise.
     Sends a Telegram admin alert if unhealthy.
     Called periodically by the scheduler (every 6 h) so problems surface
     BEFORE a posting slot is missed.
@@ -44,8 +54,11 @@ def check_make_health() -> bool:
     if not MAKE_WEBHOOK_URL:
         return True  # Not using Make.com — nothing to check
     try:
-        res = requests.post(MAKE_WEBHOOK_URL, json={"_health_check": True}, timeout=10)
-        if res.status_code in (200, 201, 204):
+        # GET -> Make.com returns 405 (active) without queuing anything.
+        # 400 means inactive / queue full.
+        res = requests.get(MAKE_WEBHOOK_URL, timeout=10)
+        is_healthy = res.status_code in (200, 201, 204, 405)
+        if is_healthy:
             if _make_alert_sent:
                 # Recovered — send a "back online" notification
                 try:
@@ -54,7 +67,7 @@ def check_make_health() -> bool:
                 except Exception:
                     pass
             _make_alert_sent = False
-            logger.info("[Make.com] Health check ✅ — webhook is active.")
+            logger.info(f"[Make.com] Health check ✅ — webhook is active (HTTP {res.status_code}).")
             return True
         else:
             logger.warning(
@@ -71,7 +84,7 @@ def check_make_health() -> bool:
                         "📋 *Fix now (30 seconds):*\n"
                         "1. Open [make.com](https://make.com)\n"
                         "2. Click your *Integration Webhooks, Pinterest* scenario\n"
-                        "3. Toggle the switch to **Active**\n"
+                        "3. Toggle the switch to *Active*\n"
                         "4. Click *Delete old data* when prompted\n\n"
                         "⚠️ Pins are currently NOT posting until you fix this."
                     )
@@ -389,17 +402,17 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
     # Increment persistent failure counter so health checker knows we're degraded
     global _make_consecutive_failures, _make_alert_sent
     _make_consecutive_failures += 1
-    if _make_consecutive_failures >= 2 and not _make_alert_sent:
+    if _make_consecutive_failures >= 1 and not _make_alert_sent:
         _make_alert_sent = True
         try:
             from telegram_bot import notify_admin
             notify_admin(
-                f"🚨 *Make.com Down — {_make_consecutive_failures} Consecutive Failures*\n\n"
+                f"🚨 *Make.com Down — {_make_consecutive_failures} Consecutive Failure(s)*\n\n"
                 "Pins are not posting. Scenario is likely *Inactive*.\n\n"
                 "📋 *Fix (30 seconds):*\n"
                 "1. Open [make.com](https://make.com)\n"
                 "2. Click your *Integration Webhooks, Pinterest* scenario\n"
-                "3. Toggle to **Active**\n"
+                "3. Toggle to *Active*\n"
                 "4. Click *Delete old data*\n\n"
                 "Bot will retry automatically on next slot."
             )
@@ -474,10 +487,10 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
                 "Make.com rejected the last pin upload (HTTP 400 — scenario may be *Inactive* or queue is full).\n\n"
                 "📋 *Action Required:*\n"
                 "1. Go to [make.com](https://make.com) → your Pinterest scenario\n"
-                "2. Toggle it to **Active** if it's paused\n"
+                "2. Toggle it to *Active* if it's paused\n"
                 "3. Clear the queue if 50+ records are waiting\n\n"
                 f"Pin affected: *{title[:60]}*\n"
-                + ("✅ Retrying via direct Pinterest API v5..." if PINTEREST_ACCESS_TOKEN else "❌ No PINTEREST_ACCESS_TOKEN set — pin will retry next slot.")
+                + ("✅ Retrying via direct Pinterest API v5..." if PINTEREST_ACCESS_TOKEN else "❌ No PINTEREST\_ACCESS\_TOKEN set — pin will retry next slot.")
             )
         except Exception:
             pass

@@ -40,7 +40,8 @@ def _check_breaker(platform: str, results: dict) -> bool:
     if cooling:
         logger.info(f"[Crosspost] Skipping {platform.capitalize()} -- Circuit Breaker active ({rem}h left: {reason})")
         results[f"{platform}_ok"] = None
-        results[f"{platform}_url"] = f"Cooling down ({rem}h left)"
+        results[f"{platform}_url"] = ""
+        results[f"{platform}_status"] = f"Cooling down ({rem}h left)"
         return False
     return True
 

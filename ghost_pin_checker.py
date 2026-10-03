@@ -259,9 +259,9 @@ def run_ghost_check_and_notify(pin_url: str, title: str, board_url: str = "") ->
             + (f" | [View Board]({board_url})" if board_url else "") +
             f"\n\n"
             f"🛠️ *Possible Fixes:*\n"
-            f"1. Check board is set to **Public** (not Secret)\n"
+            f"1. Check board is set to *Public* (not Secret)\n"
             f"2. Replace direct Amazon affiliate link with your bridge page `/p/<code>` URL\n"
-            f"3. Make sure the image has a **2:3 aspect ratio** (Pinterest favors vertical)\n"
+            f"3. Make sure the image has a *2:3 aspect ratio* (Pinterest favors vertical)\n"
             f"4. Wait 24–72h — new accounts have delayed public indexing\n"
             f"5. Pin the same image manually from your browser to reset the filter"
         )
