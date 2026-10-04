@@ -740,6 +740,23 @@ def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "", ima
         conn.commit()
 
 
+def get_uploaded_file_image_url(filename: str) -> str:
+    """Returns the hosted public image URL stored in uploaded_files for a filename."""
+    if not filename:
+        return ""
+    try:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT image_url FROM uploaded_files WHERE filename = ? ORDER BY uploaded_at DESC LIMIT 1",
+                (filename,)
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def get_today_uploads(today_str: str = None) -> list:
     """Returns all pins uploaded today (IST) as list of dicts.
     Uses IST-adjusted date (same as count_posts_today) to avoid UTC/IST mismatch.

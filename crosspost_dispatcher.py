@@ -393,4 +393,11 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
         except Exception:
             pass
 
+    # Strict URL sanitization: Ensure no non-HTTP or malformed string is ever returned in a *_url key
+    for k in list(results.keys()):
+        if k.endswith("_url"):
+            v = results.get(k)
+            if not v or not isinstance(v, str) or not v.strip().startswith(("http://", "https://")) or any(c.isspace() for c in v):
+                results[k] = ""
+
     return results

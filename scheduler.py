@@ -421,6 +421,11 @@ class PinScheduler:
         confirmed on Pinterest; forwarded so the admin header can say "queue".
         """
         try:
+            if not image_url or not image_url.startswith(("http://", "https://")):
+                from database import get_uploaded_file_image_url
+                fn = os.path.basename(image_path) if image_path else ""
+                if fn:
+                    image_url = get_uploaded_file_image_url(fn) or image_url
             from telegram_bot import notify_admin_pin_posted
             notify_admin_pin_posted(
                 title=title,
