@@ -37,7 +37,7 @@ services:
       - key: POST_DELAY_MINUTES
         value: "10"
       - key: MAX_POSTS_PER_DAY
-        value: "3"
+        value: "5"
       # Are.na Cross-Posting
       - key: ARENA_ACCESS_TOKEN
         sync: false

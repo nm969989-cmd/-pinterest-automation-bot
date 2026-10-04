@@ -2685,6 +2685,36 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             except Exception as e:
                 logger.warning(f"[TG BOT] Local photo notification failed ({e}) — falling back to CDN URL")
 
+        # Tier 1.5: Download from CDN to temp file and send as file bytes (most reliable for Telegram)
+        if not sent and image_url and image_url.startswith(("http://", "https://")):
+            temp_file = None
+            try:
+                import tempfile
+                import requests as _requests
+                r = _requests.get(image_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    tf = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                    tf.write(r.content)
+                    tf.close()
+                    temp_file = tf.name
+                    with open(temp_file, "rb") as img:
+                        await _app_ref.bot.send_photo(
+                            chat_id=admin_id,
+                            photo=img,
+                            caption=caption[:1024],
+                            reply_markup=reply_markup,
+                        )
+                    sent = True
+                    logger.info(f"[TG BOT] Pin photo sent successfully via downloaded CDN bytes to {admin_id}")
+            except Exception as e:
+                logger.warning(f"[TG BOT] Downloaded CDN photo notification failed ({e}) — falling back to direct URL")
+            finally:
+                if temp_file and os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+
         # Tier 2: Try public CDN URL (Cloudinary / Catbox)
         if not sent and image_url and image_url.startswith(("http://", "https://")):
             try:
@@ -2725,7 +2755,15 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                 logger.error(f"[TG BOT] Critical: all notification attempts failed for '{title}': {e}")
 
     try:
-        asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
+        fut = asyncio.run_coroutine_threadsafe(_send(), _loop_ref)
+        def _on_done(f):
+            try:
+                exc = f.exception()
+                if exc:
+                    logger.error(f"[TG BOT] Pin notification async task failed: {exc}")
+            except Exception:
+                pass
+        fut.add_done_callback(_on_done)
     except Exception as e:
         logger.warning(f"[TG BOT] Could not schedule pin notification: {e}")
 

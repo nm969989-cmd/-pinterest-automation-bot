@@ -135,6 +135,36 @@ def save_cloud_state() -> bool:
                     "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 500"
                 ).fetchall()
             ]
+            raindrop = [
+                {"filename": r[0], "drop_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, drop_id, title, image_url, posted_at FROM raindrop_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+            mastodon = [
+                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_url, title, image_url, posted_at FROM mastodon_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+            pixelfed = [
+                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_url, title, image_url, posted_at FROM pixelfed_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+            freeimage = [
+                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_url, title, image_url, posted_at FROM freeimage_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+            imghippo = [
+                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
@@ -144,6 +174,11 @@ def save_cloud_state() -> bool:
             "tracked_links":   tracked,
             "arena_posts":     arena,
             "bluesky_posts":   bluesky,
+            "raindrop_posts":  raindrop,
+            "mastodon_posts":  mastodon,
+            "pixelfed_posts":  pixelfed,
+            "freeimage_posts": freeimage,
+            "imghippo_posts":  imghippo,
         }
 
         r = requests.put(
@@ -156,7 +191,9 @@ def save_cloud_state() -> bool:
             logger.info(
                 f"[JSONBin] Synced: {len(posts)} posts, {len(uploads)} uploads, "
                 f"{len(queue)} queued, {len(tracked)} tracked links, "
-                f"{len(arena)} arena, {len(bluesky)} bluesky"
+                f"{len(arena)} arena, {len(bluesky)} bluesky, {len(raindrop)} raindrop, "
+                f"{len(mastodon)} mastodon, {len(pixelfed)} pixelfed, "
+                f"{len(freeimage)} freeimage, {len(imghippo)} imghippo"
             )
             return True
         else:
@@ -261,6 +298,66 @@ def restore_db_from_cloud():
                       b.get("post_cid",""), b.get("image_url",""),
                       b.get("posted_at") or "2000-01-01 00:00:00")
                      for b in bluesky_posts if b.get("filename")]
+                )
+
+            # Restore Raindrop posts
+            raindrop_posts = state.get("raindrop_posts", [])
+            if raindrop_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO raindrop_posts "
+                    "(filename, drop_id, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(r.get("filename",""), r.get("drop_id", 0),
+                      r.get("title",""), r.get("image_url",""),
+                      r.get("posted_at") or "2000-01-01 00:00:00")
+                     for r in raindrop_posts if r.get("filename")]
+                )
+
+            # Restore Mastodon posts
+            mastodon_posts = state.get("mastodon_posts", [])
+            if mastodon_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO mastodon_posts "
+                    "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(m.get("filename",""), m.get("post_url",""),
+                      m.get("title",""), m.get("image_url",""),
+                      m.get("posted_at") or "2000-01-01 00:00:00")
+                     for m in mastodon_posts if m.get("filename")]
+                )
+
+            # Restore Pixelfed posts
+            pixelfed_posts = state.get("pixelfed_posts", [])
+            if pixelfed_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO pixelfed_posts "
+                    "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(p.get("filename",""), p.get("post_url",""),
+                      p.get("title",""), p.get("image_url",""),
+                      p.get("posted_at") or "2000-01-01 00:00:00")
+                     for p in pixelfed_posts if p.get("filename")]
+                )
+
+            # Restore Freeimage posts
+            freeimage_posts = state.get("freeimage_posts", [])
+            if freeimage_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO freeimage_posts "
+                    "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(f.get("filename",""), f.get("post_url",""),
+                      f.get("title",""), f.get("image_url",""),
+                      f.get("posted_at") or "2000-01-01 00:00:00")
+                     for f in freeimage_posts if f.get("filename")]
+                )
+
+            # Restore Imghippo posts
+            imghippo_posts = state.get("imghippo_posts", [])
+            if imghippo_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO imghippo_posts "
+                    "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(h.get("filename",""), h.get("post_url",""),
+                      h.get("title",""), h.get("image_url",""),
+                      h.get("posted_at") or "2000-01-01 00:00:00")
+                     for h in imghippo_posts if h.get("filename")]
                 )
             conn.commit()
 
