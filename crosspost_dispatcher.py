@@ -64,7 +64,7 @@ def _handle_platform_error(platform: str, err: object):
 # Each returns a (platform, ok: bool|None, url: str) tuple.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _post_arena(filename, title, description, link, public_img_url, is_stealth, config):
+def _post_arena(filename, title, description, link, public_img_url, is_stealth, config, pin_url="", anime_name=""):
     """Post to Are.na — returns (ok, url)."""
     if not getattr(config, "ARENA_ENABLED", False):
         return None, ""
@@ -75,7 +75,11 @@ def _post_arena(filename, title, description, link, public_img_url, is_stealth, 
         from arena_uploader import post_to_arena
         from database import mark_arena_posted, is_arena_posted
         if not is_arena_posted(filename):
-            arena_desc = format_platform_caption("general", title, description, link=link, is_stealth=is_stealth)
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                arena_desc = format_waterfall_caption("arena", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                arena_desc = format_platform_caption("general", title, description, link=link, is_stealth=is_stealth)
             ok = post_to_arena(image_url=public_img_url, title=title, description=arena_desc, link=link)
             if ok:
                 mark_arena_posted(filename, title=title, image_url=public_img_url)
@@ -90,7 +94,7 @@ def _post_arena(filename, title, description, link, public_img_url, is_stealth, 
         return False, ""
 
 
-def _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config):
+def _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url="", anime_name=""):
     """Post to Bluesky — returns (ok, url)."""
     if not getattr(config, "BLUESKY_ENABLED", False):
         return None, ""
@@ -103,7 +107,11 @@ def _post_bluesky(filename, title, description, link, public_img_url, image_path
         handle = getattr(config, "BLUESKY_HANDLE", "muthelyrics.bsky.social")
         if not is_bluesky_posted(filename):
             time.sleep(random.uniform(1, 3))  # brief jitter; no need for 3-7s in parallel
-            bsky_caption = format_platform_caption("bluesky", title, description, link=link, is_stealth=is_stealth)
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                bsky_caption = format_waterfall_caption("bluesky", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                bsky_caption = format_platform_caption("bluesky", title, description, link=link, is_stealth=is_stealth)
             post_uri = post_to_bluesky(image_url=public_img_url, title=title, caption=bsky_caption, link=link, image_path=image_path)
             if post_uri:
                 mark_bluesky_posted(filename, post_uri=post_uri, image_url=public_img_url)
@@ -119,7 +127,7 @@ def _post_bluesky(filename, title, description, link, public_img_url, image_path
         return False, ""
 
 
-def _post_raindrop(filename, title, description, link, original_image_url, image_path, config):
+def _post_raindrop(filename, title, description, link, original_image_url, image_path, config, pin_url="", anime_name=""):
     """Post to Raindrop.io — returns (ok, url)."""
     if not getattr(config, "RAINDROP_ENABLED", False):
         return None, ""
@@ -129,10 +137,14 @@ def _post_raindrop(filename, title, description, link, original_image_url, image
     try:
         from raindrop_uploader import post_to_raindrop
         from database import mark_raindrop_posted, is_raindrop_posted
+        from backlink_waterfall import resolve_pinterest_url
         col_id = getattr(config, "RAINDROP_COLLECTION_ID", "")
         if not is_raindrop_posted(filename):
             time.sleep(random.uniform(0.5, 2))
-            drop_ok = post_to_raindrop(image_url=original_image_url, title=title, description=description, link=link, image_path=image_path)
+            # Authority Anchor: Bookmark points to the Pinterest Pin/Profile, with Bridge link in notes
+            bookmark_url = resolve_pinterest_url(pin_url) if pin_url else (link or resolve_pinterest_url())
+            note_desc = f"🖼️ 4K Wallpaper & Art Showcase: {link}\n🎌 Series: {anime_name}" if link else f"🎌 Series: {anime_name}"
+            drop_ok = post_to_raindrop(image_url=original_image_url, title=title, description=note_desc, link=bookmark_url, image_path=image_path)
             if drop_ok:
                 mark_raindrop_posted(filename, title=title, image_url=original_image_url)
             url = f"https://raindrop.io/collection/{col_id}" if col_id else "https://app.raindrop.io"
@@ -145,7 +157,7 @@ def _post_raindrop(filename, title, description, link, original_image_url, image
         return False, ""
 
 
-def _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config):
+def _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url="", anime_name=""):
     """Post to Mastodon — returns (ok, url)."""
     if not getattr(config, "MASTODON_ENABLED", False):
         return None, ""
@@ -157,7 +169,11 @@ def _post_mastodon(filename, title, description, link, public_img_url, image_pat
         from database import mark_mastodon_posted, is_mastodon_posted
         if not is_mastodon_posted(filename):
             time.sleep(random.uniform(0.5, 2))
-            masto_caption = format_platform_caption("mastodon", title, description, link=link, is_stealth=is_stealth)
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                masto_caption = format_waterfall_caption("mastodon", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                masto_caption = format_platform_caption("mastodon", title, description, link=link, is_stealth=is_stealth)
             masto_url = post_to_mastodon(image_url=public_img_url, title=title, description=masto_caption, link=link, image_path=image_path)
             if masto_url:
                 mark_mastodon_posted(filename, post_url=masto_url, title=title, image_url=public_img_url)
@@ -170,7 +186,7 @@ def _post_mastodon(filename, title, description, link, public_img_url, image_pat
         return False, ""
 
 
-def _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config):
+def _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url="", anime_name=""):
     """Post to Pixelfed — returns (ok, url)."""
     if not getattr(config, "PIXELFED_ENABLED", False):
         return None, ""
@@ -183,7 +199,11 @@ def _post_pixelfed(filename, title, description, link, public_img_url, original_
         inst_url = getattr(config, "PIXELFED_INSTANCE_URL", "https://pixelfed.social")
         if not is_pixelfed_posted(filename):
             time.sleep(random.uniform(0.5, 2))
-            pix_caption = format_platform_caption("pixelfed", title, description, link=link, is_stealth=is_stealth)
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                pix_caption = format_waterfall_caption("pixelfed", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                pix_caption = format_platform_caption("pixelfed", title, description, link=link, is_stealth=is_stealth)
             pix_url = post_to_pixelfed(image_url=public_img_url or original_image_url, title=title, description=pix_caption, link=link, image_path=image_path)
             if pix_url:
                 mark_pixelfed_posted(filename, post_url=pix_url, title=title, image_url=public_img_url or original_image_url)
@@ -196,7 +216,7 @@ def _post_pixelfed(filename, title, description, link, public_img_url, original_
         return False, ""
 
 
-def _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config):
+def _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
     """Post to Freeimage.host — returns (ok, url)."""
     if not getattr(config, "FREEIMAGE_ENABLED", False):
         return None, ""
@@ -219,7 +239,7 @@ def _post_freeimage(filename, title, anime_name, link, public_img_url, original_
         return False, ""
 
 
-def _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config):
+def _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
     """Post to Imghippo — returns (ok, url)."""
     if not getattr(config, "IMGHIPPO_ENABLED", False):
         return None, ""
@@ -244,14 +264,11 @@ def _post_imghippo(filename, title, anime_name, link, public_img_url, original_i
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
+def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> dict:
     """
     Executes cross-posting to all enabled platforms in PARALLEL using ThreadPoolExecutor.
-    CDN upload runs first (sequential prerequisite), then all 7 platform posts fire
-    concurrently — reducing total crosspost time from ~30s to ~5s.
-
-    Handles duplicate checking, upload, state recording, and URL generation.
-    Returns a dictionary of boolean statuses and live post/profile URLs.
+    Injects Dual-Anchor Backlink Waterfall (Pinterest Pin + Bridge Page) across all
+    syndication channels to maximize Google Search ranking and referral authority.
     """
     import config
 
@@ -341,14 +358,16 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
     # The (platform, ok, url) tuples are collected via futures.
     t_start = time.monotonic()
 
+    resolved_pin_url = (pin_url or pin.get("pin_url", "") or pin.get("pinterest_url", "")).strip()
+
     platform_tasks = {
-        "arena":     lambda: _post_arena(filename, title, description, link, public_img_url, is_stealth, config),
-        "bluesky":   lambda: _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config),
-        "raindrop":  lambda: _post_raindrop(filename, title, description, link, original_image_url, image_path, config),
-        "mastodon":  lambda: _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config),
-        "pixelfed":  lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config),
-        "freeimage": lambda: _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config),
-        "imghippo":  lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config),
+        "arena":     lambda: _post_arena(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
+        "bluesky":   lambda: _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
+        "raindrop":  lambda: _post_raindrop(filename, title, description, link, original_image_url, image_path, config, pin_url=resolved_pin_url, anime_name=anime_name),
+        "mastodon":  lambda: _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
+        "pixelfed":  lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
+        "freeimage": lambda: _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
+        "imghippo":  lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
     }
 
     with ThreadPoolExecutor(max_workers=_MAX_CROSSPOST_WORKERS, thread_name_prefix="crosspost") as executor:
@@ -399,5 +418,18 @@ def dispatch_all_crossposts(pin: dict, image_path: str) -> dict:
             v = results.get(k)
             if not v or not isinstance(v, str) or not v.strip().startswith(("http://", "https://")) or any(c.isspace() for c in v):
                 results[k] = ""
+
+    # ── 3. Record all generated backlinks in SQLite backlink_ledger ───────────
+    try:
+        from backlink_waterfall import record_waterfall_backlinks
+        record_waterfall_backlinks(
+            filename=filename,
+            anime_name=anime_name,
+            crosspost_results=results,
+            bridge_url=link,
+            pin_url=resolved_pin_url,
+        )
+    except Exception as bl_err:
+        logger.warning(f"[Crosspost] Backlink logging failed (non-critical): {bl_err}")
 
     return results

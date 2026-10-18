@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import datetime
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -101,6 +102,7 @@ def init_db():
                 target_url  TEXT,
                 anime_name  TEXT,
                 title       TEXT,
+                image_url   TEXT DEFAULT '',
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -112,9 +114,22 @@ def init_db():
                 title       TEXT,
                 user_agent  TEXT,
                 referrer    TEXT,
+                merchant    TEXT DEFAULT 'amazon',
                 clicked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Add image_url to tracked_links if upgrading from older schema
+        try:
+            conn.execute("ALTER TABLE tracked_links ADD COLUMN image_url TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Add merchant to link_clicks if upgrading from older schema
+        try:
+            conn.execute("ALTER TABLE link_clicks ADD COLUMN merchant TEXT DEFAULT 'amazon'")
+        except Exception:
+            pass
 
         # ── Stock Uploads Tracking Table ─────────────────────────────────────
         conn.execute("""
@@ -138,6 +153,36 @@ def init_db():
                 image_url   TEXT,
                 posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+
+        # ── Backlink SEO Waterfall Ledger ────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS backlink_ledger (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT,
+                anime_name  TEXT,
+                platform    TEXT,
+                target_url  TEXT,
+                anchor_type TEXT DEFAULT 'pinterest',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ── Viral Pin Surge Radar Alerts ─────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS viral_surge_alerts (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                code         TEXT NOT NULL,
+                anime_name   TEXT,
+                visits_count INTEGER DEFAULT 0,
+                clicks_count INTEGER DEFAULT 0,
+                surge_score  REAL DEFAULT 0.0,
+                alerted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_surge_code_time
+            ON viral_surge_alerts (code, alerted_at)
         """)
 
         # ── Performance indexes (makes scheduler 100x faster) ───────────────
@@ -1163,11 +1208,12 @@ def pop_next_pin_for_immediate_post() -> dict | None:
 
 # ── Click Tracking & Affiliate Analytics ──────────────────────────────────────
 
-def create_tracked_link(target_url: str, anime_name: str = "", title: str = "") -> str:
+def create_tracked_link(target_url: str, anime_name: str = "", title: str = "", image_url: str = "") -> str:
     """
     Stores a destination URL and returns a short code.
     If target_url is a direct product (/dp/ASIN), embeds the ASIN (e.g. 'dp_B0CHR8R1L3')
     making the link stateless and 100% resilient across server restarts.
+    Also stores image_url for the multi-merchant showcase bridge page.
     """
     import hashlib, time, random, re
 
@@ -1181,21 +1227,79 @@ def create_tracked_link(target_url: str, anime_name: str = "", title: str = "") 
     with _get_conn() as conn:
         try:
             conn.execute("""
-                INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title)
-                VALUES (?, ?, ?, ?)
-            """, (code, target_url, anime_name, title))
+                INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title, image_url)
+                VALUES (?, ?, ?, ?, ?)
+            """, (code, target_url, anime_name, title, image_url))
             conn.commit()
         except Exception as e:
             logger.error(f"[DB] Error creating tracked link: {e}")
     return code
 
 
-def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tuple[str, str, str]:
+def record_tracked_link(code: str, target_url: str, anime_name: str = "", title: str = "", image_url: str = "") -> bool:
+    """Store or update a tracked link with a specific pre-assigned code."""
+    with _get_conn() as conn:
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title, image_url)
+                VALUES (?, ?, ?, ?, ?)
+            """, (code.strip(), target_url.strip(), (anime_name or "")[:200], (title or "")[:200], (image_url or "").strip()))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[DB] Error recording tracked link: {e}")
+            return False
+
+
+def get_tracked_link_data(code: str) -> dict:
     """
-    Records a click for the given link code and returns (target_url, anime_name, title).
-    If code not found in DB:
-      1. Reconstructs direct product URL if code contains ASIN (stateless recovery).
-      2. Otherwise falls back to top-rated anime figures & posters category.
+    Returns full tracked link data (target_url, anime_name, title, image_url).
+    Supports stateless ASIN self-healing if code was not found in DB.
+    """
+    from config import AMAZON_AFFILIATE_TAG
+    tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+
+    with _get_conn() as conn:
+        row = conn.execute("""
+            SELECT target_url, anime_name, title, image_url FROM tracked_links WHERE code = ?
+        """, (code,)).fetchone()
+        if row:
+            return {
+                "target_url": row[0] or "",
+                "anime_name": row[1] or "Anime",
+                "title":      row[2] or "Anime Merchandise",
+                "image_url":  row[3] or "",
+            }
+
+    # Stateless recovery for ASIN codes
+    asin = None
+    if code.startswith("dp_") and len(code) == 13 and code[3:].isalnum():
+        asin = code[3:]
+    elif len(code) == 10 and code.isalnum() and code.isupper():
+        asin = code
+
+    if asin:
+        direct_product_url = f"https://www.amazon.in/dp/{asin}?tag={tag}&linkCode=ogi&th=1&psc=1"
+        return {
+            "target_url": direct_product_url,
+            "anime_name": "Anime",
+            "title":      "Anime Merchandise",
+            "image_url":  "",
+        }
+
+    fallback_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+    return {
+        "target_url": fallback_url,
+        "anime_name": "Anime",
+        "title":      "Anime Merchandise",
+        "image_url":  "",
+    }
+
+
+def record_link_click(code: str, user_agent: str = "", referrer: str = "", merchant: str = "amazon") -> tuple[str, str, str]:
+    """
+    Records a click for the given link code and merchant ('amazon', 'displate', 'wallpaper').
+    Returns: (target_url, anime_name, title)
     """
     import re
     from config import AMAZON_AFFILIATE_TAG
@@ -1209,9 +1313,9 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tu
         if row:
             target_url, anime_name, title = row[0], row[1] or "Anime", row[2] or "Anime Merch"
             conn.execute("""
-                INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer)
-                VALUES (?, ?, ?, ?, ?)
-            """, (code, anime_name, title, user_agent[:255], referrer[:255]))
+                INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer, merchant)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (code, anime_name, title, user_agent[:255], referrer[:255], merchant[:50]))
             conn.commit()
             return target_url, anime_name, title
 
@@ -1230,13 +1334,13 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "") -> tu
             logger.info(f"[DB] Reconstructed stateless product link for ASIN: {asin}")
             try:
                 conn.execute("""
-                    INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title)
-                    VALUES (?, ?, ?, ?)
+                    INSERT OR REPLACE INTO tracked_links (code, target_url, anime_name, title, image_url)
+                    VALUES (?, ?, ?, ?, '')
                 """, (code, direct_product_url, "Anime", "Anime Product"))
                 conn.execute("""
-                    INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (code, "Anime", "Anime Product", user_agent[:255], referrer[:255]))
+                    INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer, merchant)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (code, "Anime", "Anime Product", user_agent[:255], referrer[:255], merchant[:50]))
                 conn.commit()
             except Exception:
                 pass
@@ -1262,7 +1366,8 @@ def count_clicks_today() -> int:
 
 def get_click_stats() -> dict:
     """
-    Returns full click analytics and conversion estimates for Telegram commands.
+    Returns full click analytics and conversion estimates for Telegram commands,
+    including merchant breakdown (Amazon, Displate, Wallpaper).
     """
     with _get_conn() as conn:
         today_clicks = conn.execute("""
@@ -1297,6 +1402,22 @@ def get_click_stats() -> dict:
             LIMIT 3
         """).fetchall()
 
+        # Merchant breakdown (Today & Total)
+        today_merchant_rows = conn.execute("""
+            SELECT COALESCE(merchant, 'amazon') as m, COUNT(*) as cnt
+            FROM link_clicks
+            WHERE date(clicked_at, '+5 hours', '+30 minutes') = date('now', '+5 hours', '+30 minutes')
+            GROUP BY m
+        """).fetchall()
+        today_by_merchant = {r[0]: r[1] for r in today_merchant_rows}
+
+        total_merchant_rows = conn.execute("""
+            SELECT COALESCE(merchant, 'amazon') as m, COUNT(*) as cnt
+            FROM link_clicks
+            GROUP BY m
+        """).fetchall()
+        by_merchant = {r[0]: r[1] for r in total_merchant_rows}
+
     # Calculate estimated conversions based on standard e-commerce metrics (2-4% CR, ₹35-80 avg commission)
     est_orders_min = max(0, int(week_clicks * 0.02))
     est_orders_max = max(1 if week_clicks >= 5 else 0, int(week_clicks * 0.05))
@@ -1307,6 +1428,8 @@ def get_click_stats() -> dict:
         "today": today_clicks,
         "week": week_clicks,
         "total": total_clicks,
+        "today_by_merchant": today_by_merchant,
+        "by_merchant": by_merchant,
         "top_anime": [(r[0], r[1]) for r in top_anime],
         "top_pins": [(r[0], r[1], r[2]) for r in top_pins],
         "est_orders_min": est_orders_min,
@@ -1490,6 +1613,153 @@ def get_stock_stats_alltime() -> dict:
     result["total"] = sum(result.values())
     return result
 
+
+# ── Backlink SEO Waterfall Tracking Functions ───────────────────────────────
+
+def record_backlink(filename: str, anime_name: str, platform: str, target_url: str, anchor_type: str = "pinterest"):
+    """Records a syndication backlink generated for an artwork."""
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO backlink_ledger (filename, anime_name, platform, target_url, anchor_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (filename, anime_name, platform.lower().strip(), target_url.strip(), anchor_type),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.debug(f"[Database] record_backlink failed: {e}")
+
+
+def get_backlink_stats() -> dict:
+    """Returns all-time and today's backlink counts grouped by platform."""
+    try:
+        with _get_conn() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM backlink_ledger").fetchone()[0]
+            today = conn.execute(
+                "SELECT COUNT(*) FROM backlink_ledger WHERE date(created_at, '+5 hours', '+30 minutes') = date('now', '+5 hours', '+30 minutes')"
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT platform, COUNT(*) FROM backlink_ledger GROUP BY platform ORDER BY COUNT(*) DESC"
+            ).fetchall()
+            by_platform = {r[0]: r[1] for r in rows}
+            return {
+                "total": total,
+                "today": today,
+                "by_platform": by_platform,
+            }
+    except Exception as e:
+        logger.debug(f"[Database] get_backlink_stats failed: {e}")
+        return {"total": 0, "today": 0, "by_platform": {}}
+
+
+def record_surge_alert(code: str, anime_name: str, visits_count: int, clicks_count: int, surge_score: float) -> None:
+    """Record an alert sent for a viral surge on a pin code."""
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO viral_surge_alerts (code, anime_name, visits_count, clicks_count, surge_score)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (code.strip(), (anime_name or "")[:200], visits_count, clicks_count, float(surge_score)),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.debug(f"[Database] record_surge_alert failed: {e}")
+
+
+def is_surge_alerted_recently(code: str, cooldown_hours: int = 12) -> bool:
+    """Check if an alert was already triggered for this code within cooldown window."""
+    try:
+        import datetime
+        cutoff = (datetime.datetime.utcnow() - datetime.timedelta(hours=cooldown_hours)).strftime("%Y-%m-%d %H:%M:%S")
+        with _get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM viral_surge_alerts
+                WHERE code = ? AND alerted_at >= ?
+                LIMIT 1
+                """,
+                (code.strip(), cutoff),
+            ).fetchone()
+            return bool(row)
+    except Exception as e:
+        logger.debug(f"[Database] is_surge_alerted_recently failed: {e}")
+        return False
+
+
+def boost_queue_priority_by_anime(anime_name: str, new_priority: int = 2, limit: int = 2) -> int:
+    """
+    Boost priority of queued pins for a specific anime to express priority (priority=2).
+    Also sets scheduled_date to today so they are posted at the very next slot.
+    Returns the count of pins boosted.
+    """
+    if not anime_name:
+        return 0
+    clean_anime = anime_name.strip().lower()
+    today_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    try:
+        with _get_conn() as conn:
+            # Find eligible matching pins in queue
+            rows = conn.execute(
+                """
+                SELECT id FROM pin_queue
+                WHERE LOWER(anime_name) = ? OR LOWER(anime_name) LIKE ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (clean_anime, f"%{clean_anime}%", limit),
+            ).fetchall()
+
+            if not rows:
+                return 0
+
+            ids = [r[0] for r in rows]
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"""
+                UPDATE pin_queue
+                SET priority = ?, scheduled_date = ?
+                WHERE id IN ({placeholders})
+                """,
+                [new_priority, today_str] + ids,
+            )
+            conn.commit()
+            return len(ids)
+    except Exception as e:
+        logger.error(f"[Database] boost_queue_priority_by_anime failed: {e}")
+        return 0
+
+
+def get_active_surge_history(limit: int = 10) -> list[dict]:
+    """Returns recent surge alerts from the database."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT code, anime_name, visits_count, clicks_count, surge_score, alerted_at
+                FROM viral_surge_alerts
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "code": r[0],
+                    "anime_name": r[1],
+                    "visits_count": r[2],
+                    "clicks_count": r[3],
+                    "surge_score": r[4],
+                    "alerted_at": r[5],
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        logger.debug(f"[Database] get_active_surge_history failed: {e}")
+        return []
 
 
 # Initialize on import

@@ -92,50 +92,72 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
         # 4. Route to correct Pinterest board + get genre
         genre, board_id = get_board_for_anime(anime_name)
 
-        # 4b. SEO-optimize title with trending Pinterest keywords
-        #     build_seo_title wraps the AI title in a high-searchability format:
-        #     "AnimeName - Character | AI Title | Trending Keyword"
+        # 4b. SEO-optimize title with Multi-Intent keywords
         try:
-            title = build_seo_title(
+            from seo_matrix import build_multi_intent_title
+            title = build_multi_intent_title(
                 original_title=title,
                 anime_name=anime_name,
                 character_name=character_name,
                 genre=genre,
             )
-            logger.info(f"[Main] SEO-optimized title: {title[:80]}")
+            logger.info(f"[Main] Multi-Intent SEO title: {title[:80]}")
         except Exception as _seo_err:
-            logger.warning(f"[Main] SEO title build failed (non-critical): {_seo_err}")
+            try:
+                title = build_seo_title(
+                    original_title=title,
+                    anime_name=anime_name,
+                    character_name=character_name,
+                    genre=genre,
+                )
+                logger.info(f"[Main] SEO title (legacy fallback): {title[:80]}")
+            except Exception:
+                logger.warning(f"[Main] SEO title build failed (non-critical): {_seo_err}")
 
-        # 5. Generate Amazon affiliate deep link (with character for specific product match)
-        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
+        # 5. Generate Amazon affiliate deep link (with character for specific product match & image_url for bridge)
+        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title, image_url=image_url)
 
-        # 6. Insert affiliate link into description
-        description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
-
-        # 6b. Inject trending Pinterest keywords at top of description
-        #     This puts high-traffic search terms in the most algorithm-weighted
-        #     position (first 150 chars) — directly boosting search discoverability.
+        # 6. Build Multi-Intent SEO Description & Intent-Balanced Hashtags
+        #    Prepend a natural hook in the first 150 chars connecting 4K wallpapers,
+        #    Displate metal wall art, and Amazon figures for maximum search discoverability.
         try:
-            description = inject_keywords_into_description(
-                description=description,
+            from seo_matrix import build_multi_intent_description, generate_multi_intent_tags
+            description = build_multi_intent_description(
+                base_description=desc_template,
                 anime_name=anime_name,
                 character_name=character_name,
+                link_url=amazon_link,
             )
-        except Exception as _kw_err:
-            logger.warning(f"[Main] Keyword injection failed (non-critical): {_kw_err}")
-
-        # 7. Replace AI hashtags with SEO-optimized hashtag set (12-15 tags)
-        optimized_tags = optimize_hashtags(
-            anime_name=anime_name,
-            genre=genre,
-            character_name=character_name,
-            product_hint="anime merch",
-        )
-        description = replace_hashtags_in_description(description, optimized_tags)
+            optimized_tags = generate_multi_intent_tags(
+                anime_name=anime_name,
+                character_name=character_name,
+                genre=genre,
+                target_count=13,
+                include_disclosure=True,
+            )
+            description = description.rstrip() + "\n\n" + optimized_tags
+            logger.info(f"[Main] Multi-Intent SEO description & tags built for '{anime_name}'")
+        except Exception as _seo_mat_err:
+            logger.warning(f"[Main] Multi-intent SEO matrix failed, using fallback: {_seo_mat_err}")
+            description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
+            try:
+                description = inject_keywords_into_description(
+                    description=description,
+                    anime_name=anime_name,
+                    character_name=character_name,
+                )
+            except Exception:
+                pass
+            optimized_tags = optimize_hashtags(
+                anime_name=anime_name,
+                genre=genre,
+                character_name=character_name,
+                product_hint="anime merch",
+            )
+            description = replace_hashtags_in_description(description, optimized_tags)
 
         # Guarantee FTC & Pinterest required disclosure tags are ALWAYS present
-        # (already included in optimized_tags, but double-check for safety)
-        if "#ad" not in description.lower():
+        if "#ad" not in description.lower() and "#affiliate" not in description.lower():
             description = description.rstrip() + "\n#ad #affiliate"
 
         # 8. Record pin for Telegram /preview and /stats

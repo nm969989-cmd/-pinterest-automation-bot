@@ -314,7 +314,30 @@ def _build_search_link(search_query: str = "", anime_name: str = "", character_n
     )
 
 
-def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = "") -> str:
+def build_displate_url(anime_name: str, character_name: str = "", title: str = "") -> str:
+    """
+    Constructs a high-converting Displate metal poster search or affiliate deep link.
+    Displate pays 15-25% commission on art prints.
+    """
+    import urllib.parse
+    import config
+
+    clean_anime = _sanitize_anime_name(anime_name) if anime_name else "Anime"
+    clean_char = clean_character_name(character_name) if character_name else ""
+    if not clean_char and title:
+        raw_char = title.split(" - ")[0].strip().split()[0] if " - " in title else title.strip().split()[0]
+        clean_char = clean_character_name(raw_char)
+
+    query = f"{clean_char} {clean_anime}".strip() if clean_char else clean_anime
+    encoded = urllib.parse.quote_plus(query)
+
+    tag = getattr(config, "DISPLATE_AFFILIATE_TAG", "")
+    if tag:
+        return f"https://displate.com/sr-artworks/{encoded}?art={tag}"
+    return f"https://displate.com/sr-artworks/{encoded}"
+
+
+def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = "", image_url: str = "") -> str:
     """
     If APP_BASE_URL is configured (e.g. https://your-bot.onrender.com),
     wraps the direct Amazon URL into a short tracking redirect link:
@@ -327,7 +350,7 @@ def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = ""
         return raw_amazon_url
     try:
         from database import create_tracked_link
-        code = create_tracked_link(target_url=raw_amazon_url, anime_name=anime_name, title=title)
+        code = create_tracked_link(target_url=raw_amazon_url, anime_name=anime_name, title=title, image_url=image_url)
         tracked_url = f"{APP_BASE_URL}/r/{code}"
         logger.info(f"[Tracker] Created tracked link: {tracked_url} -> {raw_amazon_url}")
         return tracked_url
@@ -336,7 +359,7 @@ def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = ""
         return raw_amazon_url
 
 
-def generate_amazon_link(anime_name: str, character_name: str = "", title: str = "") -> str:
+def generate_amazon_link(anime_name: str, character_name: str = "", title: str = "", image_url: str = "") -> str:
     """
     Generates a high-converting Amazon product link for a Pinterest pin.
 
@@ -375,7 +398,7 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
         if asin and asin not in _DEAD_ASINS:
             deep_link = _build_deep_link(asin)
             logger.info(f"[Amazon] Deep product link generated: {deep_link}")
-            return wrap_with_tracker(deep_link, anime_name=clean_name, title=title)
+            return wrap_with_tracker(deep_link, anime_name=clean_name, title=title, image_url=image_url)
         else:
             # *** CRITICAL: Never use search URLs — Pinterest error 2786 ***
             # Use a safe fallback ASIN (direct /dp/ link) instead of a search page.
@@ -384,14 +407,14 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
             logger.info(
                 f"[Amazon] ASIN scrape failed for '{clean_name}' — using safe fallback ASIN: {fallback_asin}"
             )
-            return wrap_with_tracker(fallback_link, anime_name=clean_name, title=title)
+            return wrap_with_tracker(fallback_link, anime_name=clean_name, title=title, image_url=image_url)
 
     except Exception as e:
         logger.error(f"[Amazon] Unexpected error generating link: {e}")
         fallback_asin = random.choice(_SAFE_FALLBACK_ASINS)
         fallback_link = _build_deep_link(fallback_asin)
         logger.info(f"[Amazon] Exception fallback — using safe ASIN: {fallback_asin}")
-        return wrap_with_tracker(fallback_link, anime_name=anime_name, title=title)
+        return wrap_with_tracker(fallback_link, anime_name=anime_name, title=title, image_url=image_url)
 
 
 

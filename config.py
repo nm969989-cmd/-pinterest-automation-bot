@@ -38,6 +38,10 @@ AUTO_POST_MODE = os.getenv('AUTO_POST_MODE', 'true').lower() in ('true', '1', 'y
 # Amazon Config
 AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG')
 
+# Displate Affiliate Config (Metal Art Wall Posters — 15-25% commission)
+DISPLATE_AFFILIATE_TAG = os.getenv('DISPLATE_AFFILIATE_TAG', '').strip()
+DISPLATE_ENABLED       = os.getenv('DISPLATE_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
 # Click Tracking & Redirect Config (optional — set your Render URL to track Pinterest clicks in Telegram)
 # e.g. APP_BASE_URL=https://pinterest-bot.onrender.com
 APP_BASE_URL = (os.getenv('APP_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL', '')).rstrip('/')
@@ -108,6 +112,16 @@ IMGHIPPO_ENABLED       = os.getenv('IMGHIPPO_ENABLED', 'true').lower() in ('true
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))
+
+# Daily Performance Digest Config
+DAILY_DIGEST_ENABLED = os.getenv('DAILY_DIGEST_ENABLED', 'true').lower() in ('true', '1', 'yes')
+DAILY_DIGEST_TIME    = os.getenv('DAILY_DIGEST_TIME', '21:00').strip()  # 24-hr IST format (HH:MM)
+
+# Viral Pin Surge Radar Config
+VIRAL_RADAR_ENABLED         = os.getenv('VIRAL_RADAR_ENABLED', 'true').lower() in ('true', '1', 'yes')
+VIRAL_SURGE_MIN_VISITS      = int(os.getenv('VIRAL_SURGE_MIN_VISITS', 5))
+VIRAL_ALERT_COOLDOWN_HOURS  = int(os.getenv('VIRAL_ALERT_COOLDOWN_HOURS', 12))
+VIRAL_AUTO_SPINOFF          = os.getenv('VIRAL_AUTO_SPINOFF', 'false').lower() in ('true', '1', 'yes')
 
 # Dry Run Mode — set DRY_RUN=false in .env to go live
 # When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)

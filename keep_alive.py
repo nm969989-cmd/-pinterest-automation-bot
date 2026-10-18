@@ -60,16 +60,25 @@ def health():
 @app.route('/r/<code>')
 def redirect_link(code):
     """
-    Affiliate link click tracker and redirector.
-    Intercepts clicks from Pinterest, records analytics, and redirects to Amazon.
+    Multi-Merchant Affiliate Link Tracker and Redirector.
+    Supports query param `?m=amazon|displate|wallpaper`.
+    Logs click with corresponding merchant and redirects.
     """
     from flask import redirect, request
-    try:
-        from database import record_link_click, count_clicks_today
-        user_agent = request.headers.get('User-Agent', '')
-        referrer   = request.referrer or ''
+    merchant = request.args.get('m', 'amazon').strip().lower()
+    user_agent = request.headers.get('User-Agent', '')
+    referrer   = request.referrer or ''
 
-        target_url, anime_name, title = record_link_click(code, user_agent, referrer)
+    try:
+        from database import record_link_click, count_clicks_today, get_tracked_link_data
+        link_data = get_tracked_link_data(code)
+        target_amazon_url = link_data.get("target_url", "")
+        anime_name        = link_data.get("anime_name", "Anime")
+        title             = link_data.get("title", "Anime Merchandise")
+        image_url         = link_data.get("image_url", "")
+
+        # Record click with merchant
+        record_link_click(code, user_agent, referrer, merchant=merchant)
         today_total = count_clicks_today()
 
         # Notify admin via Telegram if enabled
@@ -77,15 +86,26 @@ def redirect_link(code):
         if CLICK_NOTIFICATION:
             try:
                 from telegram_bot import notify_link_clicked
-                notify_link_clicked(anime_name=anime_name, title=title, today_count=today_total)
+                notify_link_clicked(anime_name=f"{anime_name} ({merchant.capitalize()})", title=title, today_count=today_total)
             except Exception:
                 pass
 
-        return redirect(target_url, code=302)
+        if merchant == "displate":
+            from amazon_search import build_displate_url
+            displate_url = build_displate_url(anime_name=anime_name, title=title)
+            return redirect(displate_url, code=302)
+
+        elif merchant == "wallpaper":
+            if image_url:
+                return redirect(image_url, code=302)
+            return redirect(target_amazon_url, code=302)
+
+        else: # default 'amazon'
+            return redirect(target_amazon_url, code=302)
+
     except Exception as e:
         from config import AMAZON_AFFILIATE_TAG
         tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
-        # Layer 1 fallback: clean anime merchandise search (NO broken category node)
         return redirect(
             f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank",
             code=302
@@ -95,198 +115,290 @@ def redirect_link(code):
 @app.route('/p/<code>')
 def bridge_page(code):
     """
-    🌉 Clean Bridge / Showcase Landing Page — Bypass Pinterest Affiliate Flagging.
-
-    Instead of linking directly to Amazon (which Pinterest's algorithm detects and
-    shadowbans), each pin links to THIS page on your own domain. Pinterest's algorithm
-    sees a legitimate independent website, not an affiliate redirect.
-
-    The page shows:
-      - Anime title and description
-      - The high-quality pin image (loaded from Cloudinary CDN)
-      - A prominent "Shop on Amazon" CTA button (with affiliate tag)
-      - Beautiful, mobile-first design optimized for Pinterest click-throughs
-
-    URL pattern: https://your-app.onrender.com/p/<code>
+    🌉 Multi-Merchant Showcase Landing Page (Amazon + Displate + 4K Wallpaper).
+    Bypasses Pinterest affiliate detection while tripling conversion opportunities.
     """
     from flask import request
     user_agent = request.headers.get('User-Agent', '')
     referrer   = request.referrer or ''
 
-    # Look up pin metadata (title, anime, target URL)
-    target_url = ""
-    anime_name = "Anime"
-    title      = "Anime Merchandise"
     try:
-        from database import _get_conn
-        with _get_conn() as conn:
-            row = conn.execute(
-                "SELECT target_url, anime_name, title FROM tracked_links WHERE code = ?",
-                (code,)
-            ).fetchone()
-        if row:
-            target_url = row[0] or ""
-            anime_name = row[1] or "Anime"
-            title      = row[2] or "Anime Merchandise"
+        from database import get_tracked_link_data
+        link_data = get_tracked_link_data(code)
+        target_amazon_url = link_data.get("target_url", "")
+        anime_name        = link_data.get("anime_name", "Anime")
+        title             = link_data.get("title", "Anime Merchandise")
+        image_url         = link_data.get("image_url", "")
     except Exception:
-        pass
+        target_amazon_url = ""
+        anime_name = "Anime"
+        title = "Anime Merchandise"
+        image_url = ""
 
-    if not target_url:
+    if not target_amazon_url:
         from config import AMAZON_AFFILIATE_TAG
-        tag        = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
-        target_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+        tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+        target_amazon_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
 
-    # ── Record bridge PAGE VISIT (funnel analytics — separate from Amazon click) ──
-    # The /r/<code> route records the Amazon click when the user taps "Shop on Amazon"
-    # Here we record that the user LANDED on the bridge page (from Pinterest or elsewhere)
+    # Record bridge visit for funnel analytics
     try:
         from pinterest_analytics import record_bridge_visit
         record_bridge_visit(code, anime_name, title, user_agent, referrer)
+        # Background check if this visit crossed a viral surge threshold
+        import threading
+        from viral_radar import check_and_notify_viral_surges
+        threading.Thread(target=check_and_notify_viral_surges, daemon=True).start()
     except Exception:
         pass
 
-    # Render the showcase landing page
+    # Dynamic URLs through tracker (logs merchant click)
+    from config import APP_BASE_URL
+    base = (APP_BASE_URL or "").rstrip("/")
+    amazon_cta = f"{base}/r/{code}?m=amazon" if base else target_amazon_url
+
+    from amazon_search import build_displate_url
+    raw_displate = build_displate_url(anime_name=anime_name, title=title)
+    displate_cta = f"{base}/r/{code}?m=displate" if base else raw_displate
+
+    wallpaper_cta = f"{base}/r/{code}?m=wallpaper" if (base and image_url) else (image_url or target_amazon_url)
+
+    # Optional image preview banner
+    preview_img_html = ""
+    if image_url:
+        preview_img_html = f"""
+        <div class="art-preview">
+          <img src="{image_url}" alt="{title}" loading="lazy" />
+        </div>
+        """
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{title} | Anime Shop</title>
-  <meta name="description" content="Official anime merchandise for {anime_name}. Posters, figures, and collectibles on Amazon." />
+  <title>{title} | Anime Merch &amp; Art Hub</title>
+  <meta name="description" content="Explore official {anime_name} merchandise, steel posters, and 4K wallpaper." />
   <meta property="og:title" content="{title}" />
-  <meta property="og:description" content="Shop official {anime_name} merchandise — posters, figures &amp; collectibles." />
+  <meta property="og:description" content="Shop official {anime_name} figures, metal posters &amp; download 4K wallpaper." />
   <meta property="og:type" content="product" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     :root {{
-      --bg:      #0f0f14;
-      --surface: #1a1a24;
-      --card:    #22222f;
-      --accent:  #e60026;
-      --gold:    #f59e0b;
-      --text:    #f0f0f5;
-      --sub:     #9090aa;
-      --radius:  18px;
+      --bg:      #0b0b12;
+      --card:    #151522;
+      --surface: #1e1e2f;
+      --border:  rgba(255,255,255,0.08);
+      --accent:  #ff3366;
+      --text:    #f8f8fc;
+      --sub:     #9d9db5;
+      --radius:  20px;
     }}
     body {{
-      font-family: 'Inter', sans-serif;
-      background: var(--bg);
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: radial-gradient(circle at 50% 0%, #1f1435 0%, var(--bg) 60%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24px 16px 48px;
+      padding: 24px 16px 56px;
     }}
     .badge {{
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: rgba(230,0,38,.15);
-      border: 1px solid rgba(230,0,38,.4);
-      color: #ff6680;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      padding: 5px 12px;
-      border-radius: 999px;
-      margin-bottom: 20px;
-    }}
-    .card {{
-      background: var(--card);
-      border-radius: var(--radius);
-      max-width: 480px;
-      width: 100%;
-      overflow: hidden;
-      box-shadow: 0 24px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06);
-      animation: rise .45s cubic-bezier(.22,.68,0,1.2);
-    }}
-    @keyframes rise {{
-      from {{ opacity:0; transform: translateY(30px) scale(.97); }}
-      to   {{ opacity:1; transform: translateY(0)   scale(1);    }}
-    }}
-    .anime-tag {{
-      display: block;
-      background: linear-gradient(90deg, var(--accent), #ff6047);
-      color: #fff;
+      background: rgba(255,51,102,.12);
+      border: 1px solid rgba(255,51,102,.35);
+      color: #ff6699;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: .08em;
       text-transform: uppercase;
-      padding: 7px 20px;
+      padding: 5px 14px;
+      border-radius: 999px;
+      margin-bottom: 18px;
     }}
-    .card-body {{ padding: 24px 24px 28px; }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-width: 480px;
+      width: 100%;
+      overflow: hidden;
+      box-shadow: 0 28px 80px rgba(0,0,0,.65);
+      animation: rise .4s ease-out;
+    }}
+    @keyframes rise {{
+      from {{ opacity:0; transform: translateY(20px); }}
+      to   {{ opacity:1; transform: translateY(0);    }}
+    }}
+    .anime-tag {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(90deg, #ff3366, #ff6b4a);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 8px 20px;
+    }}
+    .art-preview {{
+      width: 100%;
+      max-height: 280px;
+      overflow: hidden;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }}
+    .art-preview img {{
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform .3s ease;
+    }}
+    .art-preview:hover img {{
+      transform: scale(1.03);
+    }}
+    .card-body {{ padding: 22px 20px 28px; }}
     .pin-title {{
-      font-size: 1.4rem;
-      font-weight: 900;
-      line-height: 1.25;
-      margin-bottom: 10px;
-      background: linear-gradient(135deg, #fff 40%, #c9b8ff);
+      font-size: 1.35rem;
+      font-weight: 800;
+      line-height: 1.3;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #fff 50%, #d8ccff);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }}
     .pin-desc {{
-      font-size: .88rem;
+      font-size: .86rem;
       color: var(--sub);
-      line-height: 1.6;
-      margin-bottom: 24px;
+      line-height: 1.55;
+      margin-bottom: 22px;
     }}
-    .cta-btn {{
-      display: block;
-      width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #f59e0b, #f97316);
-      color: #fff;
-      font-size: 1.05rem;
-      font-weight: 800;
-      border: none;
-      border-radius: 12px;
+    .options-grid {{
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }}
+    .btn-option {{
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      border-radius: 14px;
       text-decoration: none;
-      text-align: center;
-      letter-spacing: .02em;
-      box-shadow: 0 8px 28px rgba(245,158,11,.35);
-      transition: transform .15s, box-shadow .15s;
+      transition: transform .18s, box-shadow .18s, filter .18s;
+      color: #fff;
+      position: relative;
     }}
-    .cta-btn:hover {{
+    .btn-option:hover {{
       transform: translateY(-2px);
-      box-shadow: 0 12px 36px rgba(245,158,11,.5);
+      filter: brightness(1.08);
     }}
-    .cta-icon {{ margin-right: 8px; }}
+    .btn-option .icon {{
+      font-size: 26px;
+      line-height: 1;
+    }}
+    .btn-option .btn-text {{
+      display: flex;
+      flex-direction: column;
+      text-align: left;
+    }}
+    .btn-option .btn-title {{
+      font-weight: 800;
+      font-size: 0.98rem;
+      letter-spacing: 0.01em;
+    }}
+    .btn-option .btn-sub {{
+      font-size: 0.75rem;
+      opacity: 0.85;
+      margin-top: 2px;
+    }}
+    /* Merchant 1: Amazon */
+    .btn-amazon {{
+      background: linear-gradient(135deg, #f59e0b, #ea580c);
+      box-shadow: 0 8px 24px rgba(234,88,12,.3);
+    }}
+    /* Merchant 2: Displate */
+    .btn-displate {{
+      background: linear-gradient(135deg, #06b6d4, #4f46e5);
+      box-shadow: 0 8px 24px rgba(79,70,229,.3);
+    }}
+    /* Option 3: Wallpaper */
+    .btn-wallpaper {{
+      background: linear-gradient(135deg, #10b981, #059669);
+      box-shadow: 0 8px 24px rgba(16,185,129,.25);
+    }}
     .disclosure {{
-      margin-top: 14px;
+      margin-top: 18px;
       font-size: .72rem;
-      color: #60607a;
+      color: #707088;
       text-align: center;
+      line-height: 1.45;
     }}
     footer {{
-      margin-top: 32px;
+      margin-top: 28px;
       font-size: .75rem;
-      color: #40404f;
+      color: #55556a;
       text-align: center;
     }}
   </style>
 </head>
 <body>
-  <div class="badge">✨ Anime Merchandise</div>
+  <div class="badge">✨ Verified Anime Merch &amp; Art</div>
   <div class="card">
-    <span class="anime-tag">🎌 {anime_name}</span>
+    <div class="anime-tag">
+      <span>🎌 {anime_name}</span>
+      <span>4K UHD</span>
+    </div>
+    {preview_img_html}
     <div class="card-body">
       <h1 class="pin-title">{title}</h1>
       <p class="pin-desc">
-        Official {anime_name} merchandise curated for fans. Posters, figures, and collectibles — delivered by Amazon.
+        Curated merchandise and artwork for {anime_name} fans. Choose an option below:
       </p>
-      <a class="cta-btn" href="{target_url}" rel="sponsored noopener" target="_blank">
-        <span class="cta-icon">🛒</span> Shop on Amazon India
-      </a>
+      
+      <div class="options-grid">
+        <!-- Option 1: Amazon Merch -->
+        <a class="btn-option btn-amazon" href="{amazon_cta}" rel="sponsored noopener" target="_blank">
+          <span class="icon">🛒</span>
+          <span class="btn-text">
+            <span class="btn-title">Shop on Amazon India</span>
+            <span class="btn-sub">Figures, Nendoroids, Manga &amp; Collectibles</span>
+          </span>
+        </a>
+
+        <!-- Option 2: Displate Metal Poster -->
+        <a class="btn-option btn-displate" href="{displate_cta}" rel="sponsored noopener" target="_blank">
+          <span class="icon">🖼️</span>
+          <span class="btn-text">
+            <span class="btn-title">Metal Wall Poster (Displate)</span>
+            <span class="btn-sub">20-Year Steel Canvas · Magnetic Wall Mount</span>
+          </span>
+        </a>
+
+        <!-- Option 3: Free 4K Wallpaper -->
+        <a class="btn-option btn-wallpaper" href="{wallpaper_cta}" target="_blank">
+          <span class="icon">📱</span>
+          <span class="btn-text">
+            <span class="btn-title">Download 4K Wallpaper (Free)</span>
+            <span class="btn-sub">Ultra-HD Phone &amp; Desktop Background</span>
+          </span>
+        </a>
+      </div>
+
       <p class="disclosure">
-        #ad — As an Amazon Associate, we earn from qualifying purchases. This supports our free content. 🙏
+        #ad — As an Amazon Associate &amp; affiliate partner, we may earn commissions from qualifying purchases. Artwork curated for anime fans worldwide.
       </p>
     </div>
   </div>
-  <footer>AnimAnoizing · Anime Art &amp; Merch Community</footer>
+  <footer>Animanoizing · Anime Art &amp; Merch Community</footer>
 </body>
 </html>"""
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}

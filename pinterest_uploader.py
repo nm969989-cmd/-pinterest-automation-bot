@@ -1,5 +1,10 @@
 import os
+import re
 import time
+import threading
+import datetime
+import html as _html
+from email.utils import parsedate_to_datetime
 import requests
 from config import PINTEREST_ACCESS_TOKEN, PINTEREST_BOARD_ID, DRY_RUN, MAKE_WEBHOOK_URL
 from image_host import upload_image_to_host
@@ -8,6 +13,116 @@ from database import is_file_uploaded, mark_file_uploaded
 from amazon_search import preflight_validate_destination, is_direct_product_link
 
 logger = get_logger(__name__)
+
+# ── Token-free verification via public profile RSS feed ──────────────────────
+# Make.com replies "Accepted" the moment it RECEIVES the webhook — even if the
+# scenario is paused/erroring and the pin never reaches Pinterest. Without a
+# Pinterest API token we verify through the public RSS feed instead.
+# Check schedule (minutes after submission). RSS can lag, so poll up to 90 min.
+_RSS_CHECK_SCHEDULE_MIN = [3, 10, 25, 45, 90]
+
+
+def _pinterest_rss_url() -> str:
+    try:
+        from config import PINTEREST_PROFILE_URL
+    except Exception:
+        PINTEREST_PROFILE_URL = ""
+    m = re.search(r"pinterest\.[a-z.]+/([^/?#]+)", PINTEREST_PROFILE_URL or "")
+    user = os.getenv("PINTEREST_USERNAME") or (m.group(1) if m else "")
+    return f"https://www.pinterest.com/{user}/feed.rss" if user else ""
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def find_pin_in_rss(needles: list[str], since_utc: datetime.datetime) -> str:
+    """Return the pin URL if a pin created after `since_utc` matches any needle."""
+    feed = _pinterest_rss_url()
+    if not feed:
+        return ""
+    res = requests.get(feed, timeout=20, headers={"User-Agent": "Mozilla/5.0",
+                                                   "Cache-Control": "no-cache"})
+    if res.status_code != 200:
+        logger.warning(f"[PinVerify-RSS] Feed HTTP {res.status_code}")
+        return ""
+    keys = [_norm(n)[:40] for n in needles if n and len(_norm(n)) >= 12]
+    for item in re.findall(r"<item>(.*?)</item>", res.text, flags=re.S):
+        link_m = re.search(r"<link>(.*?)</link>", item, flags=re.S)
+        date_m = re.search(r"<pubDate>(.*?)</pubDate>", item, flags=re.S)
+        try:
+            pub = parsedate_to_datetime(date_m.group(1).strip()).replace(tzinfo=None) if date_m else None
+        except Exception:
+            pub = None
+        if pub and pub < since_utc - datetime.timedelta(minutes=5):
+            continue  # older pin — never match pins created before this upload
+        text = _norm(_html.unescape(item))
+        if any(k in text for k in keys):
+            return link_m.group(1).strip() if link_m else feed
+    return ""
+
+
+def verify_pin_via_rss_async(title: str, anime_name: str = "", description: str = ""):
+    """Background check: alert the admin with the TRUE Pinterest status."""
+    if not _pinterest_rss_url():
+        return
+    since = datetime.datetime.utcnow()
+    needles = [title, anime_name, description[:80]]
+
+    def _worker():
+        waited = 0
+        for mins in _RSS_CHECK_SCHEDULE_MIN:
+            time.sleep((mins - waited) * 60)
+            waited = mins
+            try:
+                url = find_pin_in_rss(needles, since)
+            except Exception as e:
+                logger.warning(f"[PinVerify-RSS] Check failed: {e}")
+                url = ""
+            if url:
+                logger.info(f"[PinVerify-RSS] ✅ Pin VERIFIED on Pinterest after ~{mins}m: {url}")
+                try:
+                    from telegram_bot import notify_admin
+                    notify_admin(f"✅ *Pin verified on Pinterest*\n{title[:80]}\n{url}")
+                except Exception:
+                    pass
+                return
+            logger.info(f"[PinVerify-RSS] Pin not on profile yet (~{mins}m): '{title[:60]}'")
+        logger.error(f"[PinVerify-RSS] ❌ Pin NEVER appeared on Pinterest: '{title}'")
+        try:
+            from telegram_bot import notify_admin
+            notify_admin(
+                "🚨 *Pin NOT on Pinterest*\n\n"
+                f"*{title[:80]}*\n"
+                f"Make.com accepted it, but it is still missing from your profile after "
+                f"{_RSS_CHECK_SCHEDULE_MIN[-1]} min.\n\n"
+                "📋 *Fix:* make.com → your Pinterest scenario → *History*.\n"
+                "• Scenario *Inactive*? Toggle ON.\n"
+                "• Red error on Pinterest module? Reconnect the Pinterest connection.\n"
+                "• Out of operations? Check Organization → Usage."
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_worker, name="PinVerifyRSS", daemon=True).start()
+
+
+def _make_response_confirms_pin(res) -> bool:
+    """True only if the Make scenario returned a real Pinterest pin id/url
+    (requires a 'Webhook response' module after 'Create a Pin').
+    The default Make reply is plain 'Accepted', which proves nothing."""
+    body = (res.text or "").strip()
+    if not body or body.lower() == "accepted":
+        return False
+    try:
+        data = res.json()
+        if isinstance(data, dict):
+            pid = str(data.get("pin_id") or data.get("id") or "")
+            if pid.isdigit() or "pinterest." in str(data.get("url", "")):
+                return True
+    except Exception:
+        pass
+    return bool(re.search(r"pinterest\.[a-z.]+/pin/\d+", body))
 
 # ── Pin verification after Make.com webhook ───────────────────────────────────
 # How long (seconds) to wait after Make.com accepts before checking Pinterest.
@@ -212,13 +327,13 @@ def verify_pin_created(title: str, board_id: str = "", wait_secs: int = _VERIFY_
     (can't verify — caller should treat as "queued", not "live").
     """
     if not PINTEREST_ACCESS_TOKEN or not PINTEREST_ACCESS_TOKEN.strip():
-        logger.debug("[PinVerify] PINTEREST_ACCESS_TOKEN not set — skipping API verification (using Make.com).")
-        return True
+        logger.debug("[PinVerify] PINTEREST_ACCESS_TOKEN not set — cannot verify via API.")
+        return False  # can't verify → NOT live (was True: caused false "Confirmed Live")
 
     resolved_board = board_id or PINTEREST_BOARD_ID
     if not resolved_board:
-        logger.debug("[PinVerify] No board_id available — skipping API verification (using Make.com default board).")
-        return True
+        logger.warning("[PinVerify] No board_id available — cannot verify via API.")
+        return False  # can't verify → NOT live (was True: caused false "Confirmed Live")
 
     headers = {
         "Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}",
@@ -374,12 +489,23 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
                     else:
                         logger.warning(
                             f"[Make.com] Pin not yet visible via Pinterest API. "
-                            f"Check make.com → History tab if the scenario encountered an error."
+                            f"Check make.com → History tab if the scenario encountered an error. "
+                            f"Starting background RSS verification."
                         )
+                        verify_pin_via_rss_async(title, anime_name, description)
                 else:
-                    # Make.com webhook mode (no Pinterest developer API token needed)
-                    logger.info(f"[Make.com] Pin submitted successfully to Make.com: '{title}'")
-                    pin_confirmed = True
+                    # Make.com webhook mode (no Pinterest developer API token).
+                    # "Accepted" only means Make RECEIVED the data — NOT that the
+                    # pin exists. Never claim "live" here; verify via RSS instead.
+                    pin_confirmed = _make_response_confirms_pin(res)
+                    if pin_confirmed:
+                        logger.info(f"[Make.com] Scenario returned a Pinterest pin id — CONFIRMED: '{title}'")
+                    else:
+                        logger.info(
+                            f"[Make.com] Webhook accepted (unverified): '{title}'. "
+                            f"Starting background RSS verification."
+                        )
+                        verify_pin_via_rss_async(title, anime_name, description)
 
                 return (image_url, pin_confirmed)
             elif res.status_code == 400:

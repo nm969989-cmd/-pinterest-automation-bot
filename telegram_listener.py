@@ -260,20 +260,37 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
             amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
             description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
 
-            # Apply SEO hashtag optimization (same as new images in main.py)
+            # Apply Multi-Intent SEO description & hashtags (same as new images in main.py)
             try:
-                from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
+                from seo_matrix import build_multi_intent_description, generate_multi_intent_tags
                 from board_router import get_board_for_anime
                 genre, board_id = get_board_for_anime(anime_name)
+                description = build_multi_intent_description(
+                    base_description=desc_template,
+                    anime_name=anime_name,
+                    character_name=character_name,
+                    link_url=amazon_link,
+                )
+                optimized_tags = generate_multi_intent_tags(
+                    anime_name=anime_name,
+                    character_name=character_name,
+                    genre=genre,
+                    target_count=13,
+                    include_disclosure=True,
+                )
+                description = description.rstrip() + "\n\n" + optimized_tags
+                if "#ad" not in description.lower() and "#affiliate" not in description.lower():
+                    description = description.rstrip() + "\n#ad #affiliate"
+            except Exception as ht_err:
+                logger.warning(f"[Backlog] Multi-intent SEO failed (non-critical): {ht_err}")
+                from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
                 optimized_tags = optimize_hashtags(
-                    anime_name=anime_name, genre=genre,
+                    anime_name=anime_name, genre="general",
                     character_name=character_name, product_hint="anime merch"
                 )
                 description = replace_hashtags_in_description(description, optimized_tags)
                 if "#ad" not in description.lower():
                     description = description.rstrip() + "\n#ad #affiliate"
-            except Exception as ht_err:
-                logger.warning(f"[Backlog] Hashtag optimization failed (non-critical): {ht_err}")
 
             # Add to BACKLOG queue (priority=0)
             added = scheduler.enqueue_backlog_image(

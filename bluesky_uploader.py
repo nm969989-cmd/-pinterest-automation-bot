@@ -247,36 +247,36 @@ def post_to_bluesky(image_url: str = "", title: str = "", caption: str = "",
         logger.warning("[Bluesky] No valid image file found to post.")
         return None
 
-    # Construct rich text within 300 chars limit
-    # Structure: Title \n Link \n #tags
-    tag_str = ""
-    if tags:
-        clean_tags = [f"#{t.lstrip('#')}" for t in tags[:5] if t]
-        tag_str = " ".join(clean_tags)
-    elif "#" in caption:
-        # Extract existing tags from caption
-        found = re.findall(r"#\w+", caption)
-        if found:
-            tag_str = " ".join(found[:5])
+    # If rich waterfall/platform caption is already provided, use it directly
+    if caption and caption.strip():
+        full_text = caption.strip()
+        if len(full_text) > _MAX_TEXT_LEN:
+            full_text = full_text[:_MAX_TEXT_LEN]
+    else:
+        # Construct rich text within 300 chars limit
+        # Structure: Title \n Link \n #tags
+        tag_str = ""
+        if tags:
+            clean_tags = [f"#{t.lstrip('#')}" for t in tags[:5] if t]
+            tag_str = " ".join(clean_tags)
 
-    text_parts = []
-    clean_title = (title or "").strip()
-    if clean_title:
-        text_parts.append(clean_title)
+        text_parts = []
+        clean_title = (title or "").strip()
+        if clean_title:
+            text_parts.append(clean_title)
 
-    if link and link.startswith("http"):
-        text_parts.append(f"\U0001f6d2 Merch: {link}")
+        if link and link.startswith("http"):
+            text_parts.append(f"\U0001f6d2 Merch: {link}")
 
-    if tag_str:
-        text_parts.append(tag_str)
+        if tag_str:
+            text_parts.append(tag_str)
 
-    full_text = "\n\n".join(text_parts).strip()
-    if len(full_text) > _MAX_TEXT_LEN:
-        # Truncate title to fit
-        excess = len(full_text) - _MAX_TEXT_LEN + 4
-        clean_title = clean_title[:-excess] + "..."
-        text_parts[0] = clean_title
         full_text = "\n\n".join(text_parts).strip()
+        if len(full_text) > _MAX_TEXT_LEN:
+            excess = len(full_text) - _MAX_TEXT_LEN + 4
+            clean_title = clean_title[:-excess] + "..."
+            text_parts[0] = clean_title
+            full_text = "\n\n".join(text_parts).strip()
 
     facets = _extract_facets(full_text)
 

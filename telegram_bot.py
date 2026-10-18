@@ -119,6 +119,7 @@ def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
         ],
         [
             InlineKeyboardButton("📊 Stats", callback_data="btn_stats"),
+            InlineKeyboardButton("📈 Digest", callback_data="btn_digest"),
             InlineKeyboardButton("🩺 Doctor Check", callback_data="btn_doctor"),
         ],
     ])
@@ -270,6 +271,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/doctor         - System health report (Auto: runs every 3 days)\n"
         "/repairlinks    - Audit & repair dead Amazon links (Auto: 1st of month)\n"
         "/stats          - Pins count and queue\n"
+        "/digest         - Daily performance & health digest (Auto: 9 PM IST)\n"
         "/summary        - Today's multi-platform report (Auto: 10 PM IST)\n"
         "/dailyreport    - Detailed pin & cross-post report\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
@@ -277,13 +279,18 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/stockstats     - Stock photo upload counts per platform\n"
         "/uptime         - Platform health & circuit breaker status\n"
         "/preview        - Last pin with image\n"
+        "/seo [anime]    - Preview Multi-Intent SEO tags & title\n"
+        "/topseo         - Top anime keywords driving search traffic\n"
         "/logs           - Recent log output\n"
         "/queue          - Pending queue breakdown\n"
         "/schedule       - Today's posting schedule (Auto: 8 AM IST)\n"
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
-        "--- CROSS-POSTING ---\n"
+        "--- CROSS-POSTING & SEO ---\n"
         "/crosspost      - Multi-platform status (All 10 connected platforms)\n"
+        "/backlinks      - Backlink SEO Waterfall counts across 7 platforms\n"
+        "/radar          - Viral Pin Surge Radar & live trending pins\n"
+        "/spinoff <code> - Generate 2 Express Spinoff pins for a viral artwork\n"
         "/arena          - Are.na channel stats & block count\n"
         "/arena_test     - Post test block to Are.na channel\n"
         "/bluesky        - Bluesky profile stats & follower count\n"
@@ -394,6 +401,20 @@ async def cmd_summary(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     await _send_daily_report(update.effective_chat.id)
 
 
+async def cmd_digest(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Generate and send the daily performance & health digest on demand."""
+    if not _is_admin(update): return
+    msg = update.effective_message
+    status_msg = await msg.reply_text("📊 Compiling daily performance digest...")
+    try:
+        from daily_digest import build_daily_digest_message
+        report = build_daily_digest_message()
+        await status_msg.edit_text(report, parse_mode="Markdown", reply_markup=get_queue_keyboard())
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_digest error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Failed to generate digest: {e}")
+
+
 async def cmd_doctor(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Run full system diagnostics and reply with health report."""
     if not _is_admin(update): return
@@ -450,18 +471,31 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     est_rev = f"₹{cstats['est_revenue_min']} - ₹{cstats['est_revenue_max']}"
     est_orders = f"{cstats['est_orders_min']} - {cstats['est_orders_max']} items"
 
+    tbm = cstats.get("today_by_merchant", {})
+    tbm_str = ""
+    if tbm:
+        tbm_parts = [f"{m.capitalize()}: {cnt}" for m, cnt in tbm.items()]
+        tbm_str = f" ({', '.join(tbm_parts)})"
+
+    by_m = cstats.get("by_merchant", {})
+    by_m_str = ""
+    if by_m:
+        by_m_parts = [f"  • {m.capitalize()}: {cnt} click(s)" for m, cnt in by_m.items()]
+        by_m_str = f"\n\n🏪 Clicks by Merchant (All-Time):\n" + "\n".join(by_m_parts)
+
     msg = (
         f"📊 Affiliate Clicks & Earnings Report\n"
         f"{'═' * 30}\n"
-        f"🖱️ Clicks Today    : {cstats['today']}\n"
+        f"🖱️ Clicks Today    : {cstats['today']}{tbm_str}\n"
         f"📈 Clicks This Week : {cstats['week']}\n"
-        f"🌐 All-Time Clicks  : {cstats['total']}\n\n"
+        f"🌐 All-Time Clicks  : {cstats['total']}"
+        f"{by_m_str}\n\n"
         f"💰 Estimated Performance (7 Days):\n"
         f"  • Estimated Orders  : {est_orders}\n"
         f"  • Estimated Revenue : {est_rev}\n\n"
         f"🎌 Top Clicked Anime:\n{top_anime_str}\n\n"
         f"🔥 Top Clicked Pins:\n{top_pins_str}\n\n"
-        f"💡 Note: Actual confirmed purchases and payout balance are finalized on affiliate-program.amazon.in"
+        f"💡 Note: Actual confirmed purchases and payout balance are finalized on respective affiliate portals (Amazon / Displate)."
     )
     await update.message.reply_text(msg)
     logger.info("[TG BOT] /clicks report sent.")
@@ -710,6 +744,200 @@ async def cmd_topseo(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         await update.message.reply_text(f"❌ SEO report error: {e}")
         logger.error(f"[TG BOT] topseo error: {e}")
+
+
+async def cmd_seo(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🔍 Multi-Intent SEO Matrix Inspector & Generator
+    Tests and previews the balanced Pinterest search tags, title, and description hook for any anime.
+    Usage:
+      /seo
+      /seo Demon Slayer
+      /seo Jujutsu Kaisen - Gojo
+    """
+    if not _is_admin(update): return
+    try:
+        from seo_matrix import (
+            generate_multi_intent_tags,
+            build_multi_intent_title,
+            build_multi_intent_description,
+        )
+
+        args = context.args or []
+        query = " ".join(args).strip()
+        anime_name = "Demon Slayer"
+        character_name = ""
+
+        if query:
+            if " - " in query:
+                parts = query.split(" - ", 1)
+                anime_name = parts[0].strip()
+                character_name = parts[1].strip()
+            elif "," in query:
+                parts = query.split(",", 1)
+                anime_name = parts[0].strip()
+                character_name = parts[1].strip()
+            else:
+                anime_name = query
+        else:
+            last_pin = _state.get("last_pin")
+            if last_pin and last_pin.get("anime_name"):
+                anime_name = last_pin["anime_name"]
+
+        seo_title = build_multi_intent_title("Masterpiece Artwork", anime_name, character_name)
+        tags = generate_multi_intent_tags(anime_name, character_name, target_count=13, include_disclosure=True)
+        sample_desc = build_multi_intent_description(
+            base_description="Incredible hand-crafted anime illustration featuring legendary character artwork.",
+            anime_name=anime_name,
+            character_name=character_name,
+            link_url="https://your-bot.onrender.com/p/dp_SAMPLE",
+        )
+
+        SEP = "─" * 32
+        subject_display = f"{anime_name} ({character_name})" if character_name else anime_name
+        msg = (
+            f"🔍 *Pinterest Multi-Intent SEO Matrix*\n"
+            f"{SEP}\n"
+            f"🎌 *Target Anime:* {subject_display}\n\n"
+            f"📌 *SEO Title (First 30 Chars Weighted):*\n"
+            f"`{seo_title}` ({len(seo_title)}/100 chars)\n\n"
+            f"📝 *Description Hook (First 150 Chars):*\n"
+            f"{sample_desc.split(chr(10))[0]}\n\n"
+            f"🏷️ *Balanced Multi-Intent Tag Matrix (13 Tags):*\n"
+            f"• 🖼️ *Wallpaper/4K:* `#AnimeWallpaper4K #PhoneWallpaper4K`\n"
+            f"• 🖼️ *Decor/Displate:* `#AnimeRoomDecor #MetalPosterArt`\n"
+            f"• 🛍️ *Merch/Amazon:* `#AnimeFigure #AnimeMerch`\n"
+            f"• ⚔️ *Fandom/Character:* `#{anime_name.replace(' ', '')}`\n\n"
+            f"✨ *Full Generated Cluster:*\n"
+            f"`{tags}`\n\n"
+            f"{SEP}\n"
+            f"💡 *Tip:* Test any anime using `/seo <Anime> - <Character>` (e.g. `/seo Naruto - Sasuke`)."
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        logger.info(f"[TG BOT] /seo preview sent for '{subject_display}'")
+    except Exception as e:
+        await update.message.reply_text(f"❌ SEO preview error: {e}")
+        logger.error(f"[TG BOT] cmd_seo error: {e}")
+
+
+async def cmd_backlinks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🌐 Backlink SEO Waterfall Report
+    Displays total external backlinks generated across Bluesky, Mastodon, Raindrop,
+    Are.na, Pixelfed, Freeimage, and Imghippo pointing to Pinterest and the Bridge Page.
+    Usage: /backlinks
+    """
+    if not _is_admin(update): return
+    try:
+        from database import get_backlink_stats
+        import config
+        stats = get_backlink_stats()
+        total = stats.get("total", 0)
+        today = stats.get("today", 0)
+        by_platform = stats.get("by_platform", {})
+
+        profile_url = getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+        SEP = "─" * 32
+
+        platform_names = {
+            "bluesky":   ("Bluesky", "DA 90+"),
+            "mastodon":  ("Mastodon", "DA 85+"),
+            "raindrop":  ("Raindrop.io", "DA 80+"),
+            "pixelfed":  ("Pixelfed", "DA 75+"),
+            "arena":     ("Are.na", "DA 75+"),
+            "freeimage": ("Freeimage", "DA 65+"),
+            "imghippo":  ("Imghippo", "DA 60+"),
+        }
+
+        breakdown_lines = []
+        for key, (name, da) in platform_names.items():
+            cnt = by_platform.get(key, 0)
+            breakdown_lines.append(f"  • {name} ({da}): {cnt} backlinks")
+
+        breakdown_str = "\n".join(breakdown_lines)
+
+        msg = (
+            f"🌐 *Backlink SEO Waterfall Report*\n"
+            f"{SEP}\n"
+            f"📊 *Total Backlinks Created:* {total}\n"
+            f"📅 *Created Today (IST):* {today}\n\n"
+            f"🚀 *Syndication Platform Breakdown:*\n"
+            f"{breakdown_str}\n\n"
+            f"🎯 *Target Assets Boosted:*\n"
+            f"  • 📌 Pinterest: `{profile_url}`\n"
+            f"  • 🖼️ Multi-Merchant Bridge: Active on all cross-posts\n\n"
+            f"{SEP}\n"
+            f"💡 *Google SEO Benefit:* External links from Bluesky, Raindrop, and Mastodon "
+            f"pass domain citation authority, helping Google index and rank your Pinterest pins."
+        )
+
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        logger.info("[TG BOT] /backlinks report sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Backlinks report error: {e}")
+        logger.error(f"[TG BOT] cmd_backlinks error: {e}")
+
+
+async def cmd_radar(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🚨 Check real-time viral surges across all Pinterest bridge pins.
+    Usage: /radar or /viral
+    """
+    if not _is_admin(update): return
+    try:
+        from viral_radar import format_radar_leaderboard, detect_viral_surges
+        msg = format_radar_leaderboard(limit=5)
+        candidates = detect_viral_surges(window_hours=24, min_visits=1, check_cooldown=False)
+        buttons = []
+        if candidates:
+            for c in candidates[:3]:
+                code = c["code"]
+                anime = c["anime_name"]
+                buttons.append([
+                    InlineKeyboardButton(f"🔥 Spinoff {anime[:14]}", callback_data=f"spinoff:{code}"),
+                    InlineKeyboardButton(f"⚡ Express #1", callback_data=f"boost:{code}"),
+                ])
+        markup = InlineKeyboardMarkup(buttons) if buttons else None
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=markup)
+        logger.info("[TG BOT] /radar leaderboard sent.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Radar error: {e}")
+        logger.error(f"[TG BOT] cmd_radar error: {e}")
+
+
+async def cmd_spinoff(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    🔥 Create Express Spinoff pins for a viral artwork code.
+    Usage: /spinoff [code]
+    Example: /spinoff dp_a1b2c3
+    """
+    if not _is_admin(update): return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "ℹ️ *Usage:* `/spinoff <code>`\n\n"
+            "Example: `/spinoff dp_test`\n"
+            "Use `/radar` to see active trending codes.",
+            parse_mode="Markdown"
+        )
+        return
+    code = args[0].strip()
+    try:
+        from viral_radar import generate_spinoff_pins
+        res = generate_spinoff_pins(code, count=2)
+        await update.message.reply_text(
+            f"🔥 *Spinoff Pins Activated!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎨 Anime: *{res['anime_name']}*\n"
+            f"⚡ Boosted from Queue: *{res['boosted']}* (Priority 2 Express)\n"
+            f"✨ Generated Fresh: *{res['generated']}* (Priority 2 Express)\n"
+            f"🚀 Total Active Spinoffs: *{res['total']}*\n\n"
+            f"Scheduled at Express Priority (#1) to ride the active Pinterest surge!",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Spinoff error: {e}")
+        logger.error(f"[TG BOT] cmd_spinoff error: {e}")
 
 
 async def cmd_refreshanalytics(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -1981,7 +2209,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
             # ── Dispatch cross-posts across all 10 platforms ───────────────────
             from crosspost_dispatcher import dispatch_all_crossposts
-            cp_res = dispatch_all_crossposts(pin, image_path)
+            cp_res = dispatch_all_crossposts(pin, image_path, pin_url=pin.get("pin_url", ""))
 
             def _platform_icon(result):
                 if result is True:   return "✅"
@@ -2209,6 +2437,83 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
         await cmd_stats(update, context)
     elif data == "btn_doctor":
         await cmd_doctor(update, context)
+    elif data == "btn_digest":
+        await cmd_digest(update, context)
+
+    elif data.startswith("spinoff:"):
+        code = data[8:]
+        await query.answer("🔥 Generating Express Spinoff Pins...")
+        try:
+            from viral_radar import generate_spinoff_pins
+            res = generate_spinoff_pins(code, count=2)
+            await query.message.reply_text(
+                f"🔥 *Spinoff Pins Activated!*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎨 Anime: *{res['anime_name']}*\n"
+                f"⚡ Boosted from Queue: *{res['boosted']}* (Priority 2)\n"
+                f"✨ Generated Fresh: *{res['generated']}* (Priority 2)\n"
+                f"🚀 Total Active Spinoffs: *{res['total']}*\n\n"
+                f"Scheduled at Express Priority (#1) to ride the active Pinterest surge!"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Spinoff error: {e}")
+
+    elif data.startswith("boost:"):
+        code = data[6:]
+        await query.answer("⚡ Boosting Priority to #1...")
+        try:
+            from database import get_tracked_link_data, boost_queue_priority_by_anime
+            link_data = get_tracked_link_data(code) or {}
+            anime = link_data.get("anime_name", "")
+            boosted = boost_queue_priority_by_anime(anime, new_priority=2, limit=3)
+            if boosted > 0:
+                await query.message.reply_text(
+                    f"⚡ *Express Priority Granted!*\n"
+                    f"Boosted *{boosted}* queued pin(s) for *{anime}* to Priority #1."
+                )
+            else:
+                await query.message.reply_text(
+                    f"ℹ️ No unposted pins for *{anime}* found in queue to boost.\n"
+                    f"Tap *Spinoff 2 Pins Now* to auto-generate fresh express variations!"
+                )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Boost error: {e}")
+
+    elif data.startswith("analytics:"):
+        code = data[10:]
+        await query.answer()
+        try:
+            from database import _get_conn
+            with _get_conn() as conn:
+                v = conn.execute(
+                    "SELECT COUNT(*), COUNT(CASE WHEN is_pinterest=1 THEN 1 END) FROM bridge_visits WHERE code = ?",
+                    (code,),
+                ).fetchone()
+                c = conn.execute(
+                    "SELECT COUNT(*) FROM link_clicks WHERE code = ?",
+                    (code,),
+                ).fetchone()
+                tot_v = v[0] if v else 0
+                pint_v = v[1] if v else 0
+                clicks = c[0] if c else 0
+                ctr = round((clicks / max(1, tot_v)) * 100, 1)
+            await query.message.reply_text(
+                f"📊 *Deep Pin Analytics for `{code}`*:\n"
+                f"  • Total Bridge Visits: *{tot_v}*\n"
+                f"  • From Pinterest Search: *{pint_v}* ({round(pint_v/max(1,tot_v)*100, 1)}%)\n"
+                f"  • External Visits: *{max(0, tot_v - pint_v)}*\n"
+                f"  • Affiliate Clicks: *{clicks}*\n"
+                f"  • Conversion Rate: *{ctr}%* CTR"
+            )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Analytics lookup error: {e}")
+
+    elif data.startswith("dismiss_surge:"):
+        await query.answer("Alert dismissed.")
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
 
 # -- Notify admin helper ------------------------------------------------------
@@ -2233,6 +2538,26 @@ def notify_admin(message: str, parse_mode: str = "Markdown"):
         )
     except Exception as e:
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
+
+
+def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str = "Markdown"):
+    """Send a Markdown-formatted notification with an InlineKeyboardMarkup to the admin from any thread."""
+    admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    if not _app_ref or not admin_id or not _loop_ref:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            _app_ref.bot.send_message(
+                chat_id=admin_id,
+                text=message,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            ),
+            _loop_ref
+        )
+    except Exception as e:
+        logger.warning(f"[TG BOT] Could not notify admin with keyboard: {e}")
 
 
 def notify_link_clicked(anime_name: str, title: str, today_count: int):
@@ -2313,10 +2638,29 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
         character_name = clean_character_name(raw_char)
         genre, board_id = get_board_for_anime(anime_name)
         amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
-        description = replace_hashtags_in_description(
-            desc_template.replace("##LINK_PLACEHOLDER##", amazon_link),
-            optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
-        )
+        try:
+            from seo_matrix import build_multi_intent_description, generate_multi_intent_tags
+            description = build_multi_intent_description(
+                base_description=desc_template,
+                anime_name=anime_name,
+                character_name=character_name,
+                link_url=amazon_link,
+            )
+            optimized_tags = generate_multi_intent_tags(
+                anime_name=anime_name,
+                character_name=character_name,
+                genre=genre,
+                target_count=13,
+                include_disclosure=True,
+            )
+            description = description.rstrip() + "\n\n" + optimized_tags
+            if "#ad" not in description.lower() and "#affiliate" not in description.lower():
+                description = description.rstrip() + "\n#ad #affiliate"
+        except Exception:
+            description = replace_hashtags_in_description(
+                desc_template.replace("##LINK_PLACEHOLDER##", amazon_link),
+                optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
+            )
 
         target_url = get_tracked_target_url(amazon_link)
         amazon_line = f"\n🎯 Direct Amazon : {target_url}" if target_url != amazon_link else ""
@@ -2655,12 +2999,12 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🦛 Imghippo  {_platform_icon(imghippo_ok)}"
         )
 
-    _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Pinterest Queue!"
+    _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Make.com (unverified)"
     _live_note = (
         ""
         if pin_live else
-        "\n⚠️ Pin NOT confirmed on Pinterest — Make.com accepted but Pinterest API did not see it yet.\n"
-        "Check make.com → History. If Inactive, toggle ON + clear queue."
+        "\n⏳ Make.com accepted it — NOT yet seen on your Pinterest profile.\n"
+        "Bot is checking your profile and will alert you if it never appears."
     )
     caption = (
         f"{_hdr} ({bar} {posted_today}/{actual_max})\n"
@@ -3744,6 +4088,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("help",          cmd_help),
             ("status",        cmd_status),
             ("stats",         cmd_stats),
+            ("digest",        cmd_digest),
+            ("performance",   cmd_digest),
             ("dailyreport",   cmd_dailyreport),
             ("summary",       cmd_summary),
             ("daily",         cmd_summary),
@@ -3807,6 +4153,12 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("pinstats",           cmd_pinanalytics),
             ("topseo",             cmd_topseo),
             ("seostats",           cmd_topseo),
+            ("seo",                cmd_seo),
+            ("seomatrix",          cmd_seo),
+            ("backlinks",          cmd_backlinks),
+            ("radar",              cmd_radar),
+            ("viral",              cmd_radar),
+            ("spinoff",            cmd_spinoff),
             ("refreshanalytics",   cmd_refreshanalytics),
             ("pullanalytics",      cmd_refreshanalytics),
         ]
@@ -3833,6 +4185,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
                 BotCommand("summary",       "Today's multi-platform report (Auto: 10 PM)"),
+                BotCommand("digest",        "Daily performance & health digest (Auto: 9 PM)"),
                 BotCommand("crosspost",     "Multi-platform status across all 10 platforms"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
@@ -3881,6 +4234,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("verify_public",      "🔍 Check if a Pinterest pin is visible to the public"),
                 BotCommand("bridge_url",          "🌉 Get bridge landing page URL for a pin code"),
                 BotCommand("pinanalytics",        "📈 Pinterest impressions, saves & clicks report"),
+                BotCommand("seo",                 "🔍 Preview Multi-Intent SEO tags & title"),
+                BotCommand("backlinks",           "🌐 Backlink SEO Waterfall status & counts"),
+                BotCommand("radar",               "🚨 Viral Pin Surge Radar & trending pins"),
+                BotCommand("spinoff",             "🔥 Create Express Spinoff pins for viral artwork"),
                 BotCommand("topseo",              "🔍 Top anime keywords driving search traffic"),
                 BotCommand("refreshanalytics",    "🔄 Pull fresh analytics from Pinterest API"),
                 BotCommand("help",                "Show all commands"),

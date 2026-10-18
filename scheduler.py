@@ -626,6 +626,20 @@ class PinScheduler:
                     )
             # ─────────────────────────────────────────────────────────────────
 
+            # ── Daily Performance Digest check (e.g. 21:00 IST) ──────────────
+            try:
+                from daily_digest import check_and_send_scheduled_digest
+                check_and_send_scheduled_digest()
+            except Exception as _digest_err:
+                logger.debug(f"[Scheduler] Daily digest check error (non-critical): {_digest_err}")
+
+            # ── Viral Pin Surge Radar periodic check ─────────────────────────
+            try:
+                from viral_radar import check_and_notify_viral_surges
+                check_and_notify_viral_surges()
+            except Exception as _radar_err:
+                logger.debug(f"[Scheduler] Viral radar check error (non-critical): {_radar_err}")
+
             # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
             jittered_times = _get_jittered_times_utc()
@@ -824,7 +838,7 @@ class PinScheduler:
                                     # ── Run cross-posts FIRST so results can be included in notification ──
                                     from crosspost_dispatcher import dispatch_all_crossposts
                                     try:
-                                        cp_res = dispatch_all_crossposts(pin, image_path)
+                                        cp_res = dispatch_all_crossposts(pin, image_path, pin_url=pin.get("pin_url", ""))
                                     except Exception as cp_err:
                                         # Never let a cross-post failure kill the scheduler
                                         # worker loop (the pin is already posted to
