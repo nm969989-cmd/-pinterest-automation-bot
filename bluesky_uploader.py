@@ -247,6 +247,8 @@ def post_to_bluesky(image_url: str = "", title: str = "", caption: str = "",
         logger.warning("[Bluesky] No valid image file found to post.")
         return None
 
+    clean_title = (title or "").strip()
+
     # If rich waterfall/platform caption is already provided, use it directly
     if caption and caption.strip():
         full_text = caption.strip()
@@ -261,7 +263,6 @@ def post_to_bluesky(image_url: str = "", title: str = "", caption: str = "",
             tag_str = " ".join(clean_tags)
 
         text_parts = []
-        clean_title = (title or "").strip()
         if clean_title:
             text_parts.append(clean_title)
 

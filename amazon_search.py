@@ -68,10 +68,10 @@ _NON_CHARACTER_WORDS = {
 }
 
 
-def clean_character_name(character_name: str) -> str:
+def clean_character_name(character_name: str, anime_name: str = "") -> str:
     """
     Validates and cleans extracted character name.
-    Rejects adjectives and generic non-character terms like 'Seductive', 'Cute', 'Aesthetic'.
+    Rejects adjectives, generic non-character terms like 'Seductive', pronouns, and anime series names.
     """
     if not character_name:
         return ""
@@ -81,6 +81,24 @@ def clean_character_name(character_name: str) -> str:
         return ""
     if clean.lower() in _NON_CHARACTER_WORDS:
         return ""
+
+    # Reject if it matches or is contained in the anime name (e.g. 'FateStay' from 'Fate/Stay Night')
+    if anime_name:
+        clean_anime = re.sub(r'[^a-zA-Z0-9]', '', anime_name).lower()
+        if clean.lower() in clean_anime or clean_anime in clean.lower():
+            return ""
+
+    # Reject if it matches any known anime title in board router
+    try:
+        from board_router import _ANIME_GENRE
+        clean_lower = clean.lower()
+        for known in _ANIME_GENRE:
+            known_clean = re.sub(r'[^a-zA-Z0-9]', '', known)
+            if clean_lower == known_clean or (len(clean_lower) >= 4 and clean_lower in known_clean):
+                return ""
+    except Exception:
+        pass
+
     return clean
 
 

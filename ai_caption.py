@@ -106,14 +106,28 @@ def _inject_link(description_body, channel_name):
 def _parse_ai_response(raw, channel_name):
     """Parse JSON from AI response, return (anime_name, title, description) or None."""
     global _last_character_name
+    if not raw or not isinstance(raw, str):
+        return None
     try:
         clean = re.sub(r'^```[a-z]*\n?', '', raw.strip())
         clean = re.sub(r'\n?```$', '', clean)
-        data  = json.loads(clean)
-        anime_name  = data.get("anime_name", "Anime").strip()
-        character   = data.get("character_name", "").strip()
-        title       = data.get("title", "").strip()[:100]
-        desc_body   = data.get("description", "").strip()[:480]
+        # Extract the JSON object substring {...}
+        json_match = re.search(r'\{[\s\S]*\}', clean)
+        if json_match:
+            clean = json_match.group(0)
+
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            return None
+
+        anime_name = str(data.get("anime_name") or "Anime").strip()
+        character  = str(data.get("character_name") or "").strip()
+        title      = str(data.get("title") or "").strip()[:100]
+        desc_body  = str(data.get("description") or "").strip()[:480]
+
+        if not title:
+            title = f"{character} - {anime_name} Poster" if character else f"{anime_name} Aesthetic Poster"
+
         description = _inject_link(desc_body, channel_name)
         _last_character_name = character
         logger.info(f"[AI] Anime: '{anime_name}' | Character: '{character}' | Title: '{title}'")
@@ -201,7 +215,12 @@ def _openrouter_vision(image_path, caption, channel_name, api_key):
                 res = http_requests.post(_OPENROUTER_URL, json=payload, headers=headers, timeout=30)
 
                 if res.status_code == 200:
-                    raw    = res.json()['choices'][0]['message']['content']
+                    res_json = res.json()
+                    choices = res_json.get('choices', [])
+                    raw = ""
+                    if choices and choices[0].get('message'):
+                        msg = choices[0]['message']
+                        raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
                     result = _parse_ai_response(raw, channel_name)
                     if result:
                         logger.info(f"[VISION] Success with {model}!")
@@ -250,7 +269,12 @@ def _openrouter_text(caption, channel_name, api_key):
                 logger.info(f"[AI:Text] Trying model: {model}")
                 res = http_requests.post(_OPENROUTER_URL, json=payload, headers=headers, timeout=20)
                 if res.status_code == 200:
-                    raw = res.json()['choices'][0]['message']['content']
+                    res_json = res.json()
+                    choices = res_json.get('choices', [])
+                    raw = ""
+                    if choices and choices[0].get('message'):
+                        msg = choices[0]['message']
+                        raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
                     result = _parse_ai_response(raw, channel_name)
                     if result:
                         logger.info(f"[AI:Text] Success with OpenRouter text model {model}")

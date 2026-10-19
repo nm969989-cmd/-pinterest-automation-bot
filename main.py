@@ -86,14 +86,14 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             if " - " in title:
                 # e.g. "Tanjiro - Demon Slayer Poster" → first word before dash = character
                 raw_char = title.split(" - ")[0].strip().split()[0]
-                character_name = clean_character_name(raw_char)
+                character_name = clean_character_name(raw_char, anime_name=anime_name)
             elif ":" in title:
                 raw_char = title.split(":")[0].strip().split()[0]
-                character_name = clean_character_name(raw_char)
+                character_name = clean_character_name(raw_char, anime_name=anime_name)
 
         if character_name:
             from amazon_search import clean_character_name
-            character_name = clean_character_name(character_name)
+            character_name = clean_character_name(character_name, anime_name=anime_name)
             if character_name:
                 logger.info(f"[Main] Character extracted: '{character_name}'")
 

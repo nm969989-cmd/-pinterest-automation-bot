@@ -185,13 +185,14 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
             max_posts = int(os.getenv("STOCK_MAX_POSTS_PER_DAY", "5"))
 
             # Pre-upload watermark check: ensure 100% clean image before stock platform upload
+            target_image_path = image_path
             try:
                 from watermark_inpainter import verify_and_clean
-                image_path = verify_and_clean(image_path)
+                target_image_path = verify_and_clean(image_path)
             except Exception as _wm_err:
                 logger.warning(f"[Stock Dispatch] Pre-upload watermark check error (non-fatal): {_wm_err}")
 
-            filename = os.path.basename(image_path)
+            filename = os.path.basename(target_image_path)
             logger.info(f"[Stock Dispatch] Checking stock platforms for {filename} (limit: {max_posts}/day)...")
 
             # 1. Shutterstock
@@ -199,7 +200,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("shutterstock") < max_posts:
                     try:
                         from shutterstock_uploader import upload_to_shutterstock
-                        ok = upload_to_shutterstock(image_path, title=title, caption=caption)
+                        ok = upload_to_shutterstock(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("shutterstock", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] Shutterstock result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
@@ -212,7 +213,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("adobe") < max_posts:
                     try:
                         from adobe_uploader import upload_to_adobe
-                        ok = upload_to_adobe(image_path, title=title, caption=caption)
+                        ok = upload_to_adobe(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("adobe", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] Adobe Stock result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
@@ -225,7 +226,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("freepik") < max_posts:
                     try:
                         from freepik_uploader import upload_to_freepik
-                        ok = upload_to_freepik(image_path, title=title, caption=caption)
+                        ok = upload_to_freepik(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("freepik", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] Freepik result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
@@ -238,7 +239,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("dreamstime") < max_posts:
                     try:
                         from dreamstime_uploader import upload_to_dreamstime
-                        ok = upload_to_dreamstime(image_path, title=title, caption=caption)
+                        ok = upload_to_dreamstime(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("dreamstime", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] Dreamstime result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
@@ -251,7 +252,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("depositphotos") < max_posts:
                     try:
                         from depositphotos_uploader import upload_to_depositphotos
-                        ok = upload_to_depositphotos(image_path, title=title, caption=caption)
+                        ok = upload_to_depositphotos(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("depositphotos", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] Depositphotos result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
@@ -264,7 +265,7 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
                 if count_stock_posts_today("123rf") < max_posts:
                     try:
                         from rf123_uploader import upload_to_123rf
-                        ok = upload_to_123rf(image_path, title=title, caption=caption)
+                        ok = upload_to_123rf(target_image_path, title=title, caption=caption)
                         mark_stock_uploaded("123rf", filename, title, "success" if ok else "failed")
                         logger.info(f"[Stock Dispatch] 123RF result: {'SUCCESS' if ok else 'FAILED'}")
                     except Exception as e:
