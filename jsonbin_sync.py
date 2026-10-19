@@ -77,26 +77,27 @@ def save_cloud_state() -> bool:
     if not _is_configured():
         return False
     try:
+        import json
         import sqlite3
         from database import DB_PATH
 
         with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
-            # Processed posts (last 500 only to keep JSON small)
+            # Processed posts (last 200 post_ids to keep payload well within 100KB budget)
             posts = [
                 row[0] for row in conn.execute(
-                    "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 500"
+                    "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 200"
                 ).fetchall()
             ]
-            # Uploaded files
+            # Uploaded files (last 80 only)
             uploads = [
                 {"filename": r[0], "title": r[1], "anime_name": r[2],
                  "image_url": r[3], "uploaded_at": r[4]}
                 for r in conn.execute(
                     "SELECT filename, title, anime_name, image_url, uploaded_at "
-                    "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 500"
+                    "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 80"
                 ).fetchall()
             ]
-            # Pin queue
+            # Pin queue (preserve ALL pending queue items - vital state!)
             queue = [
                 {"post_id": r[0], "image_path": r[1], "title": r[2],
                  "description": r[3], "link": r[4], "anime_name": r[5],
@@ -114,55 +115,54 @@ def save_cloud_state() -> bool:
                     "SELECT key, value FROM bot_metadata"
                 ).fetchall()
             ]
-            # Tracked links (last 500 links so short redirects survive restarts)
+            # Tracked links (last 60 links for recent redirect continuity)
             tracked = [
                 {"code": r[0], "target_url": r[1], "anime_name": r[2], "title": r[3], "created_at": r[4]}
                 for r in conn.execute(
-                    "SELECT code, target_url, anime_name, title, created_at FROM tracked_links ORDER BY created_at DESC LIMIT 500"
+                    "SELECT code, target_url, anime_name, title, created_at FROM tracked_links ORDER BY created_at DESC LIMIT 60"
                 ).fetchall()
             ]
-            # Are.na posts (last 500 to keep JSON size reasonable)
+            # Secondary platforms (keep last 25 items each for lightweight deduplication)
             arena = [
                 {"filename": r[0], "block_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
-            # Bluesky posts (last 500 to keep JSON size reasonable)
             bluesky = [
                 {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
             raindrop = [
                 {"filename": r[0], "drop_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, drop_id, title, image_url, posted_at FROM raindrop_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, drop_id, title, image_url, posted_at FROM raindrop_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
             mastodon = [
                 {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM mastodon_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, post_url, title, image_url, posted_at FROM mastodon_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
             pixelfed = [
                 {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM pixelfed_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, post_url, title, image_url, posted_at FROM pixelfed_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
             freeimage = [
                 {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM freeimage_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, post_url, title, image_url, posted_at FROM freeimage_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
             imghippo = [
                 {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
                 for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 500"
+                    "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
 
@@ -181,23 +181,42 @@ def save_cloud_state() -> bool:
             "imghippo_posts":  imghippo,
         }
 
+        # ── Budget Enforcer: Guarantee strictly under 90KB (JSONBin free limit = 100KB) ──
+        raw_json = json.dumps(payload, separators=(',', ':'))
+        payload_bytes = len(raw_json.encode('utf-8'))
+
+        if payload_bytes > 90 * 1024:
+            logger.info(f"[JSONBin] Payload size ({payload_bytes / 1024:.1f}KB) exceeds 90KB target. Trimming non-essential logs...")
+            # Tier 1 pruning: reduce secondary logs to 5 items each
+            for k in ["arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts", "pixelfed_posts", "freeimage_posts", "imghippo_posts"]:
+                payload[k] = payload[k][:5]
+            payload["uploaded_files"] = payload["uploaded_files"][:30]
+            payload["tracked_links"]  = payload["tracked_links"][:30]
+            raw_json = json.dumps(payload, separators=(',', ':'))
+            payload_bytes = len(raw_json.encode('utf-8'))
+
+            # Tier 2 pruning if still over 90KB
+            if payload_bytes > 90 * 1024:
+                payload["processed_posts"] = payload["processed_posts"][:100]
+                raw_json = json.dumps(payload, separators=(',', ':'))
+                payload_bytes = len(raw_json.encode('utf-8'))
+
+        logger.info(f"[JSONBin] Uploading budgeted payload ({payload_bytes / 1024:.1f}KB / 100KB free limit)")
+
         r = requests.put(
             f"{_BASE_URL}/{JSONBIN_BIN_ID}",
-            json=payload,
+            data=raw_json,
             headers=_headers(),
-            timeout=10
+            timeout=15
         )
         if r.status_code == 200:
             logger.info(
-                f"[JSONBin] Synced: {len(posts)} posts, {len(uploads)} uploads, "
-                f"{len(queue)} queued, {len(tracked)} tracked links, "
-                f"{len(arena)} arena, {len(bluesky)} bluesky, {len(raindrop)} raindrop, "
-                f"{len(mastodon)} mastodon, {len(pixelfed)} pixelfed, "
-                f"{len(freeimage)} freeimage, {len(imghippo)} imghippo"
+                f"[JSONBin] Synced successfully: {len(payload['processed_posts'])} posts, {len(payload['uploaded_files'])} uploads, "
+                f"{len(queue)} queued, {len(payload['tracked_links'])} tracked links ({payload_bytes / 1024:.1f}KB)"
             )
             return True
         else:
-            logger.warning(f"[JSONBin] Save failed: {r.status_code} {r.text[:100]}")
+            logger.warning(f"[JSONBin] Save failed: {r.status_code} {r.text[:120]}")
     except Exception as e:
         logger.error(f"[JSONBin] Save error: {e}")
     return False

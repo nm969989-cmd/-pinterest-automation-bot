@@ -32,7 +32,7 @@ _RETRY_DELAYS = [0, 4, 12]
 
 def _get_api_key() -> str:
     from config import IMGHIPPO_API_KEY
-    return (IMGHIPPO_API_KEY or "00f11d3e65f34df60a3cf9e47ecf7453").strip()
+    return (IMGHIPPO_API_KEY or os.getenv("IMGHIPPO_API_KEY", "")).strip()
 
 
 def verify_imghippo_token() -> bool:
@@ -41,10 +41,11 @@ def verify_imghippo_token() -> bool:
     if not api_key:
         return False
     try:
+        headers = {**_HEADERS, "X-API-Key": api_key}
         res = requests.post(
             _API_URL,
             data={"api_key": api_key},
-            headers=_HEADERS,
+            headers=headers,
             timeout=8
         )
         data = res.json()
@@ -77,9 +78,14 @@ def post_to_imghippo(image_path: str,
     Returns the direct image URL (e.g. 'https://i.imghippo.com/files/xyz.jpg') on success,
     or None on failure.
     """
+    from config import IMGHIPPO_ENABLED
+    if not IMGHIPPO_ENABLED:
+        logger.debug("[Imghippo] IMGHIPPO_ENABLED is False — skipping.")
+        return None
+
     api_key = _get_api_key()
     if not api_key:
-        logger.error("[Imghippo] IMGHIPPO_API_KEY is not configured.")
+        logger.debug("[Imghippo] IMGHIPPO_API_KEY is not configured — skipping.")
         return None
 
     # Clean title
@@ -114,7 +120,8 @@ def post_to_imghippo(image_path: str,
                     file_content = f.read()
                 files = {"file": (os.path.basename(image_path), file_content, "image/jpeg")}
 
-            res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
+            req_headers = {**_HEADERS, "X-API-Key": api_key}
+            res = requests.post(_API_URL, data=payload, files=files, headers=req_headers, timeout=60)
 
             if res.status_code == 200:
                 try:

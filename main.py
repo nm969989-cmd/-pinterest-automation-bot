@@ -73,20 +73,29 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             openrouter_key=config.OPENROUTER_API_KEY
         )
 
-        # 3. Extract character name from AI title for more precise Amazon product match
-        #    Title format is usually: "CharacterName - AnimeName Poster 🔥" or "CharacterName AnimeName merch"
+        # 3. Extract character name from AI or title for more precise Amazon product match
         character_name = ""
-        if title:
+        try:
+            from ai_caption import get_last_character_name
+            character_name = get_last_character_name()
+        except Exception:
+            character_name = ""
+
+        if not character_name and title:
+            from amazon_search import clean_character_name
             if " - " in title:
                 # e.g. "Tanjiro - Demon Slayer Poster" → first word before dash = character
                 raw_char = title.split(" - ")[0].strip().split()[0]
-            else:
-                # No dash: take first word
-                raw_char = title.strip().split()[0]
+                character_name = clean_character_name(raw_char)
+            elif ":" in title:
+                raw_char = title.split(":")[0].strip().split()[0]
+                character_name = clean_character_name(raw_char)
+
+        if character_name:
             from amazon_search import clean_character_name
-            character_name = clean_character_name(raw_char)
+            character_name = clean_character_name(character_name)
             if character_name:
-                logger.info(f"[Main] Character extracted from title: '{character_name}'")
+                logger.info(f"[Main] Character extracted: '{character_name}'")
 
 
         # 4. Route to correct Pinterest board + get genre

@@ -186,8 +186,20 @@ _ANIME_GENRE = {
     "re creators":                              "fantasy",
     "tower of god":                             "fantasy",
     "god of high school":                       "fantasy",
-    "noblesse":                                 "fantasy",
     "the misfit of demon king academy":         "fantasy",
+    # ── Fate Series ────────────────────────────────────────────────────────
+    "fate":                                     "fantasy",
+    "fate/stay night":                          "fantasy",
+    "fatestay night":                           "fantasy",
+    "fate stay night":                          "fantasy",
+    "fate/zero":                                "fantasy",
+    "fate zero":                                "fantasy",
+    "fate/grand order":                         "fantasy",
+    "fate grand order":                         "fantasy",
+    "fate/apocrypha":                           "fantasy",
+    "heavens feel":                             "fantasy",
+    "heaven's feel":                            "fantasy",
+    "unlimited blade works":                    "fantasy",
 }
 
 

@@ -28,11 +28,20 @@ _OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
 _GEMINI_MODEL    = "gemini-1.5-flash"
 
 # Vision model fallback chain (tried in order, skip on rate-limit/error)
+# Uses openrouter/free auto-router and active free multimodal vision tiers
 _VISION_MODELS = [
-    "minimax/minimax-m3:free",          # Primary   — free, vision capable
-    "google/gemma-4-31b-it:free",       # Fallback1 — free Google model
-    "google/gemma-4-26b-a4b-it:free",   # Fallback2 — free Google model
+    "openrouter/free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "google/gemma-4-31b-it:free",
 ]
+
+_last_character_name = ""
+
+def get_last_character_name() -> str:
+    """Returns the most recently AI-extracted character name, or empty string."""
+    global _last_character_name
+    return _last_character_name
 
 _VISION_PROMPT = (
     "You are a Pinterest content expert specialising in anime merchandise marketing.\n"
@@ -43,7 +52,8 @@ _VISION_PROMPT = (
     "Respond ONLY with valid JSON - no markdown:\n"
     '{{\n'
     '  "anime_name": "<specific anime series name>",\n'
-    '  "title": "<punchy title max 90 chars, character name if visible, 1-2 emojis>",\n'
+    '  "character_name": "<specific character name or empty if none>",\n'
+    '  "title": "<Character Name - Catchy Hook max 90 chars, 1-2 emojis>",\n'
     '  "description": "<3-4 exciting sentences about artwork + find merch on Amazon. End with 6-8 hashtags>"\n'
     "}}\n\n"
     "Rules: title under 90 chars, description under 450 chars, hashtags at END, include #anime"
@@ -56,7 +66,8 @@ _TEXT_PROMPT = (
     "Respond ONLY with valid JSON - no markdown:\n"
     '{{\n'
     '  "anime_name": "<specific anime series name>",\n'
-    '  "title": "<punchy title max 90 chars, 1-2 emojis>",\n'
+    '  "character_name": "<specific character name or empty if none>",\n'
+    '  "title": "<Character Name - Catchy Hook max 90 chars, 1-2 emojis>",\n'
     '  "description": "<3-4 exciting sentences + Amazon merch mention + 6-8 hashtags at end>"\n'
     "}}\n"
     "Rules: title <90 chars, description <450 chars, hashtags at end, include #anime"
@@ -94,15 +105,18 @@ def _inject_link(description_body, channel_name):
 
 def _parse_ai_response(raw, channel_name):
     """Parse JSON from AI response, return (anime_name, title, description) or None."""
+    global _last_character_name
     try:
         clean = re.sub(r'^```[a-z]*\n?', '', raw.strip())
         clean = re.sub(r'\n?```$', '', clean)
         data  = json.loads(clean)
         anime_name  = data.get("anime_name", "Anime").strip()
+        character   = data.get("character_name", "").strip()
         title       = data.get("title", "").strip()[:100]
         desc_body   = data.get("description", "").strip()[:480]
         description = _inject_link(desc_body, channel_name)
-        logger.info(f"[AI] Anime: '{anime_name}' | Title: '{title}'")
+        _last_character_name = character
+        logger.info(f"[AI] Anime: '{anime_name}' | Character: '{character}' | Title: '{title}'")
         return anime_name, title, description
     except Exception as e:
         logger.warning(f"[AI] Failed to parse response: {e}")
@@ -111,20 +125,36 @@ def _parse_ai_response(raw, channel_name):
 
 def _fallback_generate(caption, channel_name):
     """Regex-based fallback. Always works, no API needed."""
+    global _last_character_name
+    _last_character_name = ""
+
+    # Try to detect known anime name from caption
+    clean_anime = "Anime"
+    try:
+        from board_router import _ANIME_GENRE
+        low_cap = (caption or "").lower()
+        for known in sorted(_ANIME_GENRE.keys(), key=len, reverse=True):
+            if known in low_cap:
+                clean_anime = known.title()
+                break
+    except Exception:
+        pass
+
     first_line  = caption.split('\n')[0] if caption else "Awesome Anime Art"
     clean_title = re.sub(r'[^\w\s\-\.]', '', first_line).strip()
-    if not clean_title:
-        clean_title = f"Anime Art from {channel_name}"
+    if not clean_title or len(clean_title) > 60:
+        clean_title = f"{clean_anime} Aesthetic Art"
+
     title = f"{clean_title} - Epic Anime Poster"
     description = (
-        f"Amazing {clean_title} artwork!\n\n"
+        f"Amazing {clean_anime} artwork!\n\n"
         "Find merchandise, figures & posters on Amazon\n"
         "##LINK_PLACEHOLDER##\n\n"
         f"Source: @{channel_name}\n"
         "#ad #affiliate #anime #animeart #manga #fanart"
     )
-    logger.info(f"[FALLBACK] Generated pin content for: {clean_title}")
-    return clean_title, title, description
+    logger.info(f"[FALLBACK] Generated pin content for anime: '{clean_anime}', title: '{title}'")
+    return clean_anime, title, description
 
 
 def _openrouter_vision(image_path, caption, channel_name, api_key):
@@ -190,9 +220,46 @@ def _openrouter_vision(image_path, caption, channel_name, api_key):
     except Exception as e:
         logger.warning(f"[VISION] Could not read image: {e}")
 
-    logger.warning("[VISION] All vision models failed, falling back.")
+    logger.warning("[VISION] All vision models failed, attempting text-based AI fallback...")
     return None
 
+
+def _openrouter_text(caption, channel_name, api_key):
+    """Text-only OpenRouter fallback when vision models fail."""
+    if not api_key:
+        return None
+    try:
+        prompt = _TEXT_PROMPT.format(caption=caption or "(no caption)", channel_name=channel_name)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://pinterest-automation-bot.onrender.com",
+            "X-Title": "Animanoizing Bot"
+        }
+        text_models = [
+            "openrouter/free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+        ]
+        for model in text_models:
+            try:
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 400
+                }
+                logger.info(f"[AI:Text] Trying model: {model}")
+                res = http_requests.post(_OPENROUTER_URL, json=payload, headers=headers, timeout=20)
+                if res.status_code == 200:
+                    raw = res.json()['choices'][0]['message']['content']
+                    result = _parse_ai_response(raw, channel_name)
+                    if result:
+                        logger.info(f"[AI:Text] Success with OpenRouter text model {model}")
+                        return result
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"[AI:Text] OpenRouter text fallback failed: {e}")
+    return None
 
 
 _gemini_client = None
@@ -229,7 +296,8 @@ def generate_pin_content(
     Priority:
       1. OpenRouter vision -- SEES the actual image (best quality, FREE)
       2. Gemini text       -- text-only (good quality)
-      3. Regex fallback    -- always works
+      3. OpenRouter text   -- text-only NLP fallback (FREE)
+      4. Regex fallback    -- always works
 
     description_template contains '##LINK_PLACEHOLDER##' for affiliate link injection.
     """
@@ -240,6 +308,11 @@ def generate_pin_content(
 
     if api_key and _GENAI_AVAILABLE:
         result = _gemini_text(caption, channel_name, api_key)
+        if result:
+            return result
+
+    if openrouter_key:
+        result = _openrouter_text(caption, channel_name, openrouter_key)
         if result:
             return result
 

@@ -52,13 +52,19 @@ _SAFE_FALLBACK_ASINS = [
 # (or real-time official PA-API lookup when configured).
 _ANIME_ASIN_MAP = {}
 
-# Words that indicate non-character titles (adjectives, generic labels)
+# Words that indicate non-character titles (adjectives, generic labels, pronouns & stop words)
 _NON_CHARACTER_WORDS = {
     "seductive", "cute", "beautiful", "dark", "hot", "sexy", "cool", "epic",
     "angry", "smiling", "sleeping", "gorgeous", "mysterious", "aesthetic",
     "stunning", "anime", "original", "wallpaper", "poster", "art", "illustration",
     "girl", "boy", "demon", "warrior", "hero", "villain", "badass", "lovely",
-    "sweet", "magic", "magical", "fantasy", "isekai", "vintage", "retro"
+    "sweet", "magic", "magical", "fantasy", "isekai", "vintage", "retro",
+    # Conversational pronouns & stop words (prevents sentences like 'That whole...' from extracting 'That')
+    "that", "this", "these", "those", "what", "when", "where", "which", "while",
+    "why", "who", "whom", "there", "here", "with", "from", "rules", "rule",
+    "whole", "dont", "does", "have", "been", "will", "would", "cost", "just",
+    "very", "some", "more", "look", "like", "after", "before", "every", "about",
+    "their", "your", "they", "them", "some", "even", "such", "never", "always"
 }
 
 

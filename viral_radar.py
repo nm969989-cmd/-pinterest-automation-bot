@@ -142,6 +142,15 @@ def detect_viral_surges(
             return candidates
 
     except Exception as e:
+        err_msg = str(e)
+        if "no such table: bridge_visits" in err_msg:
+            try:
+                from database import init_db
+                init_db()
+            except Exception:
+                pass
+            logger.debug("[ViralRadar] bridge_visits table initialized on demand.")
+            return []
         logger.error(f"[ViralRadar] detect_viral_surges error: {e}")
         return []
 

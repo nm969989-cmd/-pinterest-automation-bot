@@ -308,6 +308,28 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_imghippo_filename
             ON imghippo_posts (filename)
         """)
+
+        # ── Bridge Visits Tracking (Analytics & Viral Radar) ─────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bridge_visits (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code        TEXT NOT NULL,
+                anime_name  TEXT,
+                title       TEXT,
+                user_agent  TEXT,
+                referrer    TEXT,
+                is_pinterest INTEGER DEFAULT 0,
+                visited_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bridge_visits_code
+            ON bridge_visits (code)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bridge_visits_time
+            ON bridge_visits (visited_at)
+        """)
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
