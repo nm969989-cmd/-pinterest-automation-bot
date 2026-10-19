@@ -2184,6 +2184,13 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
         stale_note = f"\n🗑 Skipped {stale_dropped} stale pin(s) with expired CDN URLs." if stale_dropped else ""
 
+        # Pre-upload watermark check: ensure 100% clean image
+        try:
+            from watermark_inpainter import verify_and_clean
+            image_path = verify_and_clean(image_path)
+        except Exception:
+            pass
+
         pin_status = upload_to_pinterest(
             image_path=image_path,
             title=pin["title"],
@@ -2668,6 +2675,13 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
 
 
         await status_msg.edit_text("🚀 Uploading pin to Pinterest now...")
+
+        # Pre-upload watermark check: ensure 100% clean image
+        try:
+            from watermark_inpainter import verify_and_clean
+            processed_path = verify_and_clean(processed_path)
+        except Exception:
+            pass
 
         # Direct upload to Pinterest
         uploaded_ok = upload_to_pinterest(

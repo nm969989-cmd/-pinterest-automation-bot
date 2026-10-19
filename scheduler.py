@@ -183,6 +183,14 @@ def _dispatch_stock_uploads_async(image_path: str, title: str = "", caption: str
         try:
             from database import count_stock_posts_today, mark_stock_uploaded
             max_posts = int(os.getenv("STOCK_MAX_POSTS_PER_DAY", "5"))
+
+            # Pre-upload watermark check: ensure 100% clean image before stock platform upload
+            try:
+                from watermark_inpainter import verify_and_clean
+                image_path = verify_and_clean(image_path)
+            except Exception as _wm_err:
+                logger.warning(f"[Stock Dispatch] Pre-upload watermark check error (non-fatal): {_wm_err}")
+
             filename = os.path.basename(image_path)
             logger.info(f"[Stock Dispatch] Checking stock platforms for {filename} (limit: {max_posts}/day)...")
 
@@ -807,6 +815,13 @@ class PinScheduler:
                                     image_path = None
 
                             if image_path:
+                                # Pre-upload watermark check: ensure 100% clean image before Pinterest upload
+                                try:
+                                    from watermark_inpainter import verify_and_clean
+                                    image_path = verify_and_clean(image_path)
+                                except Exception as _wm_err:
+                                    logger.warning(f"[Scheduler] Pre-upload watermark check error (non-fatal): {_wm_err}")
+
                                 # Build alt_text for Pinterest SEO
                                 alt_text = (
                                     f"{pin['anime_name']} anime art poster wallpaper "

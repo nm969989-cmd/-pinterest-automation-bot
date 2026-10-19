@@ -55,6 +55,16 @@ def process_image(filepath, channel_name=None):
             
         img.save(processed_path, 'JPEG', quality=92, optimize=True)
         logger.info(f"Successfully saved full original size image to: {processed_path}")
+
+        # Inpaint and clean any Telegram channel watermarks or stamps
+        try:
+            from watermark_inpainter import clean_watermark
+            cleaned, clean_path = clean_watermark(processed_path)
+            if cleaned:
+                logger.info(f"Watermark erased from processed image: {clean_path}")
+        except Exception as _wm_err:
+            logger.warning(f"Watermark inpainter non-critical error: {_wm_err}")
+
         return processed_path
         
     except Exception as e:

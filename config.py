@@ -123,6 +123,9 @@ VIRAL_SURGE_MIN_VISITS      = int(os.getenv('VIRAL_SURGE_MIN_VISITS', 5))
 VIRAL_ALERT_COOLDOWN_HOURS  = int(os.getenv('VIRAL_ALERT_COOLDOWN_HOURS', 12))
 VIRAL_AUTO_SPINOFF          = os.getenv('VIRAL_AUTO_SPINOFF', 'false').lower() in ('true', '1', 'yes')
 
+# Telegram Watermark Cleaner & Inpainter Config (Zero Stock Rejections)
+WATERMARK_CLEANER_ENABLED = os.getenv('WATERMARK_CLEANER_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
 # Dry Run Mode — set DRY_RUN=false in .env to go live
 # When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() in ('true', '1', 'yes')

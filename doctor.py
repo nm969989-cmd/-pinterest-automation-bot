@@ -240,6 +240,15 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _hip_e:
         imghippo_status = f"🟡 Check failed ({_hip_e})"
 
+    # Watermark Cleaner & Inpainter Status (Zero Stock Rejections)
+    watermark_status = "⚪ Disabled"
+    try:
+        if getattr(config, "WATERMARK_CLEANER_ENABLED", True):
+            import cv2
+            watermark_status = f"🟢 Active (OpenCV {cv2.__version__} Telea Inpainter)"
+    except Exception as _wm_e:
+        watermark_status = f"🟡 Check failed ({_wm_e})"
+
     all_cooldowns = get_all_cooldowns()
 
     # Overall Health Verdict
@@ -278,6 +287,7 @@ def run_full_system_diagnostic() -> dict:
         "pixelfed_status": pixelfed_status,
         "freeimage_status": freeimage_status,
         "imghippo_status": imghippo_status,
+        "watermark_status": watermark_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
         "all_cooldowns": all_cooldowns,
     }
@@ -330,6 +340,7 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"{cb_section}"
         f"🌐 Integrations & Webhooks:\n"
         f"  • Make.com Webhook   : {diag['webhook_status']}\n"
+        f"  • Watermark Cleaner  : {diag.get('watermark_status', 'N/A')}\n"
         f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"
         f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
         f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}\n"
