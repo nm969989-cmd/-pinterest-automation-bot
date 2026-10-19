@@ -102,13 +102,10 @@ FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('tru
 IMGHIPPO_API_KEY       = os.getenv('IMGHIPPO_API_KEY', '').strip()
 IMGHIPPO_ENABLED       = os.getenv('IMGHIPPO_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(IMGHIPPO_API_KEY)
 
-
-
-
-
-
-
-
+# Wallhaven.cc Anime Wallpaper Platform
+WALLHAVEN_API_KEY      = os.getenv('WALLHAVEN_API_KEY', '').strip()
+WALLHAVEN_USERNAME     = os.getenv('WALLHAVEN_USERNAME', 'animizing').strip()
+WALLHAVEN_ENABLED      = os.getenv('WALLHAVEN_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(WALLHAVEN_API_KEY or WALLHAVEN_USERNAME)
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))

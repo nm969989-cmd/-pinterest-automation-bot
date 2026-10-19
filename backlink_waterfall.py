@@ -2,14 +2,15 @@
 backlink_waterfall.py — Backlink SEO Waterfall & Dual-Anchor Syndication Engine
 ================================================================================
 Boosts Google and Bing search indexing and domain authority for Pinterest pins
-by syndicating high-authority backlinks across all 7 connected platforms:
+by syndicating high-authority backlinks across all 8 connected platforms:
   1. Bluesky (DA 90+)
   2. Mastodon (DA 85+)
   3. Raindrop.io (DA 80+)
   4. Are.na (DA 75+)
   5. Pixelfed (DA 75+)
-  6. Freeimage.host (DA 65+)
-  7. Imghippo (DA 60+)
+  6. Wallhaven.cc (DA 75+)
+  7. Freeimage.host (DA 65+)
+  8. Imghippo (DA 60+)
 
 Dual-Anchor Architecture:
   - Anchor 1 (Authority / Search Indexing): Backlinks to the live Pinterest Pin or
@@ -181,7 +182,7 @@ def record_waterfall_backlinks(
 
     platform_keys = [
         "bluesky", "mastodon", "raindrop", "arena",
-        "pixelfed", "freeimage", "imghippo"
+        "pixelfed", "wallhaven", "freeimage", "imghippo"
     ]
 
     for plat in platform_keys:

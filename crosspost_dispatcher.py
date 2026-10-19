@@ -30,8 +30,8 @@ from circuit_breaker import is_cooling_down, trip_breaker
 logger = get_logger(__name__)
 
 # Maximum workers for parallel crossposting.
-# 7 platforms — one thread each. Bounded to avoid overwhelming the network.
-_MAX_CROSSPOST_WORKERS = 7
+# 8 platforms — one thread each. Bounded to avoid overwhelming the network.
+_MAX_CROSSPOST_WORKERS = 8
 
 
 def _check_breaker(platform: str, results: dict) -> bool:
@@ -262,6 +262,31 @@ def _post_imghippo(filename, title, anime_name, link, public_img_url, original_i
         return False, ""
 
 
+def _post_wallhaven(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
+    """Post / syndicate to Wallhaven.cc — returns (ok, url)."""
+    if not getattr(config, "WALLHAVEN_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("wallhaven", results):
+        return results.get("wallhaven_ok"), results.get("wallhaven_url", "")
+    try:
+        from wallhaven_uploader import post_to_wallhaven
+        from database import mark_wallhaven_posted, is_wallhaven_posted
+        username = getattr(config, "WALLHAVEN_USERNAME", "animizing")
+        profile_url = f"https://wallhaven.cc/user/{username}"
+        if not is_wallhaven_posted(filename):
+            wh_url = post_to_wallhaven(image_path=image_path, title=title, anime_name=anime_name, affiliate_url=link)
+            if wh_url:
+                mark_wallhaven_posted(filename, post_url=wh_url, title=title, image_url=public_img_url or original_image_url)
+                return True, wh_url
+            return False, profile_url
+        return True, profile_url
+    except Exception as e:
+        logger.warning(f"[Crosspost] Wallhaven error: {e}")
+        _handle_platform_error("wallhaven", e)
+        return False, ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> dict:
@@ -351,6 +376,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "pixelfed_ok": None,  "pixelfed_url": "",
         "freeimage_ok": None, "freeimage_url": "",
         "imghippo_ok": None,  "imghippo_url": "",
+        "wallhaven_ok": None, "wallhaven_url": "",
     }
 
     # ── 2. Parallel platform posts ────────────────────────────────────────────
@@ -368,6 +394,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "pixelfed":  lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
         "freeimage": lambda: _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
         "imghippo":  lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
+        "wallhaven": lambda: _post_wallhaven(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
     }
 
     with ThreadPoolExecutor(max_workers=_MAX_CROSSPOST_WORKERS, thread_name_prefix="crosspost") as executor:

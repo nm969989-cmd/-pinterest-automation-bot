@@ -421,6 +421,7 @@ class PinScheduler:
                             pixelfed_ok=None, pixelfed_url: str = "",
                             freeimage_ok=None, freeimage_url: str = "",
                             imghippo_ok=None, imghippo_url: str = "",
+                            wallhaven_ok=None, wallhaven_url: str = "",
                             pin_live: bool = True,
                             image_url: str = ""):
         """
@@ -459,6 +460,8 @@ class PinScheduler:
                 freeimage_url=freeimage_url,
                 imghippo_ok=imghippo_ok,
                 imghippo_url=imghippo_url,
+                wallhaven_ok=wallhaven_ok,
+                wallhaven_url=wallhaven_url,
                 pin_live=pin_live,
                 image_url=image_url,
             )
@@ -894,6 +897,8 @@ class PinScheduler:
                                             freeimage_url=cp_res.get("freeimage_url", ""),
                                             imghippo_ok=cp_res.get("imghippo_ok"),
                                             imghippo_url=cp_res.get("imghippo_url", ""),
+                                            wallhaven_ok=cp_res.get("wallhaven_ok"),
+                                            wallhaven_url=cp_res.get("wallhaven_url", ""),
                                         )
                                     except Exception as _notify_err:
                                         # Keep the posting slot (and stock dispatch below)

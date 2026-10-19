@@ -165,6 +165,12 @@ def save_cloud_state() -> bool:
                     "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 25"
                 ).fetchall()
             ]
+            wallhaven = [
+                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+                for r in conn.execute(
+                    "SELECT filename, post_url, title, image_url, posted_at FROM wallhaven_posts ORDER BY id DESC LIMIT 25"
+                ).fetchall()
+            ]
 
         payload = {
             "processed_posts": posts,
@@ -179,6 +185,7 @@ def save_cloud_state() -> bool:
             "pixelfed_posts":  pixelfed,
             "freeimage_posts": freeimage,
             "imghippo_posts":  imghippo,
+            "wallhaven_posts": wallhaven,
         }
 
         # ── Budget Enforcer: Guarantee strictly under 90KB (JSONBin free limit = 100KB) ──
@@ -188,7 +195,7 @@ def save_cloud_state() -> bool:
         if payload_bytes > 90 * 1024:
             logger.info(f"[JSONBin] Payload size ({payload_bytes / 1024:.1f}KB) exceeds 90KB target. Trimming non-essential logs...")
             # Tier 1 pruning: reduce secondary logs to 5 items each
-            for k in ["arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts", "pixelfed_posts", "freeimage_posts", "imghippo_posts"]:
+            for k in ["arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts", "pixelfed_posts", "freeimage_posts", "imghippo_posts", "wallhaven_posts"]:
                 payload[k] = payload[k][:5]
             payload["uploaded_files"] = payload["uploaded_files"][:30]
             payload["tracked_links"]  = payload["tracked_links"][:30]
@@ -377,6 +384,18 @@ def restore_db_from_cloud():
                       h.get("title",""), h.get("image_url",""),
                       h.get("posted_at") or "2000-01-01 00:00:00")
                      for h in imghippo_posts if h.get("filename")]
+                )
+
+            # Restore Wallhaven posts
+            wallhaven_posts = state.get("wallhaven_posts", [])
+            if wallhaven_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO wallhaven_posts "
+                    "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                    [(w.get("filename",""), w.get("post_url",""),
+                      w.get("title",""), w.get("image_url",""),
+                      w.get("posted_at") or "2000-01-01 00:00:00")
+                     for w in wallhaven_posts if w.get("filename")]
                 )
             conn.commit()
 

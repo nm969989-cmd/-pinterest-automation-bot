@@ -150,6 +150,7 @@ def get_post_confirmation_keyboard(
     pixelfed_url: str = "",
     freeimage_url: str = "",
     imghippo_url: str = "",
+    wallhaven_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
     if not _TG_AVAILABLE:
@@ -223,6 +224,14 @@ def get_post_confirmation_keyboard(
             btn_txt = "🦛 View on Imghippo" if (imghippo_url and "/files/" in imghippo_url) else "🦛 Imghippo Gallery"
             if _is_valid_http_url(hippo_link):
                 platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
+
+        if getattr(config, "WALLHAVEN_ENABLED", False):
+            wh_user = getattr(config, "WALLHAVEN_USERNAME", "animizing")
+            fallback_wh = f"https://wallhaven.cc/user/{wh_user}"
+            wh_link = wallhaven_url if _is_valid_http_url(wallhaven_url) else fallback_wh
+            btn_txt = "🌌 View on Wallhaven" if (wallhaven_url and "/w/" in wallhaven_url) else "🌌 Wallhaven Art"
+            if _is_valid_http_url(wh_link):
+                platform_btns.append(InlineKeyboardButton(btn_txt, url=wh_link))
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -304,7 +313,9 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/freeimage      - Freeimage.host API stats & link\n"
         "/freeimage_test - Post test photo to Freeimage.host\n"
         "/imghippo       - Imghippo API stats & link\n"
-        "/imghippo_test  - Post test photo to Imghippo\n\n"
+        "/imghippo_test  - Post test photo to Imghippo\n"
+        "/wallhaven      - Wallhaven.cc stats, profile & collections\n"
+        "/wallhaven_search - Search 4K anime wallpapers on Wallhaven\n\n"
         "--- POSTING ---\n"
         "/post_now       - Force-post next pin immediately\n"
         "/scrape         - Scrape channels for new pins immediately\n"
@@ -2234,7 +2245,8 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                     f"🐘 Mastodon {_platform_icon(cp_res.get('mastodon_ok'))}  "
                     f"📷 Pixelfed  {_platform_icon(cp_res.get('pixelfed_ok'))}  "
                     f"🖼️ Freeimage {_platform_icon(cp_res.get('freeimage_ok'))}\n"
-                    f"🦛 Imghippo  {_platform_icon(cp_res.get('imghippo_ok'))}"
+                    f"🦛 Imghippo  {_platform_icon(cp_res.get('imghippo_ok'))}  "
+                    f"🌌 Wallhaven {_platform_icon(cp_res.get('wallhaven_ok'))}"
                 )
 
             target_url = get_tracked_target_url(pin["link"])
@@ -2262,6 +2274,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 pixelfed_url=cp_res.get("pixelfed_url", ""),
                 freeimage_url=cp_res.get("freeimage_url", ""),
                 imghippo_url=cp_res.get("imghippo_url", ""),
+                wallhaven_url=cp_res.get("wallhaven_url", ""),
             )
             sent_photo = False
             if image_path and os.path.exists(image_path):
@@ -2968,6 +2981,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              pixelfed_ok=None, pixelfed_url: str = "",
                              freeimage_ok=None, freeimage_url: str = "",
                              imghippo_ok=None, imghippo_url: str = "",
+                             wallhaven_ok=None, wallhaven_url: str = "",
                              pin_live: bool = True,
                              image_url: str = ""):
     """
@@ -3001,7 +3015,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     cross_lines = ""
     if (arena_ok is not None or bluesky_ok is not None or raindrop_ok is not None
             or mastodon_ok is not None or pixelfed_ok is not None
-            or freeimage_ok is not None or imghippo_ok is not None):
+            or freeimage_ok is not None or imghippo_ok is not None
+            or wallhaven_ok is not None):
         cross_lines = (
             f"\n{'─' * 26}\n"
             f"🔮 Are.na    {_platform_icon(arena_ok)}  "
@@ -3010,7 +3025,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             f"🐘 Mastodon {_platform_icon(mastodon_ok)}  "
             f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}  "
             f"🖼️ Freeimage {_platform_icon(freeimage_ok)}\n"
-            f"🦛 Imghippo  {_platform_icon(imghippo_ok)}"
+            f"🦛 Imghippo  {_platform_icon(imghippo_ok)}  "
+            f"🌌 Wallhaven {_platform_icon(wallhaven_ok)}"
         )
 
     _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Make.com (unverified)"
@@ -3050,6 +3066,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         pixelfed_url=pixelfed_url,
         freeimage_url=freeimage_url,
         imghippo_url=imghippo_url,
+        wallhaven_url=wallhaven_url,
     )
 
     async def _send():
@@ -3454,6 +3471,15 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             imghippo_status = "🟢 ACTIVE (API Key Verified)" if verify_imghippo_token() else "🟡 REACHABLE"
         imghippo_st = get_imghippo_stats(today_str)
 
+        # Wallhaven status
+        wallhaven_status = "DISABLED (WALLHAVEN_ENABLED=false)"
+        from config import WALLHAVEN_ENABLED, WALLHAVEN_USERNAME
+        if WALLHAVEN_ENABLED:
+            from wallhaven_uploader import verify_wallhaven_token
+            wallhaven_status = "🟢 ACTIVE (Account & API Reachable)" if verify_wallhaven_token() else "🟡 REACHABLE"
+        from database import get_wallhaven_stats
+        wallhaven_st = get_wallhaven_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -3491,8 +3517,15 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {imghippo_status}\n"
             f"  • Posts: {imghippo_st['today']} today  |  {imghippo_st['total']} all-time\n"
             f"  • Link: https://www.imghippo.com/dashboard\n\n"
+            f"🌌 Wallhaven.cc:\n"
+            f"  • Status: {wallhaven_status}\n"
+            f"  • Username: @{WALLHAVEN_USERNAME}\n"
+            f"  • Posts: {wallhaven_st['today']} today  |  {wallhaven_st['total']} all-time\n"
+            f"  • Link: https://wallhaven.cc/user/{WALLHAVEN_USERNAME}\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
+            f"  /wallhaven — Wallhaven account stats & link\n"
+            f"  /wallhaven_search — Search 4K anime wallpapers\n"
             f"  /arena_test — Test Are.na block upload\n"
             f"  /bluesky_test — Test Bluesky image post\n"
             f"  /raindrop_test — Test Raindrop bookmark upload\n"
@@ -4009,6 +4042,111 @@ async def cmd_imghippo_test(update: "Update", context: "ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"Imghippo test error: {e}")
 
 
+async def cmd_wallhaven(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Wallhaven account status, profile & collection links, and upload stats."""
+    if not _is_admin(update): return
+    try:
+        from wallhaven_uploader import get_wallhaven_info, verify_wallhaven_token
+        from database import get_wallhaven_stats
+        import config
+        enabled_str = "ENABLED" if getattr(config, "WALLHAVEN_ENABLED", False) else "DISABLED (set WALLHAVEN_ENABLED=true)"
+        valid = verify_wallhaven_token()
+        info = get_wallhaven_info()
+        stats = get_wallhaven_stats()
+
+        recent_lines = []
+        for i, r in enumerate(stats.get("recent", [])[:3], 1):
+            recent_lines.append(f"  {i}. {r['title'][:30]} -> {r['post_url']}")
+        recent_str = "\n".join(recent_lines) if recent_lines else "  No syndications recorded yet."
+
+        btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🌌 Wallhaven Profile", url=info["profile_url"]),
+            InlineKeyboardButton("🖼️ Upload Art", url=info["upload_url"]),
+        ]])
+
+        msg = (
+            f"🌌 Wallhaven.cc Status: {enabled_str}\n"
+            f"{'═' * 34}\n"
+            f"Username  : @{info['username']}\n"
+            f"API Status: {'🟢 Verified & Connected' if valid else '🟡 Reachable'}\n"
+            f"API Key   : {info['api_key_masked'] or 'Not Configured'}\n"
+            f"Profile   : {info['profile_url']}\n"
+            f"Authority : {info.get('domain_authority', 'DA 75+')}\n\n"
+            f"📊 Syndication Statistics:\n"
+            f"  • Today    : {stats['today']} posts\n"
+            f"  • All-Time : {stats['total']} posts\n\n"
+            f"Recent Showcase:\n{recent_str}\n\n"
+            f"👉 Use /wallhaven_search <anime> to find 4K wallpapers & verified tags.\n"
+            f"👉 Use /set_wallhaven_key <key> to update API key."
+        )
+        await update.message.reply_text(msg, reply_markup=btn)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_wallhaven error: {e}", exc_info=True)
+        await update.message.reply_text(f"Wallhaven error: {e}")
+
+
+async def cmd_wallhaven_search(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Search Wallhaven for 4K anime wallpapers and community tags."""
+    if not _is_admin(update): return
+    query = " ".join(context.args).strip() if context and context.args else ""
+    if not query:
+        await update.message.reply_text(
+            "ℹ️ Usage: /wallhaven_search <anime or character>\n"
+            "Example: /wallhaven_search Gojo Satoru\n"
+            "Example: /wallhaven_search Demon Slayer"
+        )
+        return
+
+    await update.message.reply_text(f"🔍 Searching Wallhaven for 4K '{query}' wallpapers...")
+    try:
+        from wallhaven_uploader import search_anime_wallpapers, fetch_wallhaven_tags
+        wallpapers = search_anime_wallpapers(query=query, categories="010", purity="100", sorting="toplist")
+        if not wallpapers:
+            await update.message.reply_text(f"No wallpapers found on Wallhaven for '{query}'.")
+            return
+
+        tags = fetch_wallhaven_tags(query)
+        tags_str = ", ".join(tags[:8]) if tags else "anime, anime art, wallpaper"
+
+        lines = [f"🌌 Wallhaven Results for '{query}' (Found {len(wallpapers)}):\n{'─' * 34}"]
+        buttons = []
+        for i, wp in enumerate(wallpapers[:3], 1):
+            wp_id = wp.get("id", "")
+            res = wp.get("resolution", "")
+            url = wp.get("url", f"https://wallhaven.cc/w/{wp_id}")
+            lines.append(f"{i}. Resolution: {res} | Ratio: {wp.get('ratio', '16:9')} | ID: {wp_id}")
+            buttons.append([InlineKeyboardButton(f"🖼️ View #{i} ({res})", url=url)])
+
+        lines.append(f"\n🏷️ Recommended Community Tags:\n#{tags_str.replace(', ', ' #')}")
+
+        await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_wallhaven_search error: {e}", exc_info=True)
+        await update.message.reply_text(f"Wallhaven search error: {e}")
+
+
+async def cmd_set_wallhaven_key(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Update Wallhaven API key directly in runtime and database metadata."""
+    if not _is_admin(update): return
+    new_key = context.args[0].strip() if context and context.args else ""
+    if not new_key:
+        await update.message.reply_text("ℹ️ Usage: /set_wallhaven_key <32-character API key>")
+        return
+
+    try:
+        from database import set_metadata
+        set_metadata("wallhaven_api_key", new_key)
+        import config
+        config.WALLHAVEN_API_KEY = new_key
+        config.WALLHAVEN_ENABLED = True
+        await update.message.reply_text(
+            f"✅ Wallhaven API key updated successfully!\n"
+            f"Key: {new_key[:6]}...{new_key[-4:] if len(new_key) > 10 else ''}\n"
+            f"Use /wallhaven to verify connectivity."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Failed to update key: {e}")
+
 
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
@@ -4159,6 +4297,11 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("imghippo",        cmd_imghippo),
             ("imghippo_test",   cmd_imghippo_test),
             ("imghippotest",    cmd_imghippo_test),
+            ("wallhaven",          cmd_wallhaven),
+            ("wallhaven_search",   cmd_wallhaven_search),
+            ("wallhavensearch",    cmd_wallhaven_search),
+            ("set_wallhaven_key",  cmd_set_wallhaven_key),
+            ("setwallhavenkey",    cmd_set_wallhaven_key),
             ("verify_public",      cmd_verify_public),
             ("ghostcheck",         cmd_verify_public),
             ("bridge_url",         cmd_bridge_url),
@@ -4245,6 +4388,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("freeimage_test","Post test photo to Freeimage.host"),
                 BotCommand("imghippo",      "Imghippo profile stats & link"),
                 BotCommand("imghippo_test", "Post test photo to Imghippo"),
+                BotCommand("wallhaven",     "Wallhaven profile & collection stats"),
+                BotCommand("wallhaven_search", "Search 4K anime wallpapers on Wallhaven"),
                 BotCommand("verify_public",      "🔍 Check if a Pinterest pin is visible to the public"),
                 BotCommand("bridge_url",          "🌉 Get bridge landing page URL for a pin code"),
                 BotCommand("pinanalytics",        "📈 Pinterest impressions, saves & clicks report"),
