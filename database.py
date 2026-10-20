@@ -102,13 +102,16 @@ def init_db():
         # ── Affiliate Link Tracking Tables ──────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tracked_links (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                code        TEXT UNIQUE,
-                target_url  TEXT,
-                anime_name  TEXT,
-                title       TEXT,
-                image_url   TEXT DEFAULT '',
-                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                code            TEXT UNIQUE,
+                target_url      TEXT,
+                anime_name      TEXT,
+                title           TEXT,
+                image_url       TEXT DEFAULT '',
+                last_checked_at TIMESTAMP,
+                is_healed       INTEGER DEFAULT 0,
+                heal_count      INTEGER DEFAULT 0,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.execute("""
@@ -124,11 +127,13 @@ def init_db():
             )
         """)
 
-        # Add image_url to tracked_links if upgrading from older schema
-        try:
-            conn.execute("ALTER TABLE tracked_links ADD COLUMN image_url TEXT DEFAULT ''")
-        except Exception:
-            pass
+        # Add columns to tracked_links if upgrading from older schema
+        for col in ["image_url TEXT DEFAULT ''", "last_checked_at TIMESTAMP",
+                    "is_healed INTEGER DEFAULT 0", "heal_count INTEGER DEFAULT 0"]:
+            try:
+                conn.execute(f"ALTER TABLE tracked_links ADD COLUMN {col}")
+            except Exception:
+                pass
 
         # Add merchant to link_clicks if upgrading from older schema
         try:
@@ -220,6 +225,14 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tracked_code
             ON tracked_links (code)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tracked_healed
+            ON tracked_links (is_healed)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tracked_checked
+            ON tracked_links (last_checked_at)
         """)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_clicks_time
@@ -1895,11 +1908,106 @@ def update_tracked_link_target(code: str, new_target_url: str) -> bool:
     with _get_conn() as conn:
         cursor = conn.execute("""
             UPDATE tracked_links
-            SET target_url = ?
+            SET target_url = ?,
+                is_healed = 1,
+                heal_count = COALESCE(heal_count, 0) + 1,
+                last_checked_at = CURRENT_TIMESTAMP
             WHERE code = ?
         """, (new_target_url, code))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def mark_link_health(code: str, is_healthy: bool, new_target_url: str = None) -> bool:
+    """
+    Records the audit result for a tracked link.
+    If new_target_url is given, updates destination and increments heal_count.
+    Otherwise simply updates last_checked_at timestamp.
+    """
+    with _get_conn() as conn:
+        if new_target_url:
+            cursor = conn.execute("""
+                UPDATE tracked_links
+                SET target_url = ?,
+                    is_healed = 1,
+                    heal_count = COALESCE(heal_count, 0) + 1,
+                    last_checked_at = CURRENT_TIMESTAMP
+                WHERE code = ?
+            """, (new_target_url, code))
+        else:
+            cursor = conn.execute("""
+                UPDATE tracked_links
+                SET last_checked_at = CURRENT_TIMESTAMP
+                WHERE code = ?
+            """, (code,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_top_priority_links_to_heal(limit: int = 25) -> list[dict]:
+    """
+    Returns links prioritized by popularity (most clicks) and audit staleness.
+    High-traffic links with dead products get repaired first to maximize saved revenue.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT t.code, t.target_url, t.anime_name, t.title, t.image_url,
+                   t.last_checked_at, t.is_healed, t.heal_count,
+                   COUNT(c.id) AS click_count
+            FROM tracked_links t
+            LEFT JOIN link_clicks c ON t.code = c.code
+            GROUP BY t.id
+            ORDER BY
+                click_count DESC,
+                CASE WHEN t.last_checked_at IS NULL THEN 0 ELSE 1 END ASC,
+                t.last_checked_at ASC,
+                t.id DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+    return [
+        {
+            "code": r[0],
+            "target_url": r[1],
+            "anime_name": r[2] or "Anime",
+            "title": r[3] or "Anime Merch",
+            "image_url": r[4] or "",
+            "last_checked_at": r[5],
+            "is_healed": bool(r[6]),
+            "heal_count": r[7] or 0,
+            "click_count": r[8] or 0,
+        }
+        for r in rows
+    ]
+
+
+def get_link_healing_stats() -> dict:
+    """
+    Returns aggregated metrics on link health and autonomous healing activity.
+    """
+    with _get_conn() as conn:
+        total_links = conn.execute("SELECT COUNT(*) FROM tracked_links").fetchone()[0]
+        healed_links = conn.execute("SELECT COUNT(*) FROM tracked_links WHERE is_healed = 1").fetchone()[0]
+        total_heals = conn.execute("SELECT COALESCE(SUM(heal_count), 0) FROM tracked_links").fetchone()[0]
+        checked_links = conn.execute("SELECT COUNT(*) FROM tracked_links WHERE last_checked_at IS NOT NULL").fetchone()[0]
+        top_healed = conn.execute("""
+            SELECT code, anime_name, title, target_url, heal_count
+            FROM tracked_links
+            WHERE is_healed = 1
+            ORDER BY heal_count DESC, last_checked_at DESC
+            LIMIT 5
+        """).fetchall()
+
+    return {
+        "total_links": total_links,
+        "healed_links": healed_links,
+        "total_heals": total_heals,
+        "checked_links": checked_links,
+        "top_healed": [
+            {"code": r[0], "anime": r[1], "title": r[2], "target_url": r[3], "heals": r[4]}
+            for r in top_healed
+        ]
+    }
 
 
 def get_tracked_target_url(link_or_code: str) -> str:

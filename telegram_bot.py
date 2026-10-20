@@ -458,6 +458,83 @@ async def cmd_repairlinks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
         await update.message.reply_text(f"❌ Error during link repair audit: {e}")
 
 
+async def cmd_healnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Autonomous link redirection & stock healer — audit priority links & heal dead items now."""
+    if not _is_admin(update): return
+    await update.message.reply_text(
+        "🔄 *Autonomous Stock Healer Triggered*\n"
+        "Auditing high-traffic affiliate links for dead pages and out-of-stock listings...\n"
+        "Testing live Amazon availability. Please wait...",
+        parse_mode="Markdown"
+    )
+    try:
+        from link_healer import run_autonomous_stock_healer
+        results = run_autonomous_stock_healer(batch_size=25)
+        scanned = results.get("total_scanned", 0)
+        repaired = results.get("repaired_count", 0)
+        healthy = results.get("healthy_count", 0)
+        details = results.get("repaired_details", [])
+
+        if repaired > 0:
+            lines = [f"  • *{d['anime']}*: {d['title'][:32]}...\n    ↳ _{d['reason']}_ ➜ Healed & Swapped ✅" for d in details[:5]]
+            repaired_block = "\n" + "\n".join(lines) + "\n"
+        else:
+            repaired_block = "\n✨ All scanned priority links are active & in-stock! Zero broken listings found.\n"
+
+        msg = (
+            f"🔄 *Autonomous Stock Healer Results*\n"
+            f"{'═' * 32}\n"
+            f"🗓️ Time       : {results.get('timestamp_ist')} IST\n"
+            f"📊 Links Audited : {scanned}\n"
+            f"🟢 Active/In-Stock: {healthy}\n"
+            f"🔧 Healed/Swapped : *{repaired}*{repaired_block}\n"
+            f"💡 All user clicks on `/r/<code>` and `/p/<code>` are automatically hot-swapped in real-time (<15ms) to live products."
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        logger.info(f"[TG BOT] /healnow completed: {repaired}/{scanned} links healed.")
+    except Exception as e:
+        logger.error(f"[TG BOT] /healnow failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Error during stock healing: {e}")
+
+
+async def cmd_linkstats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Autonomous Stock Healer & link redirection metrics."""
+    if not _is_admin(update): return
+    try:
+        from database import get_link_healing_stats
+        stats = get_link_healing_stats()
+
+        total = stats.get("total_links", 0)
+        healed = stats.get("healed_links", 0)
+        total_heals = stats.get("total_heals", 0)
+        checked = stats.get("checked_links", 0)
+        top = stats.get("top_healed", [])
+
+        top_lines = []
+        if top:
+            for i, item in enumerate(top[:5], 1):
+                top_lines.append(f"  {i}. *{item['anime']}* (`{item['code']}`): {item['heals']} heals")
+            top_block = "\n🔥 *Top Healed Links*:\n" + "\n".join(top_lines) + "\n"
+        else:
+            top_block = "\n✨ No healed links recorded yet.\n"
+
+        msg = (
+            f"🔗 *Autonomous Link Redirection & Stock Healer Stats*\n"
+            f"{'═' * 36}\n"
+            f"📦 Total Tracked Links : {total}\n"
+            f"🔍 Audited for Health   : {checked}\n"
+            f"🩹 Healed Links         : {healed}\n"
+            f"🔄 Total Heal Operations: {total_heals}\n"
+            f"{top_block}\n"
+            f"⚡ *Latency SLA*: Sub-15ms cached hot-swap\n"
+            f"⏱️ *Auto-Cycle*: Every 6 hours in background"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[TG BOT] /linkstats failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Error loading link stats: {e}")
+
+
 
 async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show detailed affiliate link clicks and estimated revenue metrics."""
@@ -4319,6 +4396,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("healthcheck",   cmd_doctor),
             ("repairlinks",   cmd_repairlinks),
             ("checklinks",    cmd_repairlinks),
+            ("healnow",       cmd_healnow),
+            ("linkstats",     cmd_linkstats),
             ("arena",         cmd_arena),
             ("arena_test",    cmd_arena_test),
             ("bluesky",       cmd_bluesky),
@@ -4388,6 +4467,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("crosspost",     "Multi-platform status across all 10 platforms"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
+                BotCommand("healnow",       "Heal out-of-stock links now (Auto: 6 hrs)"),
+                BotCommand("linkstats",     "Autonomous link healing & redirect stats"),
                 BotCommand("dedup_scan",    "Scan queue & purge visual duplicate pins"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),

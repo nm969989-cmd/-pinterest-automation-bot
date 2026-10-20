@@ -657,6 +657,13 @@ class PinScheduler:
             except Exception as _radar_err:
                 logger.debug(f"[Scheduler] Viral radar check error (non-critical): {_radar_err}")
 
+            # ── Autonomous Dynamic Link Redirection & Stock Healer (every 6h) ─
+            try:
+                from link_healer import check_and_run_autonomous_healer_cycle
+                check_and_run_autonomous_healer_cycle()
+            except Exception as _healer_err:
+                logger.debug(f"[Scheduler] Autonomous stock healer check error (non-critical): {_healer_err}")
+
             # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
             jittered_times = _get_jittered_times_utc()

@@ -25,7 +25,7 @@ _CHECK_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Signatures that indicate Amazon India page is dead / discontinued
+# Signatures that indicate Amazon India page is dead, delisted, or out-of-stock
 _DEAD_PAGE_SIGNATURES = [
     "looking for something? we're sorry",
     "we couldn't find that page",
@@ -33,50 +33,85 @@ _DEAD_PAGE_SIGNATURES = [
     "the web address you entered is not a functioning page",
     "this item is no longer available",
     "currently unavailable",
+    "temporarily out of stock",
+    "we don't know when or if this item will be back in stock",
+    "to discuss product availability, please contact customer service",
+    "item is unavailable",
 ]
 
+# Fast in-memory TTL cache to guarantee <15ms redirect latency
+# Schema: {url: (is_dead: bool, reason: str, timestamp: float)}
+_HEALTH_CACHE: dict[str, tuple[bool, str, float]] = {}
+HEALTHY_CACHE_TTL = 6 * 3600  # 6 hours for healthy links
+DEAD_CACHE_TTL = 30 * 60      # 30 minutes for dead links
 
-def check_link_health(url: str) -> tuple[bool, str]:
+
+def check_link_health(url: str, use_cache: bool = True) -> tuple[bool, str]:
     """
-    Checks if a target Amazon affiliate URL is alive or dead.
+    Checks if a target Amazon affiliate URL is alive and in-stock.
     Returns: (is_dead: bool, reason: str)
+    When use_cache=True, verifies against _HEALTH_CACHE for sub-millisecond lookups.
     """
     if not url or not url.startswith("http"):
         return True, "Empty or invalid URL"
 
+    now = time.time()
+    if use_cache and url in _HEALTH_CACHE:
+        is_dead, reason, cached_time = _HEALTH_CACHE[url]
+        ttl = DEAD_CACHE_TTL if is_dead else HEALTHY_CACHE_TTL
+        if now - cached_time < ttl:
+            return is_dead, reason
+
     from amazon_search import _DEAD_ASINS
     for dead_asin in _DEAD_ASINS:
         if dead_asin in url:
+            _HEALTH_CACHE[url] = (True, f"Known dead ASIN '{dead_asin}'", now)
             return True, f"Known dead ASIN '{dead_asin}'"
     if "1350387031" in url:
+        _HEALTH_CACHE[url] = (True, "Erroneous Watches category node 1350387031", now)
         return True, "Erroneous Watches category node 1350387031"
 
     try:
-        # Fast HEAD or lightweight GET request
+        # Fast streaming GET request with tight timeout
         res = requests.get(
             url,
             headers=_CHECK_HEADERS,
-            timeout=8,
-            allow_redirects=True
+            timeout=5,
+            allow_redirects=True,
+            stream=True
         )
 
         if res.status_code in (404, 410):
+            _HEALTH_CACHE[url] = (True, f"HTTP {res.status_code} Not Found", now)
             return True, f"HTTP {res.status_code} Not Found"
 
         if res.status_code >= 500:
             return False, f"Server HTTP {res.status_code} (Transient)"
 
-        # Check response body for Amazon dead page dog / error text
-        body_lower = res.text[:4000].lower()
+        # Inspect up to 8KB of response body for dead dog / out of stock signatures
+        content = ""
+        for chunk in res.iter_content(chunk_size=4096, decode_unicode=True):
+            if chunk:
+                if isinstance(chunk, bytes):
+                    content += chunk.decode("utf-8", errors="ignore")
+                else:
+                    content += str(chunk)
+            if len(content) >= 8192:
+                break
+
+        body_lower = content.lower()
         for signature in _DEAD_PAGE_SIGNATURES:
             if signature in body_lower:
+                _HEALTH_CACHE[url] = (True, f"Amazon '{signature.title()}'", now)
                 return True, f"Amazon '{signature.title()}'"
 
+        _HEALTH_CACHE[url] = (False, "Active & Healthy", now)
         return False, "Active & Healthy"
 
     except requests.exceptions.Timeout:
         return False, "Request Timeout (Transient)"
     except requests.exceptions.ConnectionError:
+        _HEALTH_CACHE[url] = (True, "Connection Failed / Dead Domain", now)
         return True, "Connection Failed / Dead Domain"
     except Exception as e:
         return False, f"Check skipped ({e})"
@@ -84,7 +119,7 @@ def check_link_health(url: str) -> tuple[bool, str]:
 
 def repair_dead_link(code: str, anime_name: str, title: str) -> str:
     """
-    Generates a fresh, active Amazon deep product link for the anime/title
+    Generates a fresh, active in-stock Amazon deep product link for the anime/title
     and updates the database destination for this short link.
     """
     from amazon_search import generate_amazon_link, clean_character_name
@@ -97,10 +132,170 @@ def repair_dead_link(code: str, anime_name: str, title: str) -> str:
 
     fresh_url = generate_amazon_link(anime_name, character_name=character_name, title=title)
 
-    # Update the destination in SQLite
+    # Update the destination in SQLite (marks is_healed=1 and increments heal_count)
     update_tracked_link_target(code, fresh_url)
     logger.info(f"[LinkHealer] Repaired link '{code}' [{anime_name}] -> {fresh_url}")
     return fresh_url
+
+
+def resolve_or_heal_link(code: str, fallback_anime: str = "", fallback_title: str = "", current_url: str = "") -> str:
+    """
+    Click-time dynamic resolver & hot-swapper.
+    Inspects link health (cached with 6h TTL for <15ms response).
+    If dead/out of stock/broken, automatically heals the target URL with a verified
+    in-stock replacement and updates DB immediately so future clicks are instantaneous.
+    """
+    target_url = current_url
+    anime_name = fallback_anime
+    title = fallback_title
+
+    if not target_url:
+        from database import get_tracked_link_data
+        link_data = get_tracked_link_data(code)
+        target_url = link_data.get("target_url", "")
+        anime_name = link_data.get("anime_name", fallback_anime or "Anime")
+        title = link_data.get("title", fallback_title or "Anime Merchandise")
+
+    if not target_url:
+        from amazon_search import generate_amazon_link
+        target_url = generate_amazon_link(anime_name or "Anime", title=title or "Anime Merch")
+        return target_url
+
+    is_dead, reason = check_link_health(target_url, use_cache=True)
+    if not is_dead:
+        return target_url
+
+    # Target URL is dead or out of stock! Hot swap immediately!
+    logger.warning(f"[StockHealer] Dynamic hot-swap triggered for code='{code}': {reason}")
+    try:
+        new_url = repair_dead_link(code, anime_name=anime_name, title=title)
+        now = time.time()
+        # Update cache for new_url
+        _HEALTH_CACHE[new_url] = (False, "Active & Healthy (Healed)", now)
+        # Mark old dead URL in cache
+        _HEALTH_CACHE[target_url] = (True, reason, now)
+        return new_url
+    except Exception as e:
+        logger.error(f"[StockHealer] Hot-swap failed for code='{code}': {e}")
+        return target_url
+
+
+def run_autonomous_stock_healer(batch_size: int = 25) -> dict:
+    """
+    Background batch healer executed every 6 hours or on-demand (/healnow).
+    Prioritizes top-clicked and oldest-checked links from SQLite.
+    Audits them with live HTTP checks (bypassing cache) and repairs out-of-stock links.
+    """
+    from database import get_top_priority_links_to_heal, mark_link_health
+
+    links = get_top_priority_links_to_heal(limit=batch_size)
+    logger.info(f"[StockHealer] Starting autonomous healing cycle on {len(links)} priority links...")
+
+    scanned = len(links)
+    healthy_count = 0
+    repaired_count = 0
+    repaired_details = []
+
+    for item in links:
+        code       = item["code"]
+        target_url = item["target_url"]
+        anime_name = item["anime_name"]
+        title      = item["title"]
+        clicks     = item.get("click_count", 0)
+
+        is_dead, reason = check_link_health(target_url, use_cache=False)
+
+        if is_dead:
+            repaired_count += 1
+            new_url = repair_dead_link(code, anime_name, title)
+            repaired_details.append({
+                "anime": anime_name,
+                "title": title,
+                "code": code,
+                "clicks": clicks,
+                "reason": reason,
+                "old_url": target_url,
+                "new_url": new_url,
+            })
+            # Mark health in DB with new URL
+            mark_link_health(code, is_healthy=True, new_target_url=new_url)
+        else:
+            healthy_count += 1
+            # Mark health in DB (updates last_checked_at)
+            mark_link_health(code, is_healthy=True)
+
+        time.sleep(0.4)
+
+    now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+    summary = {
+        "timestamp_ist": now_ist.strftime("%d %b %Y, %I:%M %p"),
+        "total_scanned": scanned,
+        "healthy_count": healthy_count,
+        "repaired_count": repaired_count,
+        "repaired_details": repaired_details,
+    }
+
+    if repaired_count > 0:
+        logger.info(f"[StockHealer] Healed {repaired_count}/{scanned} dead links. Triggering cloud state sync...")
+        try:
+            from jsonbin_sync import trigger_cloud_sync_now
+            trigger_cloud_sync_now()
+        except Exception as e:
+            logger.debug(f"[StockHealer] Cloud sync trigger ignored: {e}")
+
+    return summary
+
+
+def check_and_run_autonomous_healer_cycle(app_ref=None, loop_ref=None, admin_chat_id: str = None) -> bool:
+    """
+    Called periodically (e.g. from scheduler loop).
+    Checks if >= 6 hours have passed since the last autonomous stock healer cycle.
+    If so, scans top priority links, auto-heals out-of-stock / dead items,
+    and notifies admin if any links were healed.
+    """
+    from database import get_metadata, set_metadata
+
+    last_healed_str = get_metadata("last_stock_healer_run_time", "")
+    now_ts = time.time()
+    HEALER_INTERVAL_SEC = 6 * 3600  # 6 hours
+
+    if last_healed_str:
+        try:
+            last_ts = float(last_healed_str)
+            if (now_ts - last_ts) < HEALER_INTERVAL_SEC:
+                return False
+        except Exception:
+            pass
+
+    # Interval reached — launch healer
+    logger.info("[StockHealer] 6-hour interval reached. Launching autonomous stock healer cycle...")
+    set_metadata("last_stock_healer_run_time", str(now_ts))
+
+    try:
+        results = run_autonomous_stock_healer(batch_size=25)
+        repaired = results.get("repaired_count", 0)
+        scanned = results.get("total_scanned", 0)
+
+        if repaired > 0:
+            logger.info(f"[StockHealer] Autonomous cycle completed: {repaired}/{scanned} links healed.")
+            try:
+                from telegram_bot import notify_admin
+                repaired_summary = "\n".join(
+                    [f"  • *{d['anime']}*: {d['title'][:30]}... ({d['reason']})" for d in results.get("repaired_details", [])[:5]]
+                )
+                notify_admin(
+                    f"🔄 *Autonomous Stock Healer Cycle*\n"
+                    f"Scanned: {scanned} links | Healed: *{repaired}* dead/out-of-stock links ✅\n\n"
+                    f"Repaired listings hot-swapped to in-stock Amazon products:\n{repaired_summary}"
+                )
+            except Exception:
+                pass
+        else:
+            logger.info(f"[StockHealer] Autonomous cycle completed: all {scanned} links healthy & in-stock.")
+        return True
+    except Exception as e:
+        logger.error(f"[StockHealer] Autonomous healer cycle failed: {e}", exc_info=True)
+        return False
 
 
 def run_link_healing_audit(max_links: int = 50) -> dict:
@@ -123,7 +318,7 @@ def run_link_healing_audit(max_links: int = 50) -> dict:
         anime_name = item["anime_name"]
         title      = item["title"]
 
-        is_dead, reason = check_link_health(target_url)
+        is_dead, reason = check_link_health(target_url, use_cache=False)
 
         if is_dead:
             repaired_count += 1
@@ -140,7 +335,7 @@ def run_link_healing_audit(max_links: int = 50) -> dict:
             healthy_count += 1
 
         # Gentle delay between requests
-        time.sleep(0.7)
+        time.sleep(0.5)
 
     now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
     

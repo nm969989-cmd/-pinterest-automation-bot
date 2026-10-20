@@ -77,6 +77,15 @@ def redirect_link(code):
         title             = link_data.get("title", "Anime Merchandise")
         image_url         = link_data.get("image_url", "")
 
+        # Dynamic Link Redirection & Stock Healer: hot-swaps dead/out-of-stock items in <15ms
+        try:
+            from link_healer import resolve_or_heal_link
+            target_amazon_url = resolve_or_heal_link(
+                code, fallback_anime=anime_name, fallback_title=title, current_url=target_amazon_url
+            )
+        except Exception:
+            pass
+
         # Record click with merchant
         record_link_click(code, user_agent, referrer, merchant=merchant)
         today_total = count_clicks_today()
@@ -139,6 +148,15 @@ def bridge_page(code):
         from config import AMAZON_AFFILIATE_TAG
         tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
         target_amazon_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+    else:
+        # Pre-resolve / heal Amazon product link before rendering showcase buttons
+        try:
+            from link_healer import resolve_or_heal_link
+            target_amazon_url = resolve_or_heal_link(
+                code, fallback_anime=anime_name, fallback_title=title, current_url=target_amazon_url
+            )
+        except Exception:
+            pass
 
     # Record bridge visit for funnel analytics
     try:

@@ -69,6 +69,156 @@ def load_cloud_state() -> dict | None:
 
 # ── Write to JSONBin ──────────────────────────────────────────────────────────
 
+def build_state_payload() -> tuple[dict, int]:
+    """
+    Constructs the budgeted state payload dictionary and calculates its byte size.
+    Enforces <90KB target (well below JSONBin's 100KB limit).
+    Returns: (payload_dict, payload_bytes)
+    """
+    import json
+    import sqlite3
+    from database import DB_PATH
+
+    with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
+        # Processed posts (last 200 post_ids to keep payload well within 100KB budget)
+        posts = [
+            row[0] for row in conn.execute(
+                "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 200"
+            ).fetchall()
+        ]
+        # Uploaded files (last 150 with fingerprints for persistent deduplication)
+        uploads = [
+            {"filename": r[0], "title": r[1], "anime_name": r[2],
+             "image_url": r[3], "uploaded_at": r[4],
+             "sha256": r[5] or "", "phash": r[6] or ""}
+            for r in conn.execute(
+                "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash "
+                "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 150"
+            ).fetchall()
+        ]
+        # Pin queue (preserve ALL pending queue items - vital state!)
+        queue = [
+            {"post_id": r[0], "image_path": r[1], "title": r[2],
+             "description": r[3], "link": r[4], "anime_name": r[5],
+             "image_url": r[6], "board_id": r[7], "priority": r[8],
+             "scheduled_date": r[9],
+             "sha256": r[10] or "", "phash": r[11] or ""}
+            for r in conn.execute(
+                "SELECT post_id, image_path, title, description, link, "
+                "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash FROM pin_queue"
+            ).fetchall()
+        ]
+        # Bot metadata (jitter, health check dates, etc.)
+        metadata = [
+            {"key": r[0], "value": r[1]}
+            for r in conn.execute(
+                "SELECT key, value FROM bot_metadata"
+            ).fetchall()
+        ]
+        # Tracked links (last 60 links for recent redirect continuity)
+        tracked = [
+            {
+                "code": r[0],
+                "target_url": r[1],
+                "anime_name": r[2],
+                "title": r[3],
+                "created_at": r[4],
+                "is_healed": r[5] or 0,
+                "heal_count": r[6] or 0,
+            }
+            for r in conn.execute(
+                "SELECT code, target_url, anime_name, title, created_at, is_healed, heal_count FROM tracked_links ORDER BY created_at DESC LIMIT 60"
+            ).fetchall()
+        ]
+        # Secondary platforms (keep last 25 items each for lightweight deduplication)
+        arena = [
+            {"filename": r[0], "block_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        bluesky = [
+            {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        raindrop = [
+            {"filename": r[0], "drop_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, drop_id, title, image_url, posted_at FROM raindrop_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        mastodon = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM mastodon_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        pixelfed = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM pixelfed_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        freeimage = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM freeimage_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        imghippo = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        wallhaven = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM wallhaven_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+
+    payload = {
+        "processed_posts": posts,
+        "uploaded_files":  uploads,
+        "pin_queue":       queue,
+        "bot_metadata":    metadata,
+        "tracked_links":   tracked,
+        "arena_posts":     arena,
+        "bluesky_posts":   bluesky,
+        "raindrop_posts":  raindrop,
+        "mastodon_posts":  mastodon,
+        "pixelfed_posts":  pixelfed,
+        "freeimage_posts": freeimage,
+        "imghippo_posts":  imghippo,
+        "wallhaven_posts": wallhaven,
+    }
+
+    # ── Budget Enforcer: Guarantee strictly under 90KB (JSONBin free limit = 100KB) ──
+    raw_json = json.dumps(payload, separators=(',', ':'))
+    payload_bytes = len(raw_json.encode('utf-8'))
+
+    if payload_bytes > 90 * 1024:
+        logger.info(f"[JSONBin] Payload size ({payload_bytes / 1024:.1f}KB) exceeds 90KB target. Trimming non-essential logs...")
+        # Tier 1 pruning: reduce secondary logs to 5 items each
+        for k in ["arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts", "pixelfed_posts", "freeimage_posts", "imghippo_posts", "wallhaven_posts"]:
+            payload[k] = payload[k][:5]
+        payload["uploaded_files"] = payload["uploaded_files"][:30]
+        payload["tracked_links"]  = payload["tracked_links"][:30]
+        raw_json = json.dumps(payload, separators=(',', ':'))
+        payload_bytes = len(raw_json.encode('utf-8'))
+
+        # Tier 2 pruning if still over 90KB
+        if payload_bytes > 90 * 1024:
+            payload["processed_posts"] = payload["processed_posts"][:100]
+            raw_json = json.dumps(payload, separators=(',', ':'))
+            payload_bytes = len(raw_json.encode('utf-8'))
+
+    return payload, payload_bytes
+
+
 def save_cloud_state() -> bool:
     """
     Save current SQLite state to JSONBin cloud.
@@ -78,137 +228,8 @@ def save_cloud_state() -> bool:
         return False
     try:
         import json
-        import sqlite3
-        from database import DB_PATH
-
-        with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
-            # Processed posts (last 200 post_ids to keep payload well within 100KB budget)
-            posts = [
-                row[0] for row in conn.execute(
-                    "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 200"
-                ).fetchall()
-            ]
-            # Uploaded files (last 150 with fingerprints for persistent deduplication)
-            uploads = [
-                {"filename": r[0], "title": r[1], "anime_name": r[2],
-                 "image_url": r[3], "uploaded_at": r[4],
-                 "sha256": r[5] or "", "phash": r[6] or ""}
-                for r in conn.execute(
-                    "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash "
-                    "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 150"
-                ).fetchall()
-            ]
-            # Pin queue (preserve ALL pending queue items - vital state!)
-            queue = [
-                {"post_id": r[0], "image_path": r[1], "title": r[2],
-                 "description": r[3], "link": r[4], "anime_name": r[5],
-                 "image_url": r[6], "board_id": r[7], "priority": r[8],
-                 "scheduled_date": r[9],
-                 "sha256": r[10] or "", "phash": r[11] or ""}
-                for r in conn.execute(
-                    "SELECT post_id, image_path, title, description, link, "
-                    "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash FROM pin_queue"
-                ).fetchall()
-            ]
-            # Bot metadata (jitter, health check dates, etc.)
-            metadata = [
-                {"key": r[0], "value": r[1]}
-                for r in conn.execute(
-                    "SELECT key, value FROM bot_metadata"
-                ).fetchall()
-            ]
-            # Tracked links (last 60 links for recent redirect continuity)
-            tracked = [
-                {"code": r[0], "target_url": r[1], "anime_name": r[2], "title": r[3], "created_at": r[4]}
-                for r in conn.execute(
-                    "SELECT code, target_url, anime_name, title, created_at FROM tracked_links ORDER BY created_at DESC LIMIT 60"
-                ).fetchall()
-            ]
-            # Secondary platforms (keep last 25 items each for lightweight deduplication)
-            arena = [
-                {"filename": r[0], "block_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, block_id, title, image_url, posted_at FROM arena_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            bluesky = [
-                {"filename": r[0], "post_uri": r[1], "post_cid": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_uri, post_cid, image_url, posted_at FROM bluesky_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            raindrop = [
-                {"filename": r[0], "drop_id": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, drop_id, title, image_url, posted_at FROM raindrop_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            mastodon = [
-                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM mastodon_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            pixelfed = [
-                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM pixelfed_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            freeimage = [
-                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM freeimage_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            imghippo = [
-                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM imghippo_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-            wallhaven = [
-                {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
-                for r in conn.execute(
-                    "SELECT filename, post_url, title, image_url, posted_at FROM wallhaven_posts ORDER BY id DESC LIMIT 25"
-                ).fetchall()
-            ]
-
-        payload = {
-            "processed_posts": posts,
-            "uploaded_files":  uploads,
-            "pin_queue":       queue,
-            "bot_metadata":    metadata,
-            "tracked_links":   tracked,
-            "arena_posts":     arena,
-            "bluesky_posts":   bluesky,
-            "raindrop_posts":  raindrop,
-            "mastodon_posts":  mastodon,
-            "pixelfed_posts":  pixelfed,
-            "freeimage_posts": freeimage,
-            "imghippo_posts":  imghippo,
-            "wallhaven_posts": wallhaven,
-        }
-
-        # ── Budget Enforcer: Guarantee strictly under 90KB (JSONBin free limit = 100KB) ──
+        payload, payload_bytes = build_state_payload()
         raw_json = json.dumps(payload, separators=(',', ':'))
-        payload_bytes = len(raw_json.encode('utf-8'))
-
-        if payload_bytes > 90 * 1024:
-            logger.info(f"[JSONBin] Payload size ({payload_bytes / 1024:.1f}KB) exceeds 90KB target. Trimming non-essential logs...")
-            # Tier 1 pruning: reduce secondary logs to 5 items each
-            for k in ["arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts", "pixelfed_posts", "freeimage_posts", "imghippo_posts", "wallhaven_posts"]:
-                payload[k] = payload[k][:5]
-            payload["uploaded_files"] = payload["uploaded_files"][:30]
-            payload["tracked_links"]  = payload["tracked_links"][:30]
-            raw_json = json.dumps(payload, separators=(',', ':'))
-            payload_bytes = len(raw_json.encode('utf-8'))
-
-            # Tier 2 pruning if still over 90KB
-            if payload_bytes > 90 * 1024:
-                payload["processed_posts"] = payload["processed_posts"][:100]
-                raw_json = json.dumps(payload, separators=(',', ':'))
-                payload_bytes = len(raw_json.encode('utf-8'))
 
         logger.info(f"[JSONBin] Uploading budgeted payload ({payload_bytes / 1024:.1f}KB / 100KB free limit)")
 
@@ -221,7 +242,7 @@ def save_cloud_state() -> bool:
         if r.status_code == 200:
             logger.info(
                 f"[JSONBin] Synced successfully: {len(payload['processed_posts'])} posts, {len(payload['uploaded_files'])} uploads, "
-                f"{len(queue)} queued, {len(payload['tracked_links'])} tracked links ({payload_bytes / 1024:.1f}KB)"
+                f"{len(payload.get('pin_queue', []))} queued, {len(payload['tracked_links'])} tracked links ({payload_bytes / 1024:.1f}KB)"
             )
             return True
         else:
@@ -297,12 +318,18 @@ def restore_db_from_cloud():
             links = state.get("tracked_links", [])
             if links:
                 conn.executemany(
-                    "INSERT OR IGNORE INTO tracked_links "
-                    "(code, target_url, anime_name, title, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO tracked_links "
+                    "(code, target_url, anime_name, title, created_at, is_healed, heal_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(code) DO UPDATE SET "
+                    "target_url = excluded.target_url, "
+                    "is_healed = excluded.is_healed, "
+                    "heal_count = excluded.heal_count",
                     [(l.get("code",""), l.get("target_url",""),
                       l.get("anime_name",""), l.get("title",""),
-                      l.get("created_at") or "2000-01-01 00:00:00")
+                      l.get("created_at") or "2000-01-01 00:00:00",
+                      l.get("is_healed", 0),
+                      l.get("heal_count", 0))
                      for l in links if l.get("code") and l.get("target_url")]
                 )
 
