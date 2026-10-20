@@ -308,7 +308,8 @@ class PinScheduler:
 
     def enqueue_new_image(self, post_id: str, image_path: str, title: str,
                           description: str, link: str, anime_name: str,
-                          image_url: str = "", board_id: str = ""):
+                          image_url: str = "", board_id: str = "",
+                          sha256: str = "", phash: str = ""):
         """
         Add a NEW image (priority=1) from the Telegram channel.
         Automatically calculates the correct posting date based on queue depth.
@@ -334,7 +335,8 @@ class PinScheduler:
                 post_id=post_id, image_path=image_path, title=title,
                 description=description, link=link, anime_name=anime_name,
                 image_url=image_url, board_id=board_id, priority=1,
-                scheduled_date=sched_date
+                scheduled_date=sched_date,
+                sha256=sha256, phash=phash
             )
             if added:
                 logger.info(
@@ -345,7 +347,8 @@ class PinScheduler:
 
     def enqueue_backlog_image(self, post_id: str, image_path: str, title: str,
                                description: str, link: str, anime_name: str,
-                               image_url: str = "", board_id: str = ""):
+                               image_url: str = "", board_id: str = "",
+                               sha256: str = "", phash: str = ""):
         """
         Add a BACKLOG image (priority=0). Only posts when no new images pending.
         Always schedules for a future date to avoid competing with new images today.
@@ -362,12 +365,14 @@ class PinScheduler:
                 post_id=post_id, image_path=image_path, title=title,
                 description=description, link=link, anime_name=anime_name,
                 image_url=image_url, board_id=board_id, priority=0,
-                scheduled_date=sched_date
+                scheduled_date=sched_date,
+                sha256=sha256, phash=phash
             )
             if added:
                 logger.info(
                     f"[Scheduler] BACKLOG pin queued for {sched_date}: '{title}'"
                 )
+            return added
             return added
 
     @property
@@ -711,11 +716,26 @@ class PinScheduler:
                     pin = get_next_queued_pin(today_ist)
 
                     if pin:
-                        # ── Double duplicate check ─────────────────────────
+                        # ── Triple duplicate check (Filename, URL, and Visual pHash/SHA-256) ─
                         filename = pin["image_path"].split("/")[-1].split("\\")[-1] if pin["image_path"] else ""
-                        if (is_file_uploaded(filename) or
-                                is_image_url_uploaded(pin.get("image_url", ""))):
-                            logger.info(f"[Scheduler] Duplicate detected, removing from queue: {pin['title']}")
+                        is_dup = False
+                        dup_reason = ""
+
+                        if is_file_uploaded(filename):
+                            is_dup, dup_reason = True, f"Filename '{filename}' already uploaded"
+                        elif is_image_url_uploaded(pin.get("image_url", "")):
+                            is_dup, dup_reason = True, "Image URL already uploaded"
+                        else:
+                            from database import is_image_duplicate
+                            is_dup, dup_reason = is_image_duplicate(
+                                filepath=pin.get("image_path", ""),
+                                sha256=pin.get("sha256", ""),
+                                phash=pin.get("phash", ""),
+                                exclude_queue_id=pin["id"]
+                            )
+
+                        if is_dup:
+                            logger.info(f"[Scheduler] Duplicate detected, removing from queue: '{pin['title']}' ({dup_reason})")
                             remove_queued_pin(pin["id"])
                         else:
                             logger.info(

@@ -31,7 +31,9 @@ def init_db():
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 title      TEXT,
                 anime_name TEXT,
-                image_url  TEXT
+                image_url  TEXT,
+                sha256     TEXT,
+                phash      TEXT
             )
         """)
         # ── Backlog queue table ─────────────────────────────────────────────
@@ -50,6 +52,8 @@ def init_db():
                 priority    INTEGER DEFAULT 0,   -- 1=new, 0=backlog
                 scheduled_date TEXT,             -- YYYY-MM-DD when to post
                 retry_count INTEGER DEFAULT 0,   -- auto-retry: drop after 3 fails
+                sha256      TEXT,
+                phash       TEXT,
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -65,13 +69,14 @@ def init_db():
 
         # Add new columns if upgrading from older schema
         for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''",
-                    "retry_count INTEGER DEFAULT 0"]:
+                    "retry_count INTEGER DEFAULT 0", "sha256 TEXT", "phash TEXT"]:
             try:
                 conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {col}")
             except Exception:
                 pass
-        # Add board_id and retry_count to pin_queue if upgrading from older schema
-        for col in ["board_id TEXT DEFAULT ''", "retry_count INTEGER DEFAULT 0"]:
+        # Add board_id, retry_count, sha256, phash to pin_queue if upgrading from older schema
+        for col in ["board_id TEXT DEFAULT ''", "retry_count INTEGER DEFAULT 0",
+                    "sha256 TEXT", "phash TEXT"]:
             try:
                 conn.execute(f"ALTER TABLE pin_queue ADD COLUMN {col}")
             except Exception:
@@ -195,6 +200,22 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_uploads_date
             ON uploaded_files (uploaded_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploads_sha256
+            ON uploaded_files (sha256)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploads_phash
+            ON uploaded_files (phash)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_sha256
+            ON pin_queue (sha256)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_phash
+            ON pin_queue (phash)
         """)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_tracked_code
@@ -863,14 +884,251 @@ def is_image_url_uploaded(image_url: str) -> bool:
     return row is not None
 
 
-def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "", image_url: str = ""):
-    """Records that a file has been successfully uploaded to Pinterest."""
+def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "",
+                       image_url: str = "", sha256: str = "", phash: str = ""):
+    """Records that a file has been successfully uploaded to Pinterest with fingerprints."""
+    if (not sha256 or not phash) and filename:
+        try:
+            from image_dedup import get_image_fingerprints
+            for cand in [os.path.join("processed", filename), os.path.join("downloads", filename), filename]:
+                if os.path.isfile(cand):
+                    calc_sha, calc_phash = get_image_fingerprints(cand)
+                    sha256 = sha256 or calc_sha
+                    phash = phash or calc_phash
+                    break
+        except Exception:
+            pass
+
     with _get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO uploaded_files (filename, title, anime_name, image_url) VALUES (?, ?, ?, ?)",
-            (filename, title, anime_name, image_url),
+            """
+            INSERT OR IGNORE INTO uploaded_files (filename, title, anime_name, image_url, sha256, phash)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (filename, title, anime_name, image_url, sha256, phash),
         )
+        if sha256 or phash:
+            conn.execute(
+                """
+                UPDATE uploaded_files
+                SET sha256 = COALESCE(NULLIF(sha256, ''), ?),
+                    phash = COALESCE(NULLIF(phash, ''), ?)
+                WHERE filename = ?
+                """,
+                (sha256, phash, filename)
+            )
         conn.commit()
+
+
+def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = None,
+                       max_distance: int = 4, exclude_queue_id: int = None) -> tuple[bool, str]:
+    """
+    Checks if an image is already in uploaded_files or pin_queue.
+    Checks:
+    1. Exact cryptographic SHA-256 match.
+    2. Visual difference hash (dHash) with Hamming distance <= max_distance.
+    
+    Returns (is_duplicate: bool, reason: str).
+    """
+    if (not sha256 or not phash) and filepath and os.path.isfile(filepath):
+        try:
+            from image_dedup import get_image_fingerprints
+            calc_sha, calc_phash = get_image_fingerprints(filepath)
+            sha256 = sha256 or calc_sha
+            phash = phash or calc_phash
+        except Exception as e:
+            logger.warning(f"[Dedup] Error extracting fingerprints from {filepath}: {e}")
+
+    if not sha256 and not phash:
+        return False, ""
+
+    try:
+        from image_dedup import hamming_distance
+    except ImportError:
+        return False, ""
+
+    with _get_conn() as conn:
+        # 1. Exact SHA-256 in uploaded_files
+        if sha256:
+            row = conn.execute(
+                "SELECT filename, title FROM uploaded_files WHERE sha256 = ? LIMIT 1",
+                (sha256,)
+            ).fetchone()
+            if row:
+                return True, f"Exact SHA-256 match with uploaded pin '{row[1]}' ({row[0]})"
+
+            # Exact SHA-256 in pin_queue
+            if exclude_queue_id:
+                row = conn.execute(
+                    "SELECT id, title FROM pin_queue WHERE sha256 = ? AND id != ? LIMIT 1",
+                    (sha256, exclude_queue_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id, title FROM pin_queue WHERE sha256 = ? LIMIT 1",
+                    (sha256,)
+                ).fetchone()
+            if row:
+                return True, f"Exact SHA-256 match with queued pin #{row[0]} '{row[1]}'"
+
+        # 2. Perceptual dHash check against uploaded_files
+        if phash and len(phash) == 16:
+            uploads = conn.execute(
+                "SELECT filename, title, phash FROM uploaded_files "
+                "WHERE phash IS NOT NULL AND length(phash) = 16 "
+                "ORDER BY uploaded_at DESC LIMIT 2000"
+            ).fetchall()
+            for u_fn, u_title, u_phash in uploads:
+                dist = hamming_distance(phash, u_phash)
+                if dist <= max_distance:
+                    return True, f"Visual duplicate of uploaded pin '{u_title}' ({u_fn}, dHash dist {dist}/{max_distance})"
+
+            # Perceptual dHash check against pin_queue
+            if exclude_queue_id:
+                queue_items = conn.execute(
+                    "SELECT id, title, phash FROM pin_queue "
+                    "WHERE phash IS NOT NULL AND length(phash) = 16 AND id != ?",
+                    (exclude_queue_id,)
+                ).fetchall()
+            else:
+                queue_items = conn.execute(
+                    "SELECT id, title, phash FROM pin_queue "
+                    "WHERE phash IS NOT NULL AND length(phash) = 16"
+                ).fetchall()
+            for q_id, q_title, q_phash in queue_items:
+                dist = hamming_distance(phash, q_phash)
+                if dist <= max_distance:
+                    return True, f"Visual duplicate of queued pin #{q_id} '{q_title}' (dHash dist {dist}/{max_distance})"
+
+    return False, ""
+
+
+def clean_duplicate_queue_items(max_distance: int = 4) -> int:
+    """
+    Scans the entire pin_queue.
+    Removes any queued item that:
+    1. Has already been uploaded (exact SHA or pHash <= max_distance).
+    2. Is a duplicate of an earlier queued item.
+    Returns number of purged queue items.
+    """
+    try:
+        from image_dedup import get_image_fingerprints, hamming_distance
+    except ImportError:
+        return 0
+
+    purged_count = 0
+    with _get_conn() as conn:
+        items = conn.execute(
+            "SELECT id, image_path, title, sha256, phash FROM pin_queue ORDER BY priority DESC, id ASC"
+        ).fetchall()
+
+    seen_shas = set()
+    seen_phashes = []
+
+    for item_id, img_path, title, sha256, phash in items:
+        # Populate missing fingerprints if file exists
+        if (not sha256 or not phash) and img_path and os.path.isfile(img_path):
+            calc_sha, calc_phash = get_image_fingerprints(img_path)
+            sha256 = sha256 or calc_sha
+            phash = phash or calc_phash
+            if sha256 or phash:
+                with _get_conn() as conn:
+                    conn.execute(
+                        "UPDATE pin_queue SET sha256 = ?, phash = ? WHERE id = ?",
+                        (sha256, phash, item_id)
+                    )
+                    conn.commit()
+
+        # Check against uploaded_files
+        is_dup, reason = is_image_duplicate(
+            filepath=img_path, sha256=sha256, phash=phash,
+            max_distance=max_distance, exclude_queue_id=item_id
+        )
+        if is_dup:
+            logger.info(f"[Dedup Scan] Dropping queued pin #{item_id} '{title}': {reason}")
+            remove_queued_pin(item_id)
+            purged_count += 1
+            continue
+
+        # Check against earlier items in this same scan
+        if sha256 and sha256 in seen_shas:
+            logger.info(f"[Dedup Scan] Dropping duplicate in queue #{item_id} '{title}' (duplicate SHA in queue)")
+            remove_queued_pin(item_id)
+            purged_count += 1
+            continue
+
+        is_intra_queue_dup = False
+        if phash and len(phash) == 16:
+            for s_phash, s_label in seen_phashes:
+                if hamming_distance(phash, s_phash) <= max_distance:
+                    logger.info(f"[Dedup Scan] Dropping duplicate in queue #{item_id} '{title}' (matches {s_label})")
+                    remove_queued_pin(item_id)
+                    purged_count += 1
+                    is_intra_queue_dup = True
+                    break
+
+        if is_intra_queue_dup:
+            continue
+
+        if sha256:
+            seen_shas.add(sha256)
+        if phash and len(phash) == 16:
+            seen_phashes.append((phash, f"#{item_id} '{title}'"))
+
+    return purged_count
+
+
+def backfill_fingerprints_batch(limit: int = 200) -> int:
+    """
+    Backfills missing sha256 and phash for uploaded_files and pin_queue rows
+    using existing files in processed/ or downloads/.
+    Returns count of updated rows.
+    """
+    try:
+        from image_dedup import get_image_fingerprints
+    except ImportError:
+        return 0
+
+    updated = 0
+    with _get_conn() as conn:
+        # 1. Backfill pin_queue
+        q_rows = conn.execute(
+            "SELECT id, image_path FROM pin_queue "
+            "WHERE (sha256 IS NULL OR sha256 = '' OR phash IS NULL OR phash = '') "
+            "LIMIT ?", (limit,)
+        ).fetchall()
+        for q_id, img_path in q_rows:
+            if img_path and os.path.isfile(img_path):
+                sha, phash = get_image_fingerprints(img_path)
+                if sha or phash:
+                    conn.execute(
+                        "UPDATE pin_queue SET sha256 = ?, phash = ? WHERE id = ?",
+                        (sha, phash, q_id)
+                    )
+                    updated += 1
+
+        # 2. Backfill uploaded_files
+        u_rows = conn.execute(
+            "SELECT filename FROM uploaded_files "
+            "WHERE (sha256 IS NULL OR sha256 = '' OR phash IS NULL OR phash = '') "
+            "LIMIT ?", (limit,)
+        ).fetchall()
+        for (fn,) in u_rows:
+            target_path = None
+            for cand in [os.path.join("processed", fn), os.path.join("downloads", fn), fn]:
+                if os.path.isfile(cand):
+                    target_path = cand
+                    break
+            if target_path:
+                sha, phash = get_image_fingerprints(target_path)
+                if sha or phash:
+                    conn.execute(
+                        "UPDATE uploaded_files SET sha256 = ?, phash = ? WHERE filename = ?",
+                        (sha, phash, fn)
+                    )
+                    updated += 1
+        conn.commit()
+    return updated
 
 
 def get_uploaded_file_image_url(filename: str) -> str:
@@ -937,13 +1195,30 @@ def get_uploaded_count() -> int:
 def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
                 link: str, anime_name: str, image_url: str = "",
                 board_id: str = "",
-                priority: int = 0, scheduled_date: str = "") -> bool:
+                priority: int = 0, scheduled_date: str = "",
+                sha256: str = "", phash: str = "") -> bool:
     """
     Add a pin to the persistent queue.
     priority=1 → new image (posted before backlog)
     priority=0 → backlog image
-    Returns True if added, False if already in queue.
+    Returns True if added, False if already in queue or duplicate.
     """
+    if (not sha256 or not phash) and image_path and os.path.isfile(image_path):
+        try:
+            from image_dedup import get_image_fingerprints
+            calc_sha, calc_phash = get_image_fingerprints(image_path)
+            sha256 = sha256 or calc_sha
+            phash = phash or calc_phash
+        except Exception:
+            pass
+
+    # Pre-enqueue visual duplicate check
+    if sha256 or phash or (image_path and os.path.isfile(image_path)):
+        is_dup, reason = is_image_duplicate(filepath=image_path, sha256=sha256, phash=phash)
+        if is_dup:
+            logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
+            return False
+
     try:
         from amazon_search import preflight_validate_destination
         link = preflight_validate_destination(link, anime_name=anime_name, title=title)
@@ -955,10 +1230,10 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
             conn.execute("""
                 INSERT OR IGNORE INTO pin_queue
                     (post_id, image_path, title, description, link, anime_name,
-                     image_url, board_id, priority, scheduled_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     image_url, board_id, priority, scheduled_date, sha256, phash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (post_id, image_path, title, description, link, anime_name,
-                  image_url, board_id, priority, scheduled_date))
+                  image_url, board_id, priority, scheduled_date, sha256, phash))
             conn.commit()
             return conn.execute(
                 "SELECT changes()"

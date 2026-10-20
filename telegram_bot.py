@@ -4148,6 +4148,46 @@ async def cmd_set_wallhaven_key(update: "Update", context: "ContextTypes.DEFAULT
         await update.message.reply_text(f"Failed to update key: {e}")
 
 
+async def cmd_dedup_scan(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Admin command: /dedup_scan - Cleans duplicate items from queue and backfills visual hashes."""
+    if not _is_admin(update): return
+    status_msg = await update.message.reply_text(
+        "🔍 *Scanning for duplicate artwork...*\n"
+        "Comparing visual difference hashes (dHash) and SHA-256 fingerprints across queue and uploaded pins...",
+        parse_mode="Markdown"
+    )
+
+    try:
+        from database import clean_duplicate_queue_items, backfill_fingerprints_batch, _get_conn
+        
+        # 1. Backfill fingerprints for existing items
+        backfilled = backfill_fingerprints_batch(limit=250)
+        
+        # 2. Clean duplicate queue items
+        purged = clean_duplicate_queue_items(max_distance=4)
+        
+        # 3. Get total fingerprinted statistics
+        with _get_conn() as conn:
+            total_uploads = conn.execute("SELECT COUNT(*) FROM uploaded_files").fetchone()[0]
+            fingerprinted_uploads = conn.execute(
+                "SELECT COUNT(*) FROM uploaded_files WHERE phash IS NOT NULL AND phash != ''"
+            ).fetchone()[0]
+            queue_len = conn.execute("SELECT COUNT(*) FROM pin_queue").fetchone()[0]
+
+        report = (
+            "🛡️ *Visual Deduplication Scan Complete!*\n\n"
+            f"• *Duplicates Purged from Queue:* `{purged}`\n"
+            f"• *Missing Fingerprints Backfilled:* `{backfilled}`\n"
+            f"• *Current Clean Queue Size:* `{queue_len}`\n"
+            f"• *Total Fingerprinted Archive:* `{fingerprinted_uploads}/{total_uploads}` pins\n\n"
+            "✨ *Status:* 3-Tier Perceptual Guard (dHash ≤ 4 bits + SHA-256) is active across Scraper, Queue, and Scheduler."
+        )
+        await status_msg.edit_text(report, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_dedup_scan error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ *Deduplication Scan Failed:* `{e}`", parse_mode="Markdown")
+
+
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
               dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
@@ -4318,6 +4358,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("spinoff",            cmd_spinoff),
             ("refreshanalytics",   cmd_refreshanalytics),
             ("pullanalytics",      cmd_refreshanalytics),
+            ("dedup_scan",         cmd_dedup_scan),
+            ("cleandupes",         cmd_dedup_scan),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -4346,6 +4388,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("crosspost",     "Multi-platform status across all 10 platforms"),
                 BotCommand("doctor",        "System health report (Auto: 3 days)"),
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
+                BotCommand("dedup_scan",    "Scan queue & purge visual duplicate pins"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),
                 BotCommand("analytics",     "7-day pins & revenue report"),

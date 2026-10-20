@@ -19,7 +19,7 @@ from logger import get_logger
 from config import TELEGRAM_CHANNELS, SCRAPE_INTERVAL_MINUTES
 from database import (is_post_processed, mark_post_processed,
                       get_processed_count, get_oldest_seen_post_numeric_id,
-                      is_image_url_uploaded)
+                      is_image_url_uploaded, is_image_duplicate)
 
 logger = get_logger(__name__)
 
@@ -153,9 +153,21 @@ def check_channel(channel: str) -> int:
         safe_post_id = post_id.replace("/", "_")
         filepath = download_image(img_url, f"post_{safe_post_id}")
 
-        if filepath and _on_new_image_callback:
-            _on_new_image_callback(filepath, caption, clean_channel, img_url)
-            new_found += 1
+        if filepath:
+            # Gate 1: Check visual and exact duplicate before processing
+            is_dup, reason = is_image_duplicate(filepath=filepath)
+            if is_dup:
+                logger.info(f"[New] Skipping visual duplicate: {post_id} - {reason}")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                mark_post_processed(post_id)
+                continue
+
+            if _on_new_image_callback:
+                _on_new_image_callback(filepath, caption, clean_channel, img_url)
+                new_found += 1
 
         mark_post_processed(post_id)
 
@@ -219,6 +231,17 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
             safe_post_id = post_id.replace("/", "_")
             filepath = download_image(img_url, f"post_{safe_post_id}")
             if not filepath:
+                mark_post_processed(post_id)
+                continue
+
+            # Gate 1: Check visual and exact duplicate before processing backlog image
+            is_dup, reason = is_image_duplicate(filepath=filepath)
+            if is_dup:
+                logger.info(f"[Backlog] Skipping visual duplicate: {post_id} - {reason}")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
                 mark_post_processed(post_id)
                 continue
 

@@ -46,6 +46,22 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
         # 1. Process Image
         processed_path = process_image(filepath, channel_name)
 
+        # Gate 2: Compute fingerprints and check for duplicate before AI generation & hosting
+        from image_dedup import get_image_fingerprints
+        from database import is_image_duplicate
+        img_sha, img_phash = get_image_fingerprints(processed_path)
+        is_dup, dup_reason = is_image_duplicate(filepath=processed_path, sha256=img_sha, phash=img_phash)
+        if is_dup:
+            logger.info(f"[Main] Skipping visual duplicate image '{processed_path}': {dup_reason}")
+            try:
+                if os.path.exists(processed_path):
+                    os.remove(processed_path)
+                if filepath != processed_path and os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception:
+                pass
+            return
+
         # 1b. Upload to permanent host immediately so the queue stores a
         #     permanent URL, not the expiring Telegram CDN URL.
         #     If upload fails (Cloudinary/Catbox down), fall back to original
@@ -187,6 +203,8 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
                 anime_name=anime_name,
                 board_id=board_id,
                 image_url=image_url,  # Store Telegram CDN URL for file resurrection after restarts
+                sha256=img_sha,
+                phash=img_phash,
             )
 
         # 10. Clean up original download to save disk space (keep processed copy)
