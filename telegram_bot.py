@@ -68,6 +68,9 @@ _state = {
 # Pending approval queue: maps callback_data key -> upload args dict
 _pending_approvals: dict = {}
 
+# Pending Quick-Drop studio drafts: maps drop_id -> draft args dict
+_pending_drops: dict = {}
+
 # Reference to scheduler (set by main.py)
 _scheduler_ref = None
 
@@ -277,6 +280,7 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "Animanoizing Bot - All Commands\n\n"
         "--- INFO ---\n"
         "/status         - Bot status and uptime\n"
+        "/organic        - 80/20 Organic Trust Ratio & anti-spam status\n"
         "/doctor         - System health report (Auto: runs every 3 days)\n"
         "/repairlinks    - Audit & repair dead Amazon links (Auto: 1st of month)\n"
         "/stats          - Pins count and queue\n"
@@ -352,6 +356,13 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     make_url = os.getenv("MAKE_WEBHOOK_URL", "")
     post_method = "Make.com Webhook" if make_url else "Pinterest API"
     auto_label  = "AUTO-PILOT" if _state.get("auto_post", True) else "APPROVAL MODE (tap button)"
+    try:
+        from database import get_organic_trust_stats
+        t_stats = get_organic_trust_stats()
+        trust_line = f"Trust    : {t_stats['ratio_pct']}% organic (Streak: {t_stats['monetized_streak']}/4)\n"
+    except Exception:
+        trust_line = ""
+
     await msg.reply_text(
         f"Bot Status\n"
         f"{'='*25}\n"
@@ -364,6 +375,7 @@ async def cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"Delay    : {_state['post_delay']} min between pins\n"
         f"Max/day  : {_state['max_per_day']} pins\n"
         f"Today    : {_state['posts_today']} pins posted\n"
+        f"{trust_line}"
         f"Queue    : {_state['queue_size']} pending",
         reply_markup=get_queue_keyboard()
     )
@@ -385,6 +397,13 @@ async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         total_db = today_db = 0
         top_str = "  (not available)"
 
+    try:
+        from database import get_organic_trust_stats
+        org_stats = get_organic_trust_stats()
+        org_line = f"Organic  : {org_stats['organic_posts']} pins ({org_stats['ratio_pct']}% of total)\n"
+    except Exception:
+        org_line = ""
+
     pin = _state.get("last_pin")
     last_time = pin["time"] if pin else "None yet"
     await msg.reply_text(
@@ -392,12 +411,58 @@ async def cmd_stats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"{'='*25}\n"
         f"Today    : {today_db} pins\n"
         f"Total    : {total_db} pins\n"
+        f"{org_line}"
         f"Queue    : {_state['queue_size']} pending\n"
         f"Last pin : {last_time}\n"
         f"Mode     : {'DRY RUN' if _state['dry_run'] else 'LIVE'}\n\n"
         f"Top Anime:\n{top_str or '  (none yet)'}",
         reply_markup=get_queue_keyboard()
     )
+
+
+async def cmd_organic(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Display 80/20 Organic Trust Ratio, domain protection telemetry and next pin type."""
+    if not _is_admin(update): return
+    msg = update.effective_message
+    try:
+        import config
+        from database import get_organic_trust_stats, should_next_pin_be_organic
+
+        stats = get_organic_trust_stats()
+        enabled = getattr(config, "ORGANIC_TRUST_ENABLED", True)
+        target = int(getattr(config, "ORGANIC_TRUST_RATIO", 0.20) * 100)
+        profile_link = getattr(config, "ORGANIC_PIN_LINK", "Pinterest Profile")
+
+        next_organic = should_next_pin_be_organic(getattr(config, "ORGANIC_TRUST_RATIO", 0.20))
+        next_tag = "🌿 Organic Pin (Safe Mode)" if next_organic else "💰 Monetized Pin (Affiliate Link)"
+
+        streak = stats["monetized_streak"]
+        streak_bar = "🔴" * min(streak, 4) + "⚪" * max(0, 4 - streak)
+        status_label = "✅ ACTIVE" if enabled else "⚠️ DISABLED"
+
+        text = (
+            f"🌿 80/20 Organic Trust Ratio Engine\n"
+            f"{'='*32}\n"
+            f"Status       : {status_label}\n"
+            f"Target Ratio : {target}% (1 organic pin per 4 affiliate)\n"
+            f"Actual Ratio : {stats['ratio_pct']}% organic\n\n"
+            f"📊 Lifetime Post Breakdown:\n"
+            f"  • Total Pins  : {stats['total_posts']}\n"
+            f"  • 🌿 Organic   : {stats['organic_posts']}\n"
+            f"  • 💰 Monetized : {stats['monetized_posts']}\n\n"
+            f"🛡️ Anti-Spam Streak Guard:\n"
+            f"  • Affiliate Streak   : {streak}/4 {streak_bar}\n"
+            f"  • Next Auto-Pin Type : {next_tag}\n\n"
+            f"📦 Queue Health:\n"
+            f"  • Pending Organic Pins : {stats['queue_organic']} in queue\n"
+            f"  • Destination Link     : {profile_link}\n\n"
+            f"💡 Purpose: Interleaving clean organic pins builds domain trust and authority on Pinterest, "
+            f"preventing commercial shadowbans ('ghost pins') and algorithmic downranking."
+        )
+    except Exception as e:
+        text = f"❌ Error loading Organic Trust metrics: {e}"
+
+    await msg.reply_text(text)
 
 
 async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -2521,6 +2586,344 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
         await query.edit_message_caption(caption="Pin discarded.")
         logger.info("[TG BOT] Pin discarded by admin.")
 
+    elif data.startswith("drop_postnow:"):
+        drop_id = data[13:]
+        draft = _pending_drops.pop(drop_id, None)
+        if not draft:
+            await query.answer("Draft has already been processed or expired.")
+            return
+        await query.answer("🚀 Publishing immediately...")
+        await query.edit_message_caption(
+            caption=f"🚀 *Publishing to Pinterest & Syndicating in Parallel...*\n\n📝 *{draft['title']}*\n🎌 *{draft['anime_name']}*",
+            parse_mode="Markdown"
+        )
+        try:
+            from pinterest_uploader import upload_to_pinterest
+            from database import mark_file_uploaded
+            from crosspost_dispatcher import dispatch_all_crossposts
+            import os
+
+            uploaded_status = upload_to_pinterest(
+                image_path=draft["image_path"],
+                title=draft["title"],
+                description=draft["description"],
+                link=draft["link"],
+                anime_name=draft["anime_name"],
+                board_id=draft.get("board_id", ""),
+            )
+            success = bool(uploaded_status)
+            if success:
+                fn = os.path.basename(draft["image_path"])
+                mark_file_uploaded(
+                    filename=fn,
+                    title=draft["title"],
+                    anime_name=draft["anime_name"],
+                    image_url=draft.get("image_url", ""),
+                    sha256=draft.get("sha256", ""),
+                    phash=draft.get("phash", ""),
+                    is_organic=0,
+                )
+                _state["posts_today"] = _state.get("posts_today", 0) + 1
+                _state["posts_total"] = _state.get("posts_total", 0) + 1
+
+                try:
+                    pin_dict = {
+                        "id": f"manual_{drop_id}",
+                        "title": draft["title"],
+                        "description": draft["description"],
+                        "link": draft["link"],
+                        "anime_name": draft["anime_name"],
+                        "image_url": draft.get("image_url", ""),
+                    }
+                    cp_res = dispatch_all_crossposts(pin_dict, draft["image_path"], pin_url="")
+                except Exception as cp_err:
+                    logger.error(f"[TG BOT] Quick-post crosspost error: {cp_err}", exc_info=True)
+                    cp_res = {}
+
+                confirm_kb = get_post_confirmation_keyboard(
+                    pinterest_url=draft.get("pin_url", ""),
+                    amazon_url=draft["link"],
+                    arena_url=cp_res.get("arena_url", ""),
+                    bluesky_url=cp_res.get("bluesky_url", ""),
+                    raindrop_url=cp_res.get("raindrop_url", ""),
+                    mastodon_url=cp_res.get("mastodon_url", ""),
+                    pixelfed_url=cp_res.get("pixelfed_url", ""),
+                    freeimage_url=cp_res.get("freeimage_url", ""),
+                    imghippo_url=cp_res.get("imghippo_url", ""),
+                    wallhaven_url=cp_res.get("wallhaven_url", ""),
+                )
+                hdr = "📌 *Live on Pinterest!* ✅" if uploaded_status == "live" else "📤 *Sent to Pinterest Queue!* (Make.com)"
+                conf_text = (
+                    f"{hdr}\n"
+                    f"{'─' * 28}\n"
+                    f"📝 *Title:* {draft['title']}\n"
+                    f"🎌 *Anime:* {draft['anime_name']}\n"
+                    f"🔗 *Affiliate:* Amazon & Displate Bridge\n\n"
+                    f"⚡ Syndicated across all active channels in parallel."
+                )
+                await query.edit_message_caption(caption=conf_text, reply_markup=confirm_kb, parse_mode="Markdown")
+            else:
+                from database import enqueue_pin
+                enqueue_pin(
+                    post_id=f"manual_{drop_id}",
+                    image_path=draft["image_path"],
+                    title=draft["title"],
+                    description=draft["description"],
+                    link=draft["link"],
+                    anime_name=draft["anime_name"],
+                    image_url=draft.get("image_url", ""),
+                    board_id=draft.get("board_id", ""),
+                    priority=1,
+                    is_organic=0,
+                )
+                await query.edit_message_caption(
+                    caption=f"⚠️ *Direct upload had an issue — pin queued as Priority #1 instead!*\n\n📝 *Title:* {draft['title']}",
+                    reply_markup=get_queue_keyboard(),
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            logger.error(f"[TG BOT] drop_postnow error: {e}", exc_info=True)
+            await query.edit_message_caption(caption=f"❌ Error during posting: {e}")
+
+    elif data.startswith("drop_organic:"):
+        drop_id = data[13:]
+        draft = _pending_drops.pop(drop_id, None)
+        if not draft:
+            await query.answer("Draft has already been processed or expired.")
+            return
+        await query.answer("🌿 Publishing as Organic Trust Pin...")
+        await query.edit_message_caption(
+            caption=f"🌿 *Publishing as Organic Trust Pin (Zero Affiliate Links)...*\n\n📝 *{draft['title']}*\n🎌 *{draft['anime_name']}*",
+            parse_mode="Markdown"
+        )
+        try:
+            from pinterest_uploader import upload_to_pinterest
+            from database import mark_file_uploaded
+            from crosspost_dispatcher import dispatch_all_crossposts
+            import config, os
+
+            organic_link = getattr(config, "ORGANIC_PIN_LINK", "") or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+            clean_desc = draft["description"].replace("#ad", "").replace("#affiliate", "").replace("#AD", "").strip()
+
+            uploaded_status = upload_to_pinterest(
+                image_path=draft["image_path"],
+                title=draft["title"],
+                description=clean_desc,
+                link=organic_link,
+                anime_name=draft["anime_name"],
+                board_id=draft.get("board_id", ""),
+            )
+            success = bool(uploaded_status)
+            if success:
+                fn = os.path.basename(draft["image_path"])
+                mark_file_uploaded(
+                    filename=fn,
+                    title=draft["title"],
+                    anime_name=draft["anime_name"],
+                    image_url=draft.get("image_url", ""),
+                    sha256=draft.get("sha256", ""),
+                    phash=draft.get("phash", ""),
+                    is_organic=1,
+                )
+                _state["posts_today"] = _state.get("posts_today", 0) + 1
+                _state["posts_total"] = _state.get("posts_total", 0) + 1
+
+                try:
+                    pin_dict = {
+                        "id": f"manual_org_{drop_id}",
+                        "title": draft["title"],
+                        "description": clean_desc,
+                        "link": organic_link,
+                        "anime_name": draft["anime_name"],
+                        "image_url": draft.get("image_url", ""),
+                        "is_organic": 1,
+                    }
+                    cp_res = dispatch_all_crossposts(pin_dict, draft["image_path"], pin_url="")
+                except Exception as cp_err:
+                    logger.error(f"[TG BOT] Organic crosspost error: {cp_err}", exc_info=True)
+                    cp_res = {}
+
+                hdr = "🌿 *Organic Pin Live on Pinterest!* ✅" if uploaded_status == "live" else "🌿 *Organic Pin Queued (Make.com)*"
+                conf_text = (
+                    f"{hdr}\n"
+                    f"{'─' * 28}\n"
+                    f"📝 *Title:* {draft['title']}\n"
+                    f"🎌 *Anime:* {draft['anime_name']}\n"
+                    f"🔗 *Link:* {organic_link}\n\n"
+                    f"🛡️ *Zero Affiliate Disclosures* — reinforces Pinterest domain authority & organic trust score."
+                )
+                confirm_kb = get_post_confirmation_keyboard(
+                    pinterest_url=draft.get("pin_url", ""),
+                    amazon_url="",
+                    arena_url=cp_res.get("arena_url", ""),
+                    bluesky_url=cp_res.get("bluesky_url", ""),
+                    raindrop_url=cp_res.get("raindrop_url", ""),
+                    mastodon_url=cp_res.get("mastodon_url", ""),
+                    pixelfed_url=cp_res.get("pixelfed_url", ""),
+                    freeimage_url=cp_res.get("freeimage_url", ""),
+                    imghippo_url=cp_res.get("imghippo_url", ""),
+                    wallhaven_url=cp_res.get("wallhaven_url", ""),
+                )
+                await query.edit_message_caption(caption=conf_text, reply_markup=confirm_kb, parse_mode="Markdown")
+            else:
+                from database import enqueue_pin
+                enqueue_pin(
+                    post_id=f"manual_org_{drop_id}",
+                    image_path=draft["image_path"],
+                    title=draft["title"],
+                    description=clean_desc,
+                    link=organic_link,
+                    anime_name=draft["anime_name"],
+                    image_url=draft.get("image_url", ""),
+                    board_id=draft.get("board_id", ""),
+                    priority=1,
+                    is_organic=1,
+                )
+                await query.edit_message_caption(
+                    caption=f"⚠️ *Direct upload had an issue — pin enqueued as Priority #1 Organic Pin!*\n\n📝 *Title:* {draft['title']}",
+                    reply_markup=get_queue_keyboard(),
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            logger.error(f"[TG BOT] drop_organic error: {e}", exc_info=True)
+            await query.edit_message_caption(caption=f"❌ Error during organic posting: {e}")
+
+    elif data.startswith("drop_queue:"):
+        drop_id = data[11:]
+        draft = _pending_drops.pop(drop_id, None)
+        if not draft:
+            await query.answer("Draft has already been processed or expired.")
+            return
+        await query.answer("📅 Adding to Queue...")
+        try:
+            from scheduler import scheduler
+            scheduler.enqueue_new_image(
+                post_id=f"manual_{drop_id}",
+                image_path=draft["image_path"],
+                title=draft["title"],
+                description=draft["description"],
+                link=draft["link"],
+                anime_name=draft["anime_name"],
+                board_id=draft.get("board_id", ""),
+                image_url=draft.get("image_url", ""),
+                sha256=draft.get("sha256", ""),
+                phash=draft.get("phash", ""),
+                is_organic=0,
+            )
+            await query.edit_message_caption(
+                caption=(
+                    f"📥 *Added to Queue (Priority #1)!* ✅\n"
+                    f"{'─' * 28}\n"
+                    f"📝 *Title:* {draft['title']}\n"
+                    f"🎌 *Anime:* {draft['anime_name']}\n\n"
+                    f"⏰ Scheduled for today/upcoming optimal posting window.\n"
+                    f"Use /queue to inspect the active schedule."
+                ),
+                reply_markup=get_queue_keyboard(),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"[TG BOT] drop_queue error: {e}", exc_info=True)
+            await query.edit_message_caption(caption=f"❌ Error adding to queue: {e}")
+
+    elif data.startswith("drop_reroll:"):
+        drop_id = data[12:]
+        draft = _pending_drops.get(drop_id)
+        if not draft:
+            await query.answer("Draft not found or expired.")
+            return
+        await query.answer("🔄 Re-rolling AI Caption...")
+        try:
+            from ai_caption import generate_pin_content
+            from amazon_search import clean_character_name, generate_amazon_link
+            from board_router import get_board_for_anime
+            from seo_matrix import build_multi_intent_title, build_multi_intent_description, generate_multi_intent_tags
+            import config
+
+            reroll_hint = f"{draft.get('caption_hint', '')} fresh aesthetic angle wallpaper anime art".strip()
+            anime_name, title, desc_template = generate_pin_content(
+                reroll_hint, "studio_drop", image_path=draft["image_path"],
+                openrouter_key=config.OPENROUTER_API_KEY
+            )
+            raw_char = title.split(" - ")[0].split()[0] if title else ""
+            character_name = clean_character_name(raw_char, anime_name=anime_name)
+            genre, board_id = get_board_for_anime(anime_name)
+            try:
+                title = build_multi_intent_title(
+                    original_title=title, anime_name=anime_name,
+                    character_name=character_name, genre=genre
+                )
+            except Exception:
+                pass
+            amazon_link = generate_amazon_link(
+                anime_name, character_name=character_name,
+                title=title, image_url=draft.get("image_url", "")
+            )
+            try:
+                description = build_multi_intent_description(
+                    base_description=desc_template, anime_name=anime_name,
+                    character_name=character_name, link_url=amazon_link
+                )
+                optimized_tags = generate_multi_intent_tags(
+                    anime_name=anime_name, character_name=character_name,
+                    genre=genre, target_count=13, include_disclosure=True
+                )
+                description = description.rstrip() + "\n\n" + optimized_tags
+                if "#ad" not in description.lower() and "#affiliate" not in description.lower():
+                    description = description.rstrip() + "\n#ad #affiliate"
+            except Exception:
+                description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link) + "\n#ad #affiliate"
+
+            draft.update({
+                "title": title,
+                "description": description,
+                "link": amazon_link,
+                "anime_name": anime_name,
+                "character_name": character_name,
+                "board_id": board_id,
+                "genre": genre,
+            })
+
+            char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
+            new_caption = (
+                f"✨ *Studio Quick-Post Draft (Re-Rolled)*\n"
+                f"{'─' * 28}\n"
+                f"📝 *Title:* {title}\n"
+                f"🎌 *Anime:* {anime_name}{char_label} • *Board:* {genre.title()}\n"
+                f"🔗 *Affiliate:* Amazon & Displate Bridge\n\n"
+                f"{description[:220]}..."
+            )
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🚀 Post Now (All Platforms)", callback_data=f"drop_postnow:{drop_id}"),
+                    InlineKeyboardButton("📅 Add to Queue (Priority #1)", callback_data=f"drop_queue:{drop_id}"),
+                ],
+                [
+                    InlineKeyboardButton("🌿 Post as Organic (No Link)", callback_data=f"drop_organic:{drop_id}"),
+                    InlineKeyboardButton("🔄 Re-roll Again", callback_data=f"drop_reroll:{drop_id}"),
+                ],
+                [
+                    InlineKeyboardButton("❌ Discard", callback_data=f"drop_discard:{drop_id}"),
+                ]
+            ])
+            await query.edit_message_caption(caption=new_caption, reply_markup=keyboard, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"[TG BOT] drop_reroll error: {e}", exc_info=True)
+            await query.message.reply_text(f"❌ Error during re-roll: {e}")
+
+    elif data.startswith("drop_discard:"):
+        drop_id = data[13:]
+        draft = _pending_drops.pop(drop_id, None)
+        await query.answer("Draft discarded.")
+        if draft and draft.get("image_path"):
+            try:
+                import os
+                if os.path.exists(draft["image_path"]) and "studio_" in draft["image_path"]:
+                    os.remove(draft["image_path"])
+            except Exception:
+                pass
+        await query.edit_message_caption(caption="🗑️ *Draft discarded by admin.*", parse_mode="Markdown")
+
     elif data == "btn_postnow":
         await query.message.reply_text("🚀 Triggering immediate post...")
         await cmd_postnow(update, context)
@@ -2692,344 +3095,165 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int):
 
 async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
-    Handler for when admin sends/forwards any photo or image directly to the bot.
-    Processes the image, generates AI vision captions, finds Amazon merchandise,
-    and uploads directly to Pinterest immediately with a full detailed report!
+    Direct Telegram Image Drop & Interactive Quick-Post Studio.
+    Admin drops or forwards any anime artwork:
+      1. Downloads image & processes through Lanczos downscale (zero crop).
+      2. Inpaints and removes corner watermarks or channel text.
+      3. Performs cryptographic SHA-256 and visual pHash deduplication check.
+      4. Uploads to permanent image host (Catbox/Freeimage/Cloudinary).
+      5. Runs Vision AI to identify anime, character, and multi-intent metadata.
+      6. Builds multi-intent SEO title, description, and affiliate bridge link.
+      7. Sends back the processed photo with interactive 1-tap action buttons:
+         [🚀 Post Now (All Platforms)]  [📅 Add to Queue (Priority #1)]
+         [🌿 Post as Organic (No Link)] [🔄 Re-roll AI Caption]
+         [❌ Discard]
     """
     if not _is_admin(update): return
     msg = update.effective_message
-    status_msg = await msg.reply_text("📥 Processing your image & generating AI caption...")
+    status_msg = await msg.reply_text("📥 *Artwork received!* Processing image & running Vision AI analysis...", parse_mode="Markdown")
     try:
         import time as _time
+        import uuid
         os.makedirs("downloads", exist_ok=True)
         ts = int(_time.time())
-        save_path = os.path.join("downloads", f"manual_{ts}.jpg")
+        drop_id = f"drop_{ts}_{uuid.uuid4().hex[:6]}"
+        save_path = os.path.join("downloads", f"studio_{ts}.jpg")
 
         if update.message.photo:
             file_id = update.message.photo[-1].file_id
         elif update.message.document:
             file_id = update.message.document.file_id
         else:
+            await status_msg.edit_text("❌ No supported image found in upload.")
             return
 
         tg_file = await context.bot.get_file(file_id)
         await tg_file.download_to_drive(save_path)
 
+        # 1. Process image
         from image_processor import process_image
-        from ai_caption import generate_pin_content
-        from amazon_search import generate_amazon_link
-        from hashtag_optimizer import optimize_hashtags, replace_hashtags_in_description
-        from board_router import get_board_for_anime
-        from pinterest_uploader import upload_to_pinterest
-        from database import mark_file_uploaded, enqueue_pin, get_tracked_target_url
-        import config
+        processed_path = process_image(save_path, "studio_drop")
 
-        processed_path = process_image(save_path, "manual_upload")
+        # 2. Watermark cleaner
+        try:
+            from watermark_inpainter import verify_and_clean
+            processed_path = verify_and_clean(processed_path)
+        except Exception as _wm_err:
+            logger.warning(f"[Studio Drop] Watermark check error: {_wm_err}")
+
+        # 3. Deduplication check
+        dup_warning = ""
+        img_sha, img_phash = "", ""
+        try:
+            from image_dedup import get_image_fingerprints
+            from database import is_image_duplicate
+            img_sha, img_phash = get_image_fingerprints(processed_path)
+            is_dup, dup_reason = is_image_duplicate(filepath=processed_path, sha256=img_sha, phash=img_phash)
+            if is_dup:
+                dup_warning = f"\n⚠️ *Warning:* Visual duplicate detected: {dup_reason}\n"
+        except Exception:
+            pass
+
+        # 4. Upload to permanent host immediately
+        permanent_url = ""
+        try:
+            from image_host import upload_image_to_host
+            permanent_url = upload_image_to_host(processed_path)
+            if permanent_url:
+                logger.info(f"[Studio Drop] Permanent host upload success: {permanent_url[:60]}")
+        except Exception as _host_err:
+            logger.warning(f"[Studio Drop] Host upload error: {_host_err}")
+
+        # 5. Vision AI content generation
+        from ai_caption import generate_pin_content
+        import config
         caption_hint = update.message.caption or ""
         anime_name, title, desc_template = generate_pin_content(
-            caption_hint, "manual_upload", image_path=processed_path,
-            api_key=None, openrouter_key=config.OPENROUTER_API_KEY
+            caption_hint, "studio_drop", image_path=processed_path,
+            openrouter_key=config.OPENROUTER_API_KEY
         )
-        from amazon_search import clean_character_name
+
+        # 6. Character name & board routing
+        from amazon_search import clean_character_name, generate_amazon_link
+        from board_router import get_board_for_anime
         raw_char = title.split(" - ")[0].split()[0] if title else ""
-        character_name = clean_character_name(raw_char)
+        character_name = clean_character_name(raw_char, anime_name=anime_name)
         genre, board_id = get_board_for_anime(anime_name)
-        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title)
+
+        # 7. Multi-intent SEO Title
+        from seo_matrix import build_multi_intent_title, build_multi_intent_description, generate_multi_intent_tags
         try:
-            from seo_matrix import build_multi_intent_description, generate_multi_intent_tags
+            title = build_multi_intent_title(
+                original_title=title, anime_name=anime_name,
+                character_name=character_name, genre=genre
+            )
+        except Exception:
+            pass
+
+        # 8. Affiliate bridge link
+        amazon_link = generate_amazon_link(
+            anime_name, character_name=character_name,
+            title=title, image_url=permanent_url
+        )
+
+        # 9. Multi-intent description & hashtags
+        try:
             description = build_multi_intent_description(
-                base_description=desc_template,
-                anime_name=anime_name,
-                character_name=character_name,
-                link_url=amazon_link,
+                base_description=desc_template, anime_name=anime_name,
+                character_name=character_name, link_url=amazon_link
             )
             optimized_tags = generate_multi_intent_tags(
-                anime_name=anime_name,
-                character_name=character_name,
-                genre=genre,
-                target_count=13,
-                include_disclosure=True,
+                anime_name=anime_name, character_name=character_name,
+                genre=genre, target_count=13, include_disclosure=True
             )
             description = description.rstrip() + "\n\n" + optimized_tags
             if "#ad" not in description.lower() and "#affiliate" not in description.lower():
                 description = description.rstrip() + "\n#ad #affiliate"
         except Exception:
-            description = replace_hashtags_in_description(
-                desc_template.replace("##LINK_PLACEHOLDER##", amazon_link),
-                optimize_hashtags(anime_name=anime_name, genre=genre, character_name=character_name)
-            )
+            description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link) + "\n#ad #affiliate"
 
-        target_url = get_tracked_target_url(amazon_link)
-        amazon_line = f"\n🎯 Direct Amazon : {target_url}" if target_url != amazon_link else ""
-        pinterest_profile = getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+        # 10. Cache in _pending_drops
+        _pending_drops[drop_id] = {
+            "drop_id": drop_id,
+            "image_path": processed_path,
+            "image_url": permanent_url,
+            "title": title,
+            "description": description,
+            "desc_template": desc_template,
+            "link": amazon_link,
+            "anime_name": anime_name,
+            "character_name": character_name,
+            "board_id": board_id,
+            "genre": genre,
+            "sha256": img_sha,
+            "phash": img_phash,
+            "caption_hint": caption_hint,
+        }
 
-
-        await status_msg.edit_text("🚀 Uploading pin to Pinterest now...")
-
-        # Pre-upload watermark check: ensure 100% clean image
-        try:
-            from watermark_inpainter import verify_and_clean
-            processed_path = verify_and_clean(processed_path)
-        except Exception:
-            pass
-
-        # Direct upload to Pinterest
-        uploaded_ok = upload_to_pinterest(
-            image_path=processed_path,
-            title=title,
-            description=description,
-            link=amazon_link,
-            anime_name=anime_name,
-            board_id=board_id,
+        char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
+        draft_caption = (
+            f"✨ *Studio Quick-Post Draft Ready!*\n"
+            f"{'─' * 28}\n"
+            f"📝 *Title:* {title}\n"
+            f"🎌 *Anime:* {anime_name}{char_label} • *Board:* {genre.title()}\n"
+            f"🔗 *Affiliate:* Amazon & Displate Bridge{dup_warning}\n"
+            f"{description[:220]}..."
         )
 
-        if uploaded_ok == "live":
-            mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
-            _state["posts_today"] = _state.get("posts_today", 0) + 1
-            _state["posts_total"] = _state.get("posts_total", 0) + 1
-            status_header = "📌 Pin Confirmed Live on Pinterest! ✅"
-            action_note = "Pin verified by Pinterest API — it is live and visible to everyone."
-        elif uploaded_ok == "queued" or uploaded_ok is True:
-            # Make.com webhook accepted — pin is NOT yet confirmed on Pinterest.
-            # Keep counters but tell the truth so user checks Created tab / Make history.
-            mark_file_uploaded(os.path.basename(processed_path), title, anime_name)
-            _state["posts_today"] = _state.get("posts_today", 0) + 1
-            _state["posts_total"] = _state.get("posts_total", 0) + 1
-            status_header = "📤 Sent to Pinterest Queue (Unconfirmed)"
-            action_note = (
-                "⚠️ Make.com accepted the webhook but the pin was NOT confirmed on Pinterest.\n"
-                "Check: make.com → History tab. If scenario is Inactive → toggle it ON."
-            )
-
-        # Cross-post + confirm prep run for BOTH "live" and "queued" outcomes
-        # (previously nested under the queued branch only → NameError on the "live" path)
-        if uploaded_ok:
-
-            # ── Cross-post to all enabled platforms (same as scheduler) ──────────
-            _arena_result = False
-            _fi_url = None
-            _hippo_url = None
-            _cross_fn = os.path.basename(processed_path)
-            _cross_img = ""  # no public CDN URL yet for manual uploads
-
-            # Upload to public CDN first so platforms can fetch the image
-            _public_img = _cross_img
-            try:
-                from image_host import upload_image_to_host
-                _hosted = upload_image_to_host(processed_path)
-                if _hosted:
-                    _public_img = _hosted
-                    logger.info(f"[TG BOT] Public CDN URL for cross-posts: {_hosted[:80]}")
-            except Exception as _host_err:
-                logger.warning(f"[TG BOT] CDN upload failed (cross-post image): {_host_err}")
-
-            try:
-                from config import ARENA_ENABLED
-                if ARENA_ENABLED:
-                    from arena_uploader import post_to_arena
-                    from database import mark_arena_posted, is_arena_posted
-                    if _public_img and not is_arena_posted(_cross_fn):
-                        _ok = post_to_arena(image_url=_public_img, title=title, description=description, link=amazon_link)
-                        _arena_result = bool(_ok)
-                        if _ok: mark_arena_posted(_cross_fn, title=title, image_url=_public_img)
-                    else:
-                        _arena_result = True
-            except Exception as e:
-                _arena_result = False; logger.warning(f"[TG BOT] Are.na cross-post error: {e}")
-
-
-            try:
-                from config import BLUESKY_ENABLED
-                if BLUESKY_ENABLED:
-                    from bluesky_uploader import post_to_bluesky
-                    from database import mark_bluesky_posted, is_bluesky_posted
-                    if not is_bluesky_posted(_cross_fn):
-                        _uri = post_to_bluesky(image_url=_public_img, title=title, caption=description, link=amazon_link, image_path=processed_path)
-                        _bsky_result = bool(_uri)
-                        if _uri: mark_bluesky_posted(_cross_fn, post_uri=_uri, image_url=_public_img)
-                    else:
-                        _bsky_result = True
-            except Exception as e:
-                _bsky_result = False; logger.warning(f"[TG BOT] Bluesky cross-post error: {e}")
-
-            try:
-                from config import RAINDROP_ENABLED
-                if RAINDROP_ENABLED:
-                    from raindrop_uploader import post_to_raindrop
-                    from database import mark_raindrop_posted, is_raindrop_posted
-                    if not is_raindrop_posted(_cross_fn):
-                        _ok = post_to_raindrop(image_url=_public_img, title=title, description=description, link=amazon_link, image_path=processed_path)
-                        _raindrop_result = bool(_ok)
-                        if _ok: mark_raindrop_posted(_cross_fn, title=title, image_url=_public_img)
-                    else:
-                        _raindrop_result = True
-            except Exception as e:
-                _raindrop_result = False; logger.warning(f"[TG BOT] Raindrop cross-post error: {e}")
-
-            try:
-                from config import MASTODON_ENABLED
-                if MASTODON_ENABLED:
-                    from mastodon_uploader import post_to_mastodon
-                    from database import mark_mastodon_posted, is_mastodon_posted
-                    if not is_mastodon_posted(_cross_fn):
-                        _url = post_to_mastodon(image_url=_public_img, title=title, description=description, link=amazon_link, image_path=processed_path)
-                        _mastodon_result = bool(_url)
-                        if _url: mark_mastodon_posted(_cross_fn, post_url=_url, title=title, image_url=_public_img)
-                    else:
-                        _mastodon_result = True
-            except Exception as e:
-                _mastodon_result = False; logger.warning(f"[TG BOT] Mastodon cross-post error: {e}")
-
-
-            try:
-                from config import PIXELFED_ENABLED
-                if PIXELFED_ENABLED:
-                    from pixelfed_uploader import post_to_pixelfed
-                    from database import mark_pixelfed_posted, is_pixelfed_posted
-                    if not is_pixelfed_posted(_cross_fn):
-                        _pix_url = post_to_pixelfed(
-                            image_url=_public_img,
-                            title=title,
-                            description=description,
-                            link=amazon_link,
-                            image_path=processed_path,
-                        )
-                        _pixelfed_result = bool(_pix_url)
-                        if _pix_url: mark_pixelfed_posted(_cross_fn, post_url=_pix_url, title=title, image_url=_public_img)
-                    else:
-                        _pixelfed_result = True
-            except Exception as e:
-                _pixelfed_result = False; logger.warning(f"[TG BOT] Pixelfed cross-post error: {e}")
-
-            try:
-                from config import FREEIMAGE_ENABLED
-                if FREEIMAGE_ENABLED:
-                    from freeimage_uploader import post_to_freeimage
-                    from database import mark_freeimage_posted, is_freeimage_posted
-                    if not is_freeimage_posted(_cross_fn):
-                        _fi_url = post_to_freeimage(
-                            image_path=processed_path,
-                            title=title,
-                            anime_name=anime_name,
-                            affiliate_url=amazon_link,
-                        )
-                        _freeimage_result = bool(_fi_url)
-                        if _fi_url: mark_freeimage_posted(_cross_fn, post_url=_fi_url, title=title, image_url=_public_img)
-                    else:
-                        _freeimage_result = True
-            except Exception as e:
-                _freeimage_result = False; logger.warning(f"[TG BOT] Freeimage cross-post error: {e}")
-
-
-            try:
-                from config import IMGHIPPO_ENABLED
-                if IMGHIPPO_ENABLED:
-                    from imghippo_uploader import post_to_imghippo
-                    from database import mark_imghippo_posted, is_imghippo_posted
-                    if not is_imghippo_posted(_cross_fn):
-                        _hippo_url = post_to_imghippo(
-                            image_path=processed_path,
-                            title=title,
-                            anime_name=anime_name,
-                            affiliate_url=amazon_link,
-                        )
-                        _imghippo_result = bool(_hippo_url)
-                        if _hippo_url: mark_imghippo_posted(_cross_fn, post_url=_hippo_url, title=title, image_url=_public_img)
-                    else:
-                        _imghippo_result = True
-            except Exception as e:
-                _imghippo_result = False; logger.warning(f"[TG BOT] Imghippo cross-post error: {e}")
-
-            # Auto-dispatch stock photography uploads if configured
-            try:
-                from scheduler import _dispatch_stock_uploads_async
-                _dispatch_stock_uploads_async(image_path=processed_path, title=title, caption=anime_name)
-            except Exception as _stk_err:
-                logger.debug(f"[TG BOT] Stock auto-dispatch skipped: {_stk_err}")
-
-            def _icon(r): return "✅" if r is True else ("❌" if r is False else "—")
-            _cross_lines = (
-                f"\n{'─' * 26}\n"
-                f"🦋 Bluesky {_icon(_bsky_result)}  💧 Raindrop {_icon(_raindrop_result)}\n"
-                f"📷 Pixelfed {_icon(_pixelfed_result)}  🖼️ Freeimage {_icon(_freeimage_result)}\n"
-            )
-
-
-        else:
-            # Enqueue if upload failed or dry-run
-            import datetime as _dt
-            today_ist_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
-            enqueue_pin(
-                post_id=f"manual_{ts}", image_path=processed_path, title=title,
-                description=description, link=amazon_link, anime_name=anime_name,
-                image_url="", board_id=board_id, priority=1, scheduled_date=today_ist_str
-            )
-            status_header = "📥 Queued for Posting (#1 in line)"
-            action_note = "Queued! Tap [ 🚀 Post Now ] below to publish immediately."
-            _cross_lines = ""  # No cross-post for queued items
-            # Init cross-post vars so the button builder below never NameErrors
-            _pixelfed_result = None; _freeimage_result = None; _imghippo_result = None
-            _pix_url = None; _fi_url = None; _hippo_url = None
-
-
-        board_label = f" • {genre.title()}" if genre else ""
-        char_label = f" ({character_name})" if character_name and character_name.lower() not in anime_name.lower() else ""
-
-        if uploaded_ok == "live":
-            confirm_text = (
-                f"📌 Live on Pinterest!\n"
-                f"{'─' * 26}\n"
-                f"📝 {title}\n"
-                f"🎌 {anime_name}{char_label}{board_label}"
-                f"{_cross_lines}"
-            )
-        elif uploaded_ok:
-            # Make webhook accepted — pin NOT verified live yet
-            confirm_text = (
-                f"📤 Sent to Pinterest queue (via Make.com)\n"
-                f"{'─' * 26}\n"
-                f"📝 {title}\n"
-                f"🎌 {anime_name}{char_label}{board_label}\n"
-                f"⚠️ Make accepted it — check Make History + Created tab to confirm it's live."
-                f"{_cross_lines}"
-            )
-        else:
-            confirm_text = (
-                f"📥 Queued (#1 in line)\n"
-                f"{'─' * 26}\n"
-                f"📝 {title}\n"
-                f"🎌 {anime_name}{char_label}{board_label}"
-            )
-
-        # Direct link buttons
-        buttons = [
+        keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📌 View on Pinterest", url=pinterest_profile),
-                InlineKeyboardButton("🎯 View Amazon Merch", url=target_url or amazon_link),
+                InlineKeyboardButton("🚀 Post Now (All Platforms)", callback_data=f"drop_postnow:{drop_id}"),
+                InlineKeyboardButton("📅 Add to Queue (Priority #1)", callback_data=f"drop_queue:{drop_id}"),
+            ],
+            [
+                InlineKeyboardButton("🌿 Post as Organic (No Link)", callback_data=f"drop_organic:{drop_id}"),
+                InlineKeyboardButton("🔄 Re-roll AI Caption", callback_data=f"drop_reroll:{drop_id}"),
+            ],
+            [
+                InlineKeyboardButton("❌ Discard", callback_data=f"drop_discard:{drop_id}"),
             ]
-        ]
-        from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL, FREEIMAGE_ENABLED, IMGHIPPO_ENABLED
-        if _pixelfed_result and _pix_url:
-            buttons.append([InlineKeyboardButton("📷 View on Pixelfed", url=_pix_url)])
-        elif PIXELFED_ENABLED:
-            buttons.append([InlineKeyboardButton("📷 Pixelfed Profile", url=f"{PIXELFED_INSTANCE_URL}/PinterestAutomationBot")])
+        ])
 
-        if _freeimage_result and _fi_url:
-            buttons.append([InlineKeyboardButton("🖼️ View on Freeimage", url=_fi_url)])
-        elif FREEIMAGE_ENABLED:
-            buttons.append([InlineKeyboardButton("🖼️ Freeimage Gallery", url="https://freeimage.host/muthelyrics")])
-
-        if _imghippo_result and _hippo_url:
-            buttons.append([InlineKeyboardButton("🦛 View on Imghippo", url=_hippo_url)])
-        elif IMGHIPPO_ENABLED:
-            buttons.append([InlineKeyboardButton("🦛 Imghippo Gallery", url="https://www.imghippo.com/dashboard")])
-
-        if not uploaded_ok:
-            buttons.append([InlineKeyboardButton("🚀 Post to Pinterest NOW", callback_data="btn_postnow")])
-        buttons.append([InlineKeyboardButton("📋 View Queue", callback_data="btn_queue")])
-        markup = InlineKeyboardMarkup(buttons)
-
-        # Delete intermediate status message and send rich confirmation with photo
         try:
             await status_msg.delete()
         except Exception:
@@ -3037,13 +3261,15 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
 
         if processed_path and os.path.exists(processed_path):
             with open(processed_path, "rb") as img:
-                await msg.reply_photo(photo=img, caption=confirm_text[:1024], reply_markup=markup)
+                await msg.reply_photo(photo=img, caption=draft_caption[:1024], reply_markup=keyboard, parse_mode="Markdown")
+        elif permanent_url:
+            await msg.reply_photo(photo=permanent_url, caption=draft_caption[:1024], reply_markup=keyboard, parse_mode="Markdown")
         else:
-            await msg.reply_text(confirm_text, reply_markup=markup)
+            await msg.reply_text(draft_caption, reply_markup=keyboard, parse_mode="Markdown")
 
     except Exception as e:
-        logger.error(f"[TG BOT] Mobile upload error: {e}", exc_info=True)
-        await msg.reply_text(f"❌ Error processing upload: {e}")
+        logger.error(f"[TG BOT] Studio Quick-Drop upload error: {e}", exc_info=True)
+        await msg.reply_text(f"❌ Error processing upload in Studio: {e}")
 
 
 
@@ -4357,6 +4583,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("help",          cmd_help),
             ("status",        cmd_status),
             ("stats",         cmd_stats),
+            ("organic",       cmd_organic),
+            ("trustratio",    cmd_organic),
             ("digest",        cmd_digest),
             ("performance",   cmd_digest),
             ("dailyreport",   cmd_dailyreport),
@@ -4462,6 +4690,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             await application.bot.set_my_commands([
                 BotCommand("ping",          "Check if bot is alive"),
                 BotCommand("status",        "Bot status, mode and uptime"),
+                BotCommand("organic",       "80/20 Organic Trust Ratio & account health"),
                 BotCommand("summary",       "Today's multi-platform report (Auto: 10 PM)"),
                 BotCommand("digest",        "Daily performance & health digest (Auto: 9 PM)"),
                 BotCommand("crosspost",     "Multi-platform status across all 10 platforms"),

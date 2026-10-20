@@ -139,8 +139,21 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             except Exception:
                 logger.warning(f"[Main] SEO title build failed (non-critical): {_seo_err}")
 
-        # 5. Generate Amazon affiliate deep link (with character for specific product match & image_url for bridge)
-        amazon_link = generate_amazon_link(anime_name, character_name=character_name, title=title, image_url=image_url)
+        # 5. Check 80/20 Organic Trust Ratio
+        is_organic = 0
+        try:
+            from database import should_next_pin_be_organic
+            if getattr(config, "ORGANIC_TRUST_ENABLED", True) and should_next_pin_be_organic(getattr(config, "ORGANIC_TRUST_RATIO", 0.20)):
+                is_organic = 1
+                logger.info(f"[Main] 🌿 Pin designated as ORGANIC TRUST PIN (80/20 rule) for '{anime_name}'")
+        except Exception as _org_check_err:
+            logger.debug(f"[Main] Organic trust check error (defaulting to monetized): {_org_check_err}")
+
+        # 5b. Generate Link (Profile/Board URL if organic, otherwise Amazon/Displate affiliate bridge)
+        if is_organic:
+            pin_link = getattr(config, "ORGANIC_PIN_LINK", "") or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+        else:
+            pin_link = generate_amazon_link(anime_name, character_name=character_name, title=title, image_url=image_url)
 
         # 6. Build Multi-Intent SEO Description & Intent-Balanced Hashtags
         #    Prepend a natural hook in the first 150 chars connecting 4K wallpapers,
@@ -151,20 +164,20 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
                 base_description=desc_template,
                 anime_name=anime_name,
                 character_name=character_name,
-                link_url=amazon_link,
+                link_url=pin_link,
             )
             optimized_tags = generate_multi_intent_tags(
                 anime_name=anime_name,
                 character_name=character_name,
                 genre=genre,
                 target_count=13,
-                include_disclosure=True,
+                include_disclosure=(not is_organic),
             )
             description = description.rstrip() + "\n\n" + optimized_tags
-            logger.info(f"[Main] Multi-Intent SEO description & tags built for '{anime_name}'")
+            logger.info(f"[Main] Multi-Intent SEO description & tags built for '{anime_name}' (Organic={is_organic})")
         except Exception as _seo_mat_err:
             logger.warning(f"[Main] Multi-intent SEO matrix failed, using fallback: {_seo_mat_err}")
-            description = desc_template.replace("##LINK_PLACEHOLDER##", amazon_link)
+            description = desc_template.replace("##LINK_PLACEHOLDER##", pin_link)
             try:
                 description = inject_keywords_into_description(
                     description=description,
@@ -181,17 +194,20 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             )
             description = replace_hashtags_in_description(description, optimized_tags)
 
-        # Guarantee FTC & Pinterest required disclosure tags are ALWAYS present
-        if "#ad" not in description.lower() and "#affiliate" not in description.lower():
-            description = description.rstrip() + "\n#ad #affiliate"
+        # Guarantee FTC & Pinterest required disclosure tags are present ONLY for monetized affiliate pins
+        if not is_organic:
+            if "#ad" not in description.lower() and "#affiliate" not in description.lower():
+                description = description.rstrip() + "\n#ad #affiliate"
+        else:
+            description = description.replace("#ad", "").replace("#affiliate", "").replace("#AD", "").strip()
 
         # 8. Record pin for Telegram /preview and /stats
-        record_pin(anime_name, title, description, amazon_link, processed_path)
+        record_pin(anime_name, title, description, pin_link, processed_path)
 
         # 9. Queue with priority scheduling (new images always before backlog)
         if config.MAKE_WEBHOOK_URL and not config.DRY_RUN and not config.AUTO_POST_MODE:
             logger.info("[Main] Sending pin to Telegram for approval...")
-            send_pin_approval_request(processed_path, title, description, amazon_link)
+            send_pin_approval_request(processed_path, title, description, pin_link)
         else:
             safe_post_id = filepath.replace("/", "_").replace("\\", "_")
             scheduler.enqueue_new_image(
@@ -199,12 +215,13 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
                 image_path=processed_path,
                 title=title,
                 description=description,
-                link=amazon_link,
+                link=pin_link,
                 anime_name=anime_name,
                 board_id=board_id,
                 image_url=image_url,  # Store Telegram CDN URL for file resurrection after restarts
                 sha256=img_sha,
                 phash=img_phash,
+                is_organic=is_organic,
             )
 
         # 10. Clean up original download to save disk space (keep processed copy)

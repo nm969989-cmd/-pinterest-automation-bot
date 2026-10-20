@@ -86,13 +86,14 @@ def build_state_payload() -> tuple[dict, int]:
                 "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 200"
             ).fetchall()
         ]
-        # Uploaded files (last 150 with fingerprints for persistent deduplication)
+        # Uploaded files (last 150 with fingerprints for persistent deduplication and organic trust status)
         uploads = [
             {"filename": r[0], "title": r[1], "anime_name": r[2],
              "image_url": r[3], "uploaded_at": r[4],
-             "sha256": r[5] or "", "phash": r[6] or ""}
+             "sha256": r[5] or "", "phash": r[6] or "",
+             "is_organic": r[7] or 0}
             for r in conn.execute(
-                "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash "
+                "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash, is_organic "
                 "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 150"
             ).fetchall()
         ]
@@ -102,10 +103,11 @@ def build_state_payload() -> tuple[dict, int]:
              "description": r[3], "link": r[4], "anime_name": r[5],
              "image_url": r[6], "board_id": r[7], "priority": r[8],
              "scheduled_date": r[9],
-             "sha256": r[10] or "", "phash": r[11] or ""}
+             "sha256": r[10] or "", "phash": r[11] or "",
+             "is_organic": r[12] or 0}
             for r in conn.execute(
                 "SELECT post_id, image_path, title, description, link, "
-                "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash FROM pin_queue"
+                "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash, is_organic FROM pin_queue"
             ).fetchall()
         ]
         # Bot metadata (jitter, health check dates, etc.)
@@ -280,31 +282,33 @@ def restore_db_from_cloud():
                 "INSERT OR IGNORE INTO processed_posts (post_id) VALUES (?)",
                 [(p,) for p in posts]
             )
-            # Restore uploaded files — preserve original uploaded_at timestamp and fingerprints
+            # Restore uploaded files — preserve original uploaded_at timestamp, fingerprints, and is_organic flag
             uploads = state.get("uploaded_files", [])
             conn.executemany(
                 "INSERT OR IGNORE INTO uploaded_files "
-                "(filename, title, anime_name, image_url, uploaded_at, sha256, phash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(filename, title, anime_name, image_url, uploaded_at, sha256, phash, is_organic) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [(u.get("filename",""), u.get("title",""),
                   u.get("anime_name",""), u.get("image_url",""),
                   u.get("uploaded_at") or "2000-01-01 00:00:00",
-                  u.get("sha256", ""), u.get("phash", ""))
+                  u.get("sha256", ""), u.get("phash", ""),
+                  u.get("is_organic", 0))
                  for u in uploads]
             )
-            # Restore pin queue (including board_id and fingerprints)
+            # Restore pin queue (including board_id, fingerprints, and is_organic flag)
             queue = state.get("pin_queue", [])
             conn.executemany(
                 "INSERT OR IGNORE INTO pin_queue "
                 "(post_id, image_path, title, description, link, "
-                "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "anime_name, image_url, board_id, priority, scheduled_date, sha256, phash, is_organic) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(q.get("post_id",""), q.get("image_path",""),
                   q.get("title",""), q.get("description",""),
                   q.get("link",""), q.get("anime_name",""),
                   q.get("image_url",""), q.get("board_id",""),
                   q.get("priority",0), q.get("scheduled_date",""),
-                  q.get("sha256",""), q.get("phash",""))
+                  q.get("sha256",""), q.get("phash",""),
+                  q.get("is_organic", 0))
                  for q in queue]
             )
             # Restore bot_metadata (jitter, health check dates, etc.)

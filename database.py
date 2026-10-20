@@ -33,7 +33,8 @@ def init_db():
                 anime_name TEXT,
                 image_url  TEXT,
                 sha256     TEXT,
-                phash      TEXT
+                phash      TEXT,
+                is_organic INTEGER DEFAULT 0
             )
         """)
         # ── Backlog queue table ─────────────────────────────────────────────
@@ -54,6 +55,7 @@ def init_db():
                 retry_count INTEGER DEFAULT 0,   -- auto-retry: drop after 3 fails
                 sha256      TEXT,
                 phash       TEXT,
+                is_organic  INTEGER DEFAULT 0,   -- 1=organic trust pin (no affiliate link), 0=monetized
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -69,14 +71,15 @@ def init_db():
 
         # Add new columns if upgrading from older schema
         for col in ["anime_name TEXT", "image_url TEXT", "board_id TEXT DEFAULT ''",
-                    "retry_count INTEGER DEFAULT 0", "sha256 TEXT", "phash TEXT"]:
+                    "retry_count INTEGER DEFAULT 0", "sha256 TEXT", "phash TEXT",
+                    "is_organic INTEGER DEFAULT 0"]:
             try:
                 conn.execute(f"ALTER TABLE uploaded_files ADD COLUMN {col}")
             except Exception:
                 pass
-        # Add board_id, retry_count, sha256, phash to pin_queue if upgrading from older schema
+        # Add board_id, retry_count, sha256, phash, is_organic to pin_queue if upgrading from older schema
         for col in ["board_id TEXT DEFAULT ''", "retry_count INTEGER DEFAULT 0",
-                    "sha256 TEXT", "phash TEXT"]:
+                    "sha256 TEXT", "phash TEXT", "is_organic INTEGER DEFAULT 0"]:
             try:
                 conn.execute(f"ALTER TABLE pin_queue ADD COLUMN {col}")
             except Exception:
@@ -898,8 +901,9 @@ def is_image_url_uploaded(image_url: str) -> bool:
 
 
 def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "",
-                       image_url: str = "", sha256: str = "", phash: str = ""):
-    """Records that a file has been successfully uploaded to Pinterest with fingerprints."""
+                       image_url: str = "", sha256: str = "", phash: str = "",
+                       is_organic: int = 0):
+    """Records that a file has been successfully uploaded to Pinterest with fingerprints and organic flag."""
     if (not sha256 or not phash) and filename:
         try:
             from image_dedup import get_image_fingerprints
@@ -915,21 +919,21 @@ def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "",
     with _get_conn() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO uploaded_files (filename, title, anime_name, image_url, sha256, phash)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO uploaded_files (filename, title, anime_name, image_url, sha256, phash, is_organic)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (filename, title, anime_name, image_url, sha256, phash),
+            (filename, title, anime_name, image_url, sha256, phash, is_organic),
         )
-        if sha256 or phash:
-            conn.execute(
-                """
-                UPDATE uploaded_files
-                SET sha256 = COALESCE(NULLIF(sha256, ''), ?),
-                    phash = COALESCE(NULLIF(phash, ''), ?)
-                WHERE filename = ?
-                """,
-                (sha256, phash, filename)
-            )
+        conn.execute(
+            """
+            UPDATE uploaded_files
+            SET sha256 = COALESCE(NULLIF(sha256, ''), ?),
+                phash = COALESCE(NULLIF(phash, ''), ?),
+                is_organic = CASE WHEN ? = 1 THEN 1 ELSE is_organic END
+            WHERE filename = ?
+            """,
+            (sha256, phash, is_organic, filename)
+        )
         conn.commit()
 
 
@@ -1209,11 +1213,13 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
                 link: str, anime_name: str, image_url: str = "",
                 board_id: str = "",
                 priority: int = 0, scheduled_date: str = "",
-                sha256: str = "", phash: str = "") -> bool:
+                sha256: str = "", phash: str = "",
+                is_organic: int = 0) -> bool:
     """
     Add a pin to the persistent queue.
     priority=1 → new image (posted before backlog)
     priority=0 → backlog image
+    is_organic=1 → organic trust pin (no affiliate link)
     Returns True if added, False if already in queue or duplicate.
     """
     if (not sha256 or not phash) and image_path and os.path.isfile(image_path):
@@ -1232,21 +1238,22 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
             logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
             return False
 
-    try:
-        from amazon_search import preflight_validate_destination
-        link = preflight_validate_destination(link, anime_name=anime_name, title=title)
-    except Exception:
-        pass
+    if not is_organic:
+        try:
+            from amazon_search import preflight_validate_destination
+            link = preflight_validate_destination(link, anime_name=anime_name, title=title)
+        except Exception:
+            pass
 
     with _get_conn() as conn:
         try:
             conn.execute("""
                 INSERT OR IGNORE INTO pin_queue
                     (post_id, image_path, title, description, link, anime_name,
-                     image_url, board_id, priority, scheduled_date, sha256, phash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     image_url, board_id, priority, scheduled_date, sha256, phash, is_organic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (post_id, image_path, title, description, link, anime_name,
-                  image_url, board_id, priority, scheduled_date, sha256, phash))
+                  image_url, board_id, priority, scheduled_date, sha256, phash, is_organic))
             conn.commit()
             return conn.execute(
                 "SELECT changes()"
@@ -1265,7 +1272,7 @@ def get_next_queued_pin(today_str: str) -> dict | None:
     with _get_conn() as conn:
         row = conn.execute("""
             SELECT id, post_id, image_path, title, description, link,
-                   anime_name, image_url, priority, board_id
+                   anime_name, image_url, priority, board_id, is_organic
             FROM pin_queue
             WHERE scheduled_date <= ?
             ORDER BY priority DESC, id ASC
@@ -1274,17 +1281,80 @@ def get_next_queued_pin(today_str: str) -> dict | None:
     if not row:
         return None
     link_val = row[5]
-    try:
-        from amazon_search import preflight_validate_destination
-        link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
-    except Exception:
-        pass
+    is_organic = row[10] if len(row) > 10 and row[10] is not None else 0
+    if not is_organic:
+        try:
+            from amazon_search import preflight_validate_destination
+            link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
+        except Exception:
+            pass
 
     return {
         "id": row[0], "post_id": row[1], "image_path": row[2],
         "title": row[3], "description": row[4], "link": link_val,
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
+        "is_organic": is_organic,
+    }
+
+
+def should_next_pin_be_organic(target_ratio: float = 0.20) -> bool:
+    """
+    Checks recent upload history to determine if the next pin should be organic.
+    Maintains the 80/20 ratio (1 organic pin for every 4 affiliate pins).
+    Safety Rule: If the last 4 consecutive posts were all monetized (is_organic=0),
+    the 5th post MUST be organic to protect domain trust.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT is_organic FROM uploaded_files
+            ORDER BY uploaded_at DESC LIMIT 4
+        """).fetchall()
+        if len(rows) >= 4 and all((r[0] or 0) == 0 for r in rows):
+            return True
+        recent_20 = conn.execute("""
+            SELECT is_organic FROM uploaded_files
+            ORDER BY uploaded_at DESC LIMIT 20
+        """).fetchall()
+        if recent_20:
+            org_count = sum(1 for r in recent_20 if (r[0] or 0) == 1)
+            actual_ratio = org_count / len(recent_20)
+            if actual_ratio < target_ratio and len(rows) >= 2 and all((r[0] or 0) == 0 for r in rows[:2]):
+                return True
+        return False
+
+
+def get_organic_trust_stats() -> dict:
+    """
+    Returns telemetry on the 80/20 organic trust ratio:
+    total posts, organic count, monetized count, ratio percentage, and current consecutive streak.
+    """
+    with _get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM uploaded_files").fetchone()[0]
+        organic = conn.execute("SELECT COUNT(*) FROM uploaded_files WHERE is_organic = 1").fetchone()[0]
+        monetized = total - organic
+        ratio_pct = round((organic / max(1, total)) * 100, 1)
+
+        rows = conn.execute("""
+            SELECT is_organic FROM uploaded_files
+            ORDER BY uploaded_at DESC LIMIT 10
+        """).fetchall()
+        streak = 0
+        for r in rows:
+            if (r[0] or 0) == 0:
+                streak += 1
+            else:
+                break
+
+        queue_org = conn.execute("SELECT COUNT(*) FROM pin_queue WHERE is_organic = 1").fetchone()[0]
+
+    return {
+        "total_posts": total,
+        "organic_posts": organic,
+        "monetized_posts": monetized,
+        "ratio_pct": ratio_pct,
+        "monetized_streak": streak,
+        "queue_organic": queue_org,
     }
 
 
@@ -1557,7 +1627,7 @@ def pop_next_pin_for_immediate_post() -> dict | None:
     with _get_conn() as conn:
         row = conn.execute("""
             SELECT id, post_id, image_path, title, description, link,
-                   anime_name, image_url, priority, board_id
+                   anime_name, image_url, priority, board_id, is_organic
             FROM pin_queue
             ORDER BY priority DESC, id ASC
             LIMIT 1
@@ -1568,17 +1638,20 @@ def pop_next_pin_for_immediate_post() -> dict | None:
         conn.execute("DELETE FROM pin_queue WHERE id = ?", (row[0],))
         conn.commit()
     link_val = row[5]
-    try:
-        from amazon_search import preflight_validate_destination
-        link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
-    except Exception:
-        pass
+    is_organic = row[10] if len(row) > 10 and row[10] is not None else 0
+    if not is_organic:
+        try:
+            from amazon_search import preflight_validate_destination
+            link_val = preflight_validate_destination(link_val, anime_name=row[6], title=row[3])
+        except Exception:
+            pass
 
     return {
         "id": row[0], "post_id": row[1], "image_path": row[2],
         "title": row[3], "description": row[4], "link": link_val,
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
+        "is_organic": is_organic,
     }
 
 

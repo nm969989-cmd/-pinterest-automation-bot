@@ -309,10 +309,12 @@ class PinScheduler:
     def enqueue_new_image(self, post_id: str, image_path: str, title: str,
                           description: str, link: str, anime_name: str,
                           image_url: str = "", board_id: str = "",
-                          sha256: str = "", phash: str = ""):
+                          sha256: str = "", phash: str = "",
+                          is_organic: int = 0):
         """
         Add a NEW image (priority=1) from the Telegram channel.
         Automatically calculates the correct posting date based on queue depth.
+        is_organic=1 marks an 80/20 organic trust pin (no affiliate link).
         """
         from database import enqueue_pin, get_queue_counts, count_posts_today
 
@@ -336,19 +338,22 @@ class PinScheduler:
                 description=description, link=link, anime_name=anime_name,
                 image_url=image_url, board_id=board_id, priority=1,
                 scheduled_date=sched_date,
-                sha256=sha256, phash=phash
+                sha256=sha256, phash=phash,
+                is_organic=is_organic
             )
             if added:
-                logger.info(
-                    f"[Scheduler] NEW pin queued for {sched_date}: '{title}' "
-                    f"(queue: {counts['new']+1} new, {counts['backlog']} backlog)"
-                )
+                org_label = " [ORGANIC 🌿]" if is_organic else ""
+            logger.info(
+                f"[Scheduler] NEW pin queued for {sched_date}{org_label}: '{title}' "
+                f"(queue: {counts['new']+1} new, {counts['backlog']} backlog)"
+            )
             return added
 
     def enqueue_backlog_image(self, post_id: str, image_path: str, title: str,
                                description: str, link: str, anime_name: str,
                                image_url: str = "", board_id: str = "",
-                               sha256: str = "", phash: str = ""):
+                               sha256: str = "", phash: str = "",
+                               is_organic: int = 0):
         """
         Add a BACKLOG image (priority=0). Only posts when no new images pending.
         Always schedules for a future date to avoid competing with new images today.
@@ -366,13 +371,14 @@ class PinScheduler:
                 description=description, link=link, anime_name=anime_name,
                 image_url=image_url, board_id=board_id, priority=0,
                 scheduled_date=sched_date,
-                sha256=sha256, phash=phash
+                sha256=sha256, phash=phash,
+                is_organic=is_organic
             )
             if added:
+                org_label = " [ORGANIC 🌿]" if is_organic else ""
                 logger.info(
-                    f"[Scheduler] BACKLOG pin queued for {sched_date}: '{title}'"
+                    f"[Scheduler] BACKLOG pin queued for {sched_date}{org_label}: '{title}'"
                 )
-            return added
             return added
 
     @property
@@ -872,12 +878,25 @@ class PinScheduler:
                                 success = bool(pin_status)
                                 pin_is_live = (pin_status == "live")
                                 if success:
+                                    is_org = pin.get("is_organic", 0)
+                                    mark_file_uploaded(
+                                        filename=os.path.basename(image_path),
+                                        title=pin["title"],
+                                        anime_name=pin["anime_name"],
+                                        image_url=pin.get("image_url", ""),
+                                        sha256=pin.get("sha256", ""),
+                                        phash=pin.get("phash", ""),
+                                        is_organic=is_org,
+                                    )
                                     remove_queued_pin(pin["id"])
                                     now_ist = _ist_now().strftime("%I:%M %p")
-                                    pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+                                    if is_org:
+                                        pin_type = "ORGANIC 🌿"
+                                    else:
+                                        pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
                                     counts_after = count_posts_today(today_ist)
                                     logger.info(
-                                        f"[Scheduler] Pin posted. Today: "
+                                        f"[Scheduler] Pin posted ({pin_type}). Today: "
                                         f"{counts_after}/{MAX_POSTS_PER_DAY}"
                                     )
 

@@ -123,6 +123,11 @@ VIRAL_AUTO_SPINOFF          = os.getenv('VIRAL_AUTO_SPINOFF', 'false').lower() i
 # Telegram Watermark Cleaner & Inpainter Config (Zero Stock Rejections)
 WATERMARK_CLEANER_ENABLED = os.getenv('WATERMARK_CLEANER_ENABLED', 'true').lower() in ('true', '1', 'yes')
 
+# 80/20 Organic Trust Ratio Config (Pinterest Ban & Shadowban Protection)
+ORGANIC_TRUST_ENABLED = os.getenv('ORGANIC_TRUST_ENABLED', 'true').lower() in ('true', '1', 'yes')
+ORGANIC_TRUST_RATIO   = float(os.getenv('ORGANIC_TRUST_RATIO', '0.20'))  # 0.20 = 20% (1 in 5 pins organic)
+ORGANIC_PIN_LINK      = os.getenv('ORGANIC_PIN_LINK', '').strip() or os.getenv('PINTEREST_PROFILE_URL', 'https://www.pinterest.com/animanoizing').strip()
+
 # Dry Run Mode — set DRY_RUN=false in .env to go live
 # When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() in ('true', '1', 'yes')
