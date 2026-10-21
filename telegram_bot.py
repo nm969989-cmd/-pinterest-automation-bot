@@ -201,7 +201,7 @@ def get_post_confirmation_keyboard(
 
         if getattr(config, "RAINDROP_ENABLED", False):
             r_col = getattr(config, "RAINDROP_COLLECTION_ID", "")
-            fallback_raindrop = f"https://raindrop.io/collection/{r_col}" if r_col else "https://app.raindrop.io"
+            fallback_raindrop = f"https://app.raindrop.io/my/{r_col}" if r_col else "https://app.raindrop.io"
             r_link = raindrop_url if _is_valid_http_url(raindrop_url) else fallback_raindrop
             if _is_valid_http_url(r_link):
                 platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=r_link))
