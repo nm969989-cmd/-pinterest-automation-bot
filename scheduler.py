@@ -670,6 +670,38 @@ class PinScheduler:
             except Exception as _healer_err:
                 logger.debug(f"[Scheduler] Autonomous stock healer check error (non-critical): {_healer_err}")
 
+            # ── A/B Test Decision Engine ─────────────────────────────────────
+            try:
+                from ab_tester import check_and_decide_ab_tests
+                check_and_decide_ab_tests()
+            except Exception as _ab_err:
+                logger.debug(f"[Scheduler] A/B check error (non-critical): {_ab_err}")
+
+            # ── Weekly Performance Report ────────────────────────────────────
+            try:
+                from weekly_report import check_and_send_weekly_report
+                check_and_send_weekly_report()
+            except Exception as _wr_err:
+                logger.debug(f"[Scheduler] Weekly report check error (non-critical): {_wr_err}")
+
+            # ── Revenue Log Refresh (once daily) ─────────────────────────────
+            try:
+                from revenue_tracker import refresh_revenue_log
+                from database import get_metadata, set_metadata
+                _rev_key = f"rev_refresh_{today_ist}"
+                if not get_metadata(_rev_key, ""):
+                    refresh_revenue_log()
+                    set_metadata(_rev_key, "done")
+            except Exception as _rev_err:
+                logger.debug(f"[Scheduler] Revenue refresh error (non-critical): {_rev_err}")
+
+            # ── Ghost Pin Reviver (once daily) ───────────────────────────────
+            try:
+                from ghost_pin_reviver import check_and_run_daily_reviver
+                check_and_run_daily_reviver()
+            except Exception as _grv_err:
+                logger.debug(f"[Scheduler] Ghost reviver error (non-critical): {_grv_err}")
+
             # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
             jittered_times = _get_jittered_times_utc()

@@ -383,6 +383,76 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_bridge_visits_time
             ON bridge_visits (visited_at)
         """)
+
+        # ── A/B Title Test Tracking ──────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ab_tests (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                test_id      TEXT,
+                variant      TEXT DEFAULT 'A',
+                post_id      TEXT,
+                anime_name   TEXT,
+                title        TEXT,
+                image_url    TEXT,
+                bridge_code  TEXT,
+                visits       INTEGER DEFAULT 0,
+                clicks       INTEGER DEFAULT 0,
+                status       TEXT DEFAULT 'running',
+                posted_at    TIMESTAMP,
+                decided_at   TIMESTAMP,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(test_id, variant)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ab_test_id ON ab_tests (test_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ab_code ON ab_tests (bridge_code)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ab_status ON ab_tests (status, created_at)
+        """)
+
+        # ── Revenue Tracking (estimated earnings) ────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS revenue_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                date_ist     TEXT,
+                anime_name   TEXT,
+                clicks       INTEGER DEFAULT 0,
+                est_revenue  REAL DEFAULT 0.0,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date_ist, anime_name)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revenue_date ON revenue_log (date_ist)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revenue_anime ON revenue_log (anime_name)
+        """)
+
+        # ── Ghost Pin Reviver Tracking ───────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ghost_revive_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_post_id  TEXT,
+                new_post_id       TEXT,
+                anime_name        TEXT,
+                original_title    TEXT,
+                new_title         TEXT,
+                image_url         TEXT,
+                revived_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revive_orig ON ghost_revive_log (original_title, anime_name)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revive_date ON ghost_revive_log (revived_at)
+        """)
+
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -2306,8 +2376,155 @@ def get_active_surge_history(limit: int = 10) -> list[dict]:
         return []
 
 
+# ── A/B Split Testing Helpers ────────────────────────────────────────────────
+
+def record_ab_test(test_id: str, variant: str, post_id: str, anime_name: str,
+                   title: str, image_url: str, bridge_code: str):
+    """Register a new A/B test variant in the database."""
+    try:
+        with _get_conn() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO ab_tests
+                    (test_id, variant, post_id, anime_name, title, image_url, bridge_code)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (test_id, variant, post_id, anime_name, title, image_url, bridge_code))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[Database] record_ab_test failed: {e}")
+
+
+def update_ab_test_stats(bridge_code: str, visits: int, clicks: int):
+    """Update visit/click counts for an A/B variant by its bridge code."""
+    try:
+        with _get_conn() as conn:
+            conn.execute("""
+                UPDATE ab_tests SET visits = ?, clicks = ?
+                WHERE bridge_code = ? AND status = 'running'
+            """, (visits, clicks, bridge_code))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[Database] update_ab_test_stats failed: {e}")
+
+
+def get_running_ab_tests() -> list[dict]:
+    """Returns all currently running A/B tests."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute("""
+                SELECT test_id, variant, anime_name, title, bridge_code,
+                       visits, clicks, created_at
+                FROM ab_tests WHERE status = 'running'
+                ORDER BY created_at DESC
+            """).fetchall()
+        return [
+            {
+                "test_id": r[0],
+                "variant": r[1],
+                "anime": r[2],
+                "title": r[3],
+                "code": r[4],
+                "visits": r[5],
+                "clicks": r[6],
+                "created_at": r[7],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"[Database] get_running_ab_tests failed: {e}")
+        return []
+
+
+def declare_ab_winner(test_id: str, winner_variant: str):
+    """Mark winner/loser for a completed A/B test pair."""
+    import datetime
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with _get_conn() as conn:
+            conn.execute("""
+                UPDATE ab_tests SET status = 'winner', decided_at = ?
+                WHERE test_id = ? AND variant = ?
+            """, (now, test_id, winner_variant))
+            loser = 'B' if winner_variant == 'A' else 'A'
+            conn.execute("""
+                UPDATE ab_tests SET status = 'loser', decided_at = ?
+                WHERE test_id = ? AND variant = ?
+            """, (now, test_id, loser))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"[Database] declare_ab_winner failed: {e}")
+
+
+# ── Revenue Tracking Helpers ─────────────────────────────────────────────────
+
+def get_revenue_summary(days: int = 7) -> dict:
+    """Aggregate estimated revenue for the last N days."""
+    import datetime
+    cutoff = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+              - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        with _get_conn() as conn:
+            total = conn.execute("""
+                SELECT COALESCE(SUM(est_revenue), 0), COALESCE(SUM(clicks), 0)
+                FROM revenue_log WHERE date_ist >= ?
+            """, (cutoff,)).fetchone()
+            by_anime = conn.execute("""
+                SELECT anime_name, SUM(clicks) as c, SUM(est_revenue) as r
+                FROM revenue_log WHERE date_ist >= ?
+                GROUP BY anime_name ORDER BY r DESC LIMIT 10
+            """, (cutoff,)).fetchall()
+        return {
+            "total_revenue": round(total[0], 2) if total else 0.0,
+            "total_clicks": total[1] if total else 0,
+            "by_anime": [
+                {"anime": r[0], "clicks": r[1], "revenue": round(r[2], 2)}
+                for r in by_anime
+            ]
+        }
+    except Exception as e:
+        logger.error(f"[Database] get_revenue_summary failed: {e}")
+        return {"total_revenue": 0.0, "total_clicks": 0, "by_anime": []}
+
+
+# ── Ghost Pin Reviver Helpers ────────────────────────────────────────────────
+
+def get_uploaded_files_with_zero_visits(days_old: int = 7, limit: int = 10) -> list[dict]:
+    """Returns uploaded pins older than N days with NO bridge_visits recorded."""
+    import datetime
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days_old)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute("""
+                SELECT uf.filename, uf.title, uf.anime_name, uf.image_url, uf.uploaded_at
+                FROM uploaded_files uf
+                LEFT JOIN bridge_visits bv ON (
+                    bv.title = uf.title
+                    OR (bv.anime_name = uf.anime_name AND bv.title LIKE '%' || substr(uf.title, 1, 15) || '%')
+                )
+                WHERE uf.uploaded_at <= ?
+                  AND uf.image_url IS NOT NULL AND uf.image_url != ''
+                  AND bv.id IS NULL
+                GROUP BY uf.filename
+                ORDER BY uf.uploaded_at ASC
+                LIMIT ?
+            """, (cutoff, limit)).fetchall()
+        return [
+            {
+                "filename": r[0],
+                "title": r[1],
+                "anime": r[2],
+                "image_url": r[3],
+                "uploaded_at": r[4],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"[Database] get_uploaded_files_with_zero_visits failed: {e}")
+        return []
+
+
 # Initialize on import
 init_db()
+
 
 
 

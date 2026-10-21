@@ -288,7 +288,11 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/summary        - Today's multi-platform report (Auto: 10 PM IST)\n"
         "/dailyreport    - Detailed pin & cross-post report\n"
         "/clicks         - Affiliate clicks & estimated earnings\n"
+        "/revenue        - Estimated affiliate revenue dashboard\n"
         "/analytics      - 7-day pins & revenue report\n"
+        "/weekly         - Force-send weekly performance report\n"
+        "/ab             - A/B title test results & leaderboard\n"
+        "/revive         - Re-queue ghost pins (add --dry for preview)\n"
         "/stockstats     - Stock photo upload counts per platform\n"
         "/uptime         - Platform health & circuit breaker status\n"
         "/preview        - Last pin with image\n"
@@ -4491,6 +4495,60 @@ async def cmd_dedup_scan(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
         await status_msg.edit_text(f"❌ *Deduplication Scan Failed:* `{e}`", parse_mode="Markdown")
 
 
+# --- A/B Title Split Testing Command ---
+async def cmd_ab(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    if not _is_admin(update):
+        return
+    try:
+        from ab_tester import format_ab_leaderboard
+        await update.message.reply_text(format_ab_leaderboard(), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_ab error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ A/B error: {e}")
+
+
+# --- Revenue Tracking Dashboard Command ---
+async def cmd_revenue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    if not _is_admin(update):
+        return
+    try:
+        from revenue_tracker import build_revenue_dashboard
+        days = int(context.args[0]) if context.args and context.args[0].isdigit() else 30
+        await update.message.reply_text(build_revenue_dashboard(days=days), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_revenue error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Revenue error: {e}")
+
+
+# --- Weekly Performance Report Command ---
+async def cmd_weekly(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    if not _is_admin(update):
+        return
+    try:
+        from weekly_report import send_weekly_report, build_weekly_report
+        # If admin explicitly called /weekly, send the report directly in this chat or via notify_admin
+        report = build_weekly_report()
+        await update.message.reply_text(report, parse_mode="Markdown")
+        send_weekly_report(force=True)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_weekly error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Weekly report error: {e}")
+
+
+# --- Ghost Pin Reviver Command ---
+async def cmd_revive(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    if not _is_admin(update):
+        return
+    dry = "--dry" in (context.args or [])
+    try:
+        from ghost_pin_reviver import run_ghost_reviver, format_revive_report
+        revived = run_ghost_reviver(dry_run=dry)
+        await update.message.reply_text(format_revive_report(revived), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_revive error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Reviver error: {e}")
+
+
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
               dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
@@ -4667,6 +4725,13 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("pullanalytics",      cmd_refreshanalytics),
             ("dedup_scan",         cmd_dedup_scan),
             ("cleandupes",         cmd_dedup_scan),
+            ("ab",                 cmd_ab),
+            ("abtest",             cmd_ab),
+            ("revenue",            cmd_revenue),
+            ("weekly",             cmd_weekly),
+            ("weeklyreport",       cmd_weekly),
+            ("revive",             cmd_revive),
+            ("reviver",            cmd_revive),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -4752,6 +4817,10 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("spinoff",             "🔥 Create Express Spinoff pins for viral artwork"),
                 BotCommand("topseo",              "🔍 Top anime keywords driving search traffic"),
                 BotCommand("refreshanalytics",    "🔄 Pull fresh analytics from Pinterest API"),
+                BotCommand("ab",                  "🔬 A/B title test results & leaderboard"),
+                BotCommand("revenue",             "💰 Estimated affiliate revenue dashboard"),
+                BotCommand("weekly",              "📆 Sunday performance report digest"),
+                BotCommand("revive",              "👻 Re-queue ghost pins with new SEO titles"),
                 BotCommand("help",                "Show all commands"),
             ])
             logger.info("[TG BOT] Command menu registered in Telegram.")

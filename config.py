@@ -132,6 +132,25 @@ ORGANIC_PIN_LINK      = os.getenv('ORGANIC_PIN_LINK', '').strip() or os.getenv('
 # When MAKE_WEBHOOK_URL is set, DRY_RUN=false uses Make.com (no Pinterest API approval needed!)
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() in ('true', '1', 'yes')
 
+# A/B Title Split Testing
+AB_TESTING_ENABLED = os.getenv("AB_TESTING_ENABLED", "false").lower() in ("true", "1", "yes")
+AB_DECISION_HOURS  = int(os.getenv("AB_DECISION_HOURS", "48"))
+AB_MIN_VISITS      = int(os.getenv("AB_MIN_VISITS", "3"))
+
+# Revenue Tracking
+REVENUE_TRACKING_ENABLED = os.getenv("REVENUE_TRACKING_ENABLED", "true").lower() in ("true", "1", "yes")
+REVENUE_PER_CLICK_INR    = float(os.getenv("REVENUE_PER_CLICK_INR", "25.0"))
+
+# Weekly Performance Report
+WEEKLY_REPORT_ENABLED = os.getenv("WEEKLY_REPORT_ENABLED", "true").lower() in ("true", "1", "yes")
+WEEKLY_REPORT_TIME    = os.getenv("WEEKLY_REPORT_TIME", "09:00").strip()
+WEEKLY_REPORT_DAY     = int(os.getenv("WEEKLY_REPORT_DAY", "6"))  # 6 = Sunday
+
+# Ghost Pin Reviver
+GHOST_REVIVER_ENABLED      = os.getenv("GHOST_REVIVER_ENABLED", "true").lower() in ("true", "1", "yes")
+GHOST_REVIVER_MIN_AGE_DAYS = int(os.getenv("GHOST_REVIVER_MIN_AGE_DAYS", "7"))
+GHOST_REVIVER_MAX_BATCH    = int(os.getenv("GHOST_REVIVER_MAX_BATCH", "3"))
+
 # Validation
 def validate_config():
     # Pinterest token is optional when Make.com webhook is configured

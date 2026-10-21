@@ -209,20 +209,41 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             logger.info("[Main] Sending pin to Telegram for approval...")
             send_pin_approval_request(processed_path, title, description, pin_link)
         else:
-            safe_post_id = filepath.replace("/", "_").replace("\\", "_")
-            scheduler.enqueue_new_image(
-                post_id=safe_post_id,
-                image_path=processed_path,
-                title=title,
-                description=description,
-                link=pin_link,
-                anime_name=anime_name,
-                board_id=board_id,
-                image_url=image_url,  # Store Telegram CDN URL for file resurrection after restarts
-                sha256=img_sha,
-                phash=img_phash,
-                is_organic=is_organic,
-            )
+            ab_used = False
+            if not config.DRY_RUN and getattr(config, "AB_TESTING_ENABLED", False):
+                try:
+                    from ab_tester import maybe_enqueue_ab_test
+                    ab_used = maybe_enqueue_ab_test(
+                        image_path=processed_path,
+                        image_url=image_url,
+                        anime_name=anime_name,
+                        title_a=title,
+                        description=description,
+                        link=pin_link,
+                        board_id=board_id,
+                        sha256=img_sha,
+                        phash=img_phash,
+                        is_organic=is_organic,
+                        genre=genre,
+                    )
+                except Exception as _ab_err:
+                    logger.warning(f"[Main] A/B test enqueue failed (falling back): {_ab_err}")
+
+            if not ab_used:
+                safe_post_id = filepath.replace("/", "_").replace("\\", "_")
+                scheduler.enqueue_new_image(
+                    post_id=safe_post_id,
+                    image_path=processed_path,
+                    title=title,
+                    description=description,
+                    link=pin_link,
+                    anime_name=anime_name,
+                    board_id=board_id,
+                    image_url=image_url,  # Store Telegram CDN URL for file resurrection after restarts
+                    sha256=img_sha,
+                    phash=img_phash,
+                    is_organic=is_organic,
+                )
 
         # 10. Clean up original download to save disk space (keep processed copy)
         try:
