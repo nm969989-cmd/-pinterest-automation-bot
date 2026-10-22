@@ -133,14 +133,48 @@ def _start_watchdog():
 
 # ── Periodic health check ─────────────────────────────────────────────────────
 
+# Memory thresholds for graduated response (Render free tier = 512MB hard kill)
+_MEM_GC_THRESHOLD        = 350   # MB — light GC pass
+_MEM_AGGRESSIVE_THRESHOLD = 420  # MB — aggressive cleanup + GC
+_MEM_RESTART_THRESHOLD   = 470   # MB — controlled self-restart (saves state before Render OOM kills us)
+
+
+def _emergency_restart():
+    """
+    Performs a controlled self-restart to prevent an uncontrolled OOM kill by Render.
+    Saves state to JSONBin first, then exits with code 0 so Render auto-restarts the service.
+    A controlled restart is MUCH better than an OOM kill because:
+      - State is saved cleanly.
+      - Render restarts the service immediately.
+      - No corrupted DB from a mid-write OOM crash.
+    """
+    logger.critical(
+        f"[Health] Memory near Render 512MB limit — initiating controlled restart "
+        f"to prevent OOM kill. State will be saved first."
+    )
+    try:
+        from jsonbin_sync import save_cloud_state
+        save_cloud_state()
+        logger.info("[Health] State saved. Restarting now.")
+    except Exception as e:
+        logger.error(f"[Health] Could not save state before restart: {e}")
+    import os
+    import sys
+    # Exit cleanly — Render will auto-restart the web service.
+    sys.exit(0)
+
+
 def _start_health_monitor():
     """
-    Logs memory/disk usage every 30 minutes.
-    Triggers cleanup if disk > 200MB or memory > 400MB.
+    Logs memory/disk usage every 10 minutes (was 30 min — too slow to react before OOM).
+    Graduated memory response:
+      > 350 MB: light gc.collect()
+      > 420 MB: aggressive file cleanup + gc.collect()
+      > 470 MB: controlled self-restart (saves state, exits 0, Render restarts)
     """
     def _loop():
         while True:
-            time.sleep(1800)  # every 30 min
+            time.sleep(600)  # every 10 min (was 1800 / 30 min — too slow!)
             try:
                 mem_mb  = get_memory_mb()
                 disk_mb = get_disk_usage_mb("downloads") + get_disk_usage_mb("processed")
@@ -156,11 +190,26 @@ def _start_health_monitor():
                     cleanup_old_files(max_age_hours=2)
                     gc.collect()
 
-                # Warn if memory high (Render free = 512MB)
-                if mem_mb > 400:
+                # ── Tier 3: Emergency self-restart (470MB — before Render's 512MB OOM kill) ──
+                if mem_mb > _MEM_RESTART_THRESHOLD:
+                    _emergency_restart()
+                    return  # _emergency_restart calls sys.exit, but just in case
+
+                # ── Tier 2: Aggressive cleanup (420MB) ───────────────────────────────────────
+                elif mem_mb > _MEM_AGGRESSIVE_THRESHOLD:
                     logger.warning(
-                        f"[Health] Memory {mem_mb:.1f}MB is high! "
-                        f"Render limit is 512MB. Running GC..."
+                        f"[Health] Memory {mem_mb:.1f}MB is critically high! "
+                        f"Running aggressive cleanup (threshold: {_MEM_AGGRESSIVE_THRESHOLD}MB)..."
+                    )
+                    cleanup_old_files(max_age_hours=1)
+                    gc.collect()
+                    gc.collect()  # two passes clears more cyclic garbage
+
+                # ── Tier 1: Light GC pass (350MB) ────────────────────────────────────────────
+                elif mem_mb > _MEM_GC_THRESHOLD:
+                    logger.warning(
+                        f"[Health] Memory {mem_mb:.1f}MB above {_MEM_GC_THRESHOLD}MB — "
+                        f"running GC..."
                     )
                     gc.collect()
 
@@ -169,7 +218,7 @@ def _start_health_monitor():
 
     t = threading.Thread(target=_loop, daemon=True, name="HealthMonitor")
     t.start()
-    logger.info("[Health] Health monitor started (checks every 30 min).")
+    logger.info("[Health] Health monitor started (checks every 10 min, thresholds: 350/420/470MB).")
 
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
@@ -234,4 +283,10 @@ def init_crash_protection():
     # Initial cleanup of any leftover files from previous run
     cleanup_old_files(max_age_hours=1)
 
-    logger.info("[Protection] All crash protections active.")
+    # Run an immediate GC pass and log baseline memory so we know startup footprint
+    gc.collect()
+    startup_mem = get_memory_mb()
+    logger.info(
+        f"[Protection] All crash protections active. "
+        f"Startup memory baseline: {startup_mem:.1f}MB / 512MB Render limit."
+    )

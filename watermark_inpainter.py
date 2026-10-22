@@ -16,11 +16,13 @@ Key Features:
 """
 
 import os
-import cv2
-import numpy as np
 from logger import get_logger
 
 logger = get_logger(__name__)
+
+# cv2 and numpy are imported lazily inside each function to avoid loading
+# ~150-200MB of RAM at startup. They are only imported when watermark
+# detection/inpainting is actually needed (i.e. WATERMARK_CLEANER_ENABLED=True).
 
 # Configurable minimum confidence / detection thresholds
 _MIN_TEXT_CONTOURS = 2       # At least 2 character-like contours in a cluster
@@ -68,11 +70,13 @@ def _get_candidate_rois(height: int, width: int) -> list[dict]:
     ]
 
 
-def _detect_text_mask_in_roi(roi_bgr: np.ndarray) -> np.ndarray:
+def _detect_text_mask_in_roi(roi_bgr) -> "np.ndarray":
     """
     Analyzes a Region of Interest (ROI) and returns a binary mask of detected text strokes.
     Returns a uint8 mask of the same shape as roi_bgr (height, width) with 255 for text pixels.
     """
+    import cv2
+    import numpy as np
     roi_h, roi_w = roi_bgr.shape[:2]
     if roi_h < 15 or roi_w < 15:
         return np.zeros((roi_h, roi_w), dtype=np.uint8)
@@ -130,12 +134,14 @@ def _detect_text_mask_in_roi(roi_bgr: np.ndarray) -> np.ndarray:
     return np.zeros((roi_h, roi_w), dtype=np.uint8)
 
 
-def detect_watermark(image_path: str) -> tuple[bool, np.ndarray, list[str]]:
+def detect_watermark(image_path: str) -> "tuple[bool, object, list[str]]":
     """
     Scans image for Telegram channel watermarks and stamps.
     Returns:
         (has_watermark: bool, full_mask: np.ndarray, detected_zones: list[str])
     """
+    import cv2
+    import numpy as np
     if not os.path.isfile(image_path):
         return False, None, []
 
@@ -187,6 +193,8 @@ def clean_watermark(image_path: str, output_path: str = None) -> tuple[bool, str
     out_file = output_path or image_path
 
     try:
+        import cv2
+        import numpy as np
         has_watermark, mask, zones = detect_watermark(image_path)
         if not has_watermark or mask is None:
             # Image is already clean — 0 modifications
