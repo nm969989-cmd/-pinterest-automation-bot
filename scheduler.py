@@ -510,6 +510,7 @@ class PinScheduler:
         # is caught BEFORE it causes a full day of missed posts.
         _MAKE_HEALTH_INTERVAL = 6 * 3600  # 6 hours in seconds
         _last_make_health_check: float = 0.0  # Force an immediate check on first loop pass
+        _last_viral_radar_check: float = time.time()  # Wait 2h after startup before periodic viral radar check
 
         # ── Full startup schedule recovery ────────────────────────────────────
         # On every restart (Render deploy, spin-down, crash), we check ALL slots
@@ -656,10 +657,13 @@ class PinScheduler:
             except Exception as _digest_err:
                 logger.debug(f"[Scheduler] Daily digest check error (non-critical): {_digest_err}")
 
-            # ── Viral Pin Surge Radar periodic check ─────────────────────────
+            # ── Viral Pin Surge Radar periodic check (max once every 2 hours) ──
             try:
-                from viral_radar import check_and_notify_viral_surges
-                check_and_notify_viral_surges()
+                now_ts_radar = time.time()
+                if (now_ts_radar - _last_viral_radar_check) >= 7200.0:  # 2 hours
+                    _last_viral_radar_check = now_ts_radar
+                    from viral_radar import check_and_notify_viral_surges
+                    check_and_notify_viral_surges()
             except Exception as _radar_err:
                 logger.debug(f"[Scheduler] Viral radar check error (non-critical): {_radar_err}")
 

@@ -68,13 +68,33 @@ def _ensure_analytics_table() -> None:
         logger.error(f"[Analytics] Table setup failed: {e}")
 
 
+BOT_USER_AGENT_KEYWORDS = (
+    "bot", "crawl", "spider", "slurp", "facebookexternalhit",
+    "telegrambot", "twitterbot", "whatsapp", "slackbot", "bluesky",
+    "applebot", "bingbot", "yandex", "duckduckbot", "python-requests",
+    "aiohttp", "httpx", "curl", "wget", "headless", "petalbot",
+    "semrush", "ahrefs", "bytespider", "googlebot"
+)
+
+
+def is_bot_user_agent(user_agent: str) -> bool:
+    """Return True if user agent matches known crawlers, spiders, or link unfurlers."""
+    if not user_agent:
+        return False
+    ua = user_agent.lower()
+    return any(k in ua for k in BOT_USER_AGENT_KEYWORDS)
+
+
 def record_bridge_visit(code: str, anime_name: str, title: str,
                         user_agent: str = "", referrer: str = "") -> None:
     """
     Record a visit to the /p/<code> bridge landing page.
-    Called by keep_alive.py BEFORE the existing record_link_click (which tracks Amazon clicks).
-    This separates PAGE VIEWS from actual AMAZON CLICKS.
+    Filters out bots, spiders, and crawlers so analytics only reflect genuine visitors.
     """
+    if is_bot_user_agent(user_agent):
+        logger.debug(f"[Analytics] Filtered crawler/bot visit for '{code}': {user_agent[:60]}")
+        return
+
     _ensure_analytics_table()
     is_pinterest = 1 if "pinterest" in (referrer or "").lower() else 0
     try:
@@ -95,6 +115,7 @@ def record_bridge_visit(code: str, anime_name: str, title: str,
             conn.commit()
     except Exception as e:
         logger.error(f"[Analytics] record_bridge_visit failed: {e}")
+
 
 
 # ── Analytics Read Functions ───────────────────────────────────────────────────

@@ -3023,10 +3023,30 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
 # -- Notify admin helper ------------------------------------------------------
 _app_ref  = None
 _loop_ref = None
+_anti_flood_timestamps: list[float] = []
+_FLOOD_LOCK = threading.Lock()
+MAX_NOTIFICATIONS_PER_MINUTE = 5
+
+
+def _check_flood_protection() -> bool:
+    """Return True if notification is allowed, False if throttling active."""
+    now = time.time()
+    with _FLOOD_LOCK:
+        while _anti_flood_timestamps and (now - _anti_flood_timestamps[0]) > 60.0:
+            _anti_flood_timestamps.pop(0)
+        if len(_anti_flood_timestamps) >= MAX_NOTIFICATIONS_PER_MINUTE:
+            logger.warning(
+                f"[TG BOT] Anti-flood protection triggered: {len(_anti_flood_timestamps)} messages in last 60s. Throttling outbound notification."
+            )
+            return False
+        _anti_flood_timestamps.append(now)
+        return True
 
 
 def notify_admin(message: str, parse_mode: str = "Markdown"):
     """Send a Markdown-formatted notification to the admin from any thread."""
+    if not _check_flood_protection():
+        return
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
@@ -3046,6 +3066,8 @@ def notify_admin(message: str, parse_mode: str = "Markdown"):
 
 def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str = "Markdown"):
     """Send a Markdown-formatted notification with an InlineKeyboardMarkup to the admin from any thread."""
+    if not _check_flood_protection():
+        return
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return

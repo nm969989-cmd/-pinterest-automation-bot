@@ -160,11 +160,12 @@ def bridge_page(code):
 
     # Record bridge visit for funnel analytics
     try:
-        from pinterest_analytics import record_bridge_visit
-        record_bridge_visit(code, anime_name, title, user_agent, referrer)
-        # Debounced check if this visit crossed a viral surge threshold (max once per 5 min)
-        from viral_radar import trigger_debounced_radar_check
-        trigger_debounced_radar_check()
+        from pinterest_analytics import record_bridge_visit, is_bot_user_agent
+        if not is_bot_user_agent(user_agent):
+            record_bridge_visit(code, anime_name, title, user_agent, referrer)
+            # Debounced check if this visit crossed a viral surge threshold (max once per 5 min)
+            from viral_radar import trigger_debounced_radar_check
+            trigger_debounced_radar_check()
     except Exception:
         pass
 

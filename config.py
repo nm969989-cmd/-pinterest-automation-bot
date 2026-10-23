@@ -116,8 +116,9 @@ DAILY_DIGEST_TIME    = os.getenv('DAILY_DIGEST_TIME', '21:00').strip()  # 24-hr 
 
 # Viral Pin Surge Radar Config
 VIRAL_RADAR_ENABLED         = os.getenv('VIRAL_RADAR_ENABLED', 'true').lower() in ('true', '1', 'yes')
-VIRAL_SURGE_MIN_VISITS      = int(os.getenv('VIRAL_SURGE_MIN_VISITS', 5))
-VIRAL_ALERT_COOLDOWN_HOURS  = int(os.getenv('VIRAL_ALERT_COOLDOWN_HOURS', 12))
+VIRAL_SURGE_MIN_VISITS      = int(os.getenv('VIRAL_SURGE_MIN_VISITS', 10))
+VIRAL_ALERT_COOLDOWN_HOURS  = int(os.getenv('VIRAL_ALERT_COOLDOWN_HOURS', 48))
+VIRAL_MAX_DAILY_ALERTS      = int(os.getenv('VIRAL_MAX_DAILY_ALERTS', 3))
 VIRAL_AUTO_SPINOFF          = os.getenv('VIRAL_AUTO_SPINOFF', 'false').lower() in ('true', '1', 'yes')
 
 # Telegram Watermark Cleaner & Inpainter Config (Zero Stock Rejections)

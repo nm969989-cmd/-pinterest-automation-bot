@@ -2313,7 +2313,7 @@ def record_surge_alert(code: str, anime_name: str, visits_count: int, clicks_cou
     return success
 
 
-def is_surge_alerted_recently(code: str, cooldown_hours: int = 12) -> bool:
+def is_surge_alerted_recently(code: str, cooldown_hours: int = 48) -> bool:
     """Check if an alert was already triggered for this code within cooldown window."""
     clean_code = (code or "").strip()
     if not clean_code:

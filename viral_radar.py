@@ -25,6 +25,7 @@ from config import (
     VIRAL_SURGE_MIN_VISITS,
     VIRAL_ALERT_COOLDOWN_HOURS,
     VIRAL_AUTO_SPINOFF,
+    VIRAL_MAX_DAILY_ALERTS,
     APP_BASE_URL,
     AMAZON_AFFILIATE_TAG,
 )
@@ -37,6 +38,7 @@ from database import (
     enqueue_pin,
     record_tracked_link,
     get_metadata,
+    set_metadata,
 )
 
 logger = get_logger(__name__)
@@ -47,11 +49,15 @@ _CACHE_LOCK = threading.Lock()
 _ALERT_CACHE: dict[str, float] = {}  # {code: unix_timestamp}
 _LAST_TRIGGER_TIME = 0.0
 _DEBOUNCE_INTERVAL = 300.0  # 5 minutes minimum between web-triggered checks
-MAX_ALERTS_PER_CYCLE = 2    # Circuit breaker: max 2 alerts per scan cycle
+MAX_ALERTS_PER_CYCLE = 1    # Circuit breaker: max 1 alert per scan cycle
+MAX_DAILY_VIRAL_ALERTS = VIRAL_MAX_DAILY_ALERTS  # Global daily cap across all pins
+_GLOBAL_ALERT_MIN_INTERVAL = 1800.0  # At least 30 minutes between ANY two alerts sent to Telegram
+_LAST_GLOBAL_ALERT_TIME = 0.0
 
 
 def _init_alert_cache():
     """Populate in-memory alert cache from bot_metadata so cooldown survives restarts."""
+    global _LAST_GLOBAL_ALERT_TIME
     try:
         raw = get_metadata("last_viral_alerts", "{}")
         if raw:
@@ -62,6 +68,13 @@ def _init_alert_cache():
             logger.debug(f"[ViralRadar] Initialized alert cache with {len(_ALERT_CACHE)} entries.")
     except Exception as e:
         logger.debug(f"[ViralRadar] Could not load alert cache from metadata: {e}")
+
+    try:
+        raw_last = get_metadata("last_global_surge_alert_time", "0")
+        if raw_last:
+            _LAST_GLOBAL_ALERT_TIME = float(raw_last)
+    except Exception:
+        pass
 
 
 # Seed alert cache on module import
@@ -113,7 +126,18 @@ def detect_viral_surges(
                 first_visit_str = r[5]
                 last_visit_str = r[6]
 
-                # Check cooldown if requested (in-memory fast cache first, then DB)
+                # 1. Recency check: traffic must have arrived in the last 60 minutes
+                try:
+                    t_last = datetime.datetime.strptime(
+                        last_visit_str, "%Y-%m-%d %H:%M:%S"
+                    )
+                    now_utc = datetime.datetime.utcnow()
+                    if (now_utc - t_last).total_seconds() > 3600.0:
+                        continue  # Stale / historical traffic, not an active surge
+                except Exception:
+                    continue
+
+                # 2. Check cooldown if requested (in-memory fast cache first, then DB)
                 if check_cooldown:
                     now_ts = time.time()
                     cooldown_secs = VIRAL_ALERT_COOLDOWN_HOURS * 3600
@@ -144,14 +168,22 @@ def detect_viral_surges(
                     t_first = datetime.datetime.strptime(
                         first_visit_str, "%Y-%m-%d %H:%M:%S"
                     )
-                    t_last = datetime.datetime.strptime(
-                        last_visit_str, "%Y-%m-%d %H:%M:%S"
-                    )
                     span_hours = max(0.5, (t_last - t_first).total_seconds() / 3600.0)
                 except Exception:
                     span_hours = 1.0
 
                 velocity = round(total_visits / span_hours, 1)
+
+                # 3. Real Traffic Quality Filter:
+                # Genuine Pinterest viral surge MUST have verified Pinterest referrals (>=2)
+                # or actual consumer affiliate clicks (>=1).
+                # Zero-Pinterest crawler/bot visits are strictly rejected.
+                has_real_traffic = (
+                    (pinterest_visits >= 2)
+                    or (clicks >= 1 and total_visits >= 5)
+                )
+                if not has_real_traffic:
+                    continue
 
                 # Surge Score: Pinterest referral visits weighted x2.0, other x1.0, clicks x3.0
                 external_visits = max(0, total_visits - pinterest_visits)
@@ -247,6 +279,33 @@ def check_and_notify_viral_surges(is_locked: bool = False) -> int:
 
 def _execute_check_and_notify() -> int:
     """Internal execution logic running under _RADAR_LOCK."""
+    global _LAST_GLOBAL_ALERT_TIME
+
+    now_ts = time.time()
+
+    # 1. Enforce global alert spacing (min 30 min between ANY two telegram alerts)
+    if (now_ts - _LAST_GLOBAL_ALERT_TIME) < _GLOBAL_ALERT_MIN_INTERVAL:
+        rem_sec = int(_GLOBAL_ALERT_MIN_INTERVAL - (now_ts - _LAST_GLOBAL_ALERT_TIME))
+        logger.debug(
+            f"[ViralRadar] Global alert spacing active ({rem_sec}s remaining). Skipping cycle."
+        )
+        return 0
+
+    # 2. Enforce global daily alert cap (max 3 alerts / day)
+    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    daily_key = f"viral_alerts_daily_count_{today_str}"
+    try:
+        from database import get_metadata, set_metadata
+        current_daily_alerts = int(get_metadata(daily_key, "0") or 0)
+    except Exception:
+        current_daily_alerts = 0
+
+    if current_daily_alerts >= MAX_DAILY_VIRAL_ALERTS:
+        logger.info(
+            f"[ViralRadar] Reached MAX_DAILY_VIRAL_ALERTS ({MAX_DAILY_VIRAL_ALERTS}) for {today_str}. Halting surge alerts."
+        )
+        return 0
+
     candidates = detect_viral_surges(
         window_hours=24,
         min_visits=VIRAL_SURGE_MIN_VISITS,
@@ -257,7 +316,6 @@ def _execute_check_and_notify() -> int:
         return 0
 
     alerted_count = 0
-    now_ts = time.time()
     cooldown_seconds = VIRAL_ALERT_COOLDOWN_HOURS * 3600
 
     for c in candidates:
@@ -265,6 +323,9 @@ def _execute_check_and_notify() -> int:
             logger.info(
                 f"[ViralRadar] Reached MAX_ALERTS_PER_CYCLE ({MAX_ALERTS_PER_CYCLE}), deferring remaining candidates to next cycle."
             )
+            break
+
+        if current_daily_alerts >= MAX_DAILY_VIRAL_ALERTS:
             break
 
         code = c["code"]
@@ -317,7 +378,7 @@ def _execute_check_and_notify() -> int:
             f"  • Affiliate Clicks: *{clicks}* ({ctr}% CTR) 🛒\n"
             f"  • Surge Score: *{score}*\n\n"
             f"💡 *Actionable Opportunity*:\n"
-            f"Pinterest's search engine is actively indexing and recommending this artwork.\n"
+            f"Pinterest traffic detected for this artwork.\n"
             f"Tap *Spinoff 2 Pins Now* to queue 2 fresh express variations at Priority #1!"
         )
 
@@ -355,6 +416,13 @@ def _execute_check_and_notify() -> int:
                 f"[ViralRadar] Alert sent for viral code '{code}' ({anime}): {visits} visits, score={score}"
             )
             alerted_count += 1
+            _LAST_GLOBAL_ALERT_TIME = time.time()
+            current_daily_alerts += 1
+            try:
+                set_metadata("last_global_surge_alert_time", str(_LAST_GLOBAL_ALERT_TIME))
+                set_metadata(daily_key, str(current_daily_alerts))
+            except Exception:
+                pass
 
             # Auto-spinoff if enabled in config
             if VIRAL_AUTO_SPINOFF:
