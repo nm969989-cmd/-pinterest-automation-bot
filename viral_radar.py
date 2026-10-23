@@ -16,6 +16,9 @@ Key Features:
 import datetime
 import random
 import uuid
+import time
+import threading
+import json
 from logger import get_logger
 from config import (
     VIRAL_RADAR_ENABLED,
@@ -33,9 +36,36 @@ from database import (
     get_tracked_link_data,
     enqueue_pin,
     record_tracked_link,
+    get_metadata,
 )
 
 logger = get_logger(__name__)
+
+# Concurrency & Debounce guards
+_RADAR_LOCK = threading.Lock()
+_CACHE_LOCK = threading.Lock()
+_ALERT_CACHE: dict[str, float] = {}  # {code: unix_timestamp}
+_LAST_TRIGGER_TIME = 0.0
+_DEBOUNCE_INTERVAL = 300.0  # 5 minutes minimum between web-triggered checks
+MAX_ALERTS_PER_CYCLE = 2    # Circuit breaker: max 2 alerts per scan cycle
+
+
+def _init_alert_cache():
+    """Populate in-memory alert cache from bot_metadata so cooldown survives restarts."""
+    try:
+        raw = get_metadata("last_viral_alerts", "{}")
+        if raw:
+            data = json.loads(raw)
+            with _CACHE_LOCK:
+                for k, v in data.items():
+                    _ALERT_CACHE[str(k).strip()] = float(v)
+            logger.debug(f"[ViralRadar] Initialized alert cache with {len(_ALERT_CACHE)} entries.")
+    except Exception as e:
+        logger.debug(f"[ViralRadar] Could not load alert cache from metadata: {e}")
+
+
+# Seed alert cache on module import
+_init_alert_cache()
 
 
 def detect_viral_surges(
@@ -83,11 +113,21 @@ def detect_viral_surges(
                 first_visit_str = r[5]
                 last_visit_str = r[6]
 
-                # Check cooldown if requested
-                if check_cooldown and is_surge_alerted_recently(
-                    code, cooldown_hours=VIRAL_ALERT_COOLDOWN_HOURS
-                ):
-                    continue
+                # Check cooldown if requested (in-memory fast cache first, then DB)
+                if check_cooldown:
+                    now_ts = time.time()
+                    cooldown_secs = VIRAL_ALERT_COOLDOWN_HOURS * 3600
+                    with _CACHE_LOCK:
+                        last_ts = _ALERT_CACHE.get(code, 0.0)
+                        if (now_ts - last_ts) < cooldown_secs:
+                            continue
+
+                    if is_surge_alerted_recently(
+                        code, cooldown_hours=VIRAL_ALERT_COOLDOWN_HOURS
+                    ):
+                        with _CACHE_LOCK:
+                            _ALERT_CACHE[code] = now_ts
+                        continue
 
                 # Query affiliate clicks for this code
                 clicks_row = conn.execute(
@@ -155,15 +195,58 @@ def detect_viral_surges(
         return []
 
 
-def check_and_notify_viral_surges() -> int:
+def trigger_debounced_radar_check() -> bool:
+    """
+    Safely triggers a viral radar check from HTTP bridge traffic.
+    Debounced to run at most once every 5 minutes and never spawns
+    overlapping or runaway threads. Returns True if a check was scheduled.
+    """
+    global _LAST_TRIGGER_TIME
+    now = time.time()
+    if now - _LAST_TRIGGER_TIME < _DEBOUNCE_INTERVAL:
+        return False
+
+    if not _RADAR_LOCK.acquire(blocking=False):
+        return False
+
+    _LAST_TRIGGER_TIME = now
+
+    def _worker():
+        try:
+            _execute_check_and_notify()
+        except Exception as e:
+            logger.error(f"[ViralRadar] Debounced worker error: {e}")
+        finally:
+            _RADAR_LOCK.release()
+
+    threading.Thread(target=_worker, daemon=True, name="ViralRadarDebounced").start()
+    return True
+
+
+def check_and_notify_viral_surges(is_locked: bool = False) -> int:
     """
     Periodic check invoked by scheduler or bridge traffic trigger.
     Finds unalerted viral surges, saves them to database, and notifies admin via Telegram.
+    Enforces concurrency lock, in-memory dedup, and a per-cycle alert cap.
     Returns the count of surges alerted.
     """
     if not VIRAL_RADAR_ENABLED:
         return 0
 
+    if not is_locked:
+        if not _RADAR_LOCK.acquire(blocking=False):
+            logger.debug("[ViralRadar] Check already running in another thread, skipping.")
+            return 0
+        try:
+            return _execute_check_and_notify()
+        finally:
+            _RADAR_LOCK.release()
+    else:
+        return _execute_check_and_notify()
+
+
+def _execute_check_and_notify() -> int:
+    """Internal execution logic running under _RADAR_LOCK."""
     candidates = detect_viral_surges(
         window_hours=24,
         min_visits=VIRAL_SURGE_MIN_VISITS,
@@ -174,7 +257,16 @@ def check_and_notify_viral_surges() -> int:
         return 0
 
     alerted_count = 0
+    now_ts = time.time()
+    cooldown_seconds = VIRAL_ALERT_COOLDOWN_HOURS * 3600
+
     for c in candidates:
+        if alerted_count >= MAX_ALERTS_PER_CYCLE:
+            logger.info(
+                f"[ViralRadar] Reached MAX_ALERTS_PER_CYCLE ({MAX_ALERTS_PER_CYCLE}), deferring remaining candidates to next cycle."
+            )
+            break
+
         code = c["code"]
         anime = c["anime_name"]
         title = c["title"]
@@ -185,14 +277,30 @@ def check_and_notify_viral_surges() -> int:
         velocity = c["velocity"]
         score = c["surge_score"]
 
-        # Record alert in DB
-        record_surge_alert(
+        # Double check in-memory cache under lock
+        with _CACHE_LOCK:
+            last_ts = _ALERT_CACHE.get(code, 0.0)
+            if (now_ts - last_ts) < cooldown_seconds:
+                continue
+
+        # Record alert in DB first
+        recorded = record_surge_alert(
             code=code,
             anime_name=anime,
             visits_count=visits,
             clicks_count=clicks,
             surge_score=score,
         )
+
+        if not recorded:
+            logger.warning(
+                f"[ViralRadar] Skipping alert for '{code}' — database write failed."
+            )
+            continue
+
+        # Update in-memory cache immediately to block any subsequent thread
+        with _CACHE_LOCK:
+            _ALERT_CACHE[code] = time.time()
 
         base_url = (APP_BASE_URL or "").rstrip("/")
         bridge_url = f"{base_url}/p/{code}" if base_url else f"https://your-bot.onrender.com/p/{code}"

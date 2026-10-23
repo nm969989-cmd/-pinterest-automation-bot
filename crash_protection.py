@@ -173,16 +173,20 @@ def _start_health_monitor():
       > 470 MB: controlled self-restart (saves state, exits 0, Render restarts)
     """
     def _loop():
+        _iteration = 0
         while True:
-            time.sleep(600)  # every 10 min (was 1800 / 30 min — too slow!)
+            time.sleep(60)  # check every 60s (was 10 min — too slow for rapid spikes!)
+            _iteration += 1
             try:
                 mem_mb  = get_memory_mb()
                 disk_mb = get_disk_usage_mb("downloads") + get_disk_usage_mb("processed")
 
-                logger.info(
-                    f"[Health] Memory: {mem_mb:.1f}MB | "
-                    f"Image disk: {disk_mb:.1f}MB"
-                )
+                # Log periodically every 10 min or immediately if elevated (>300MB)
+                if _iteration % 10 == 0 or mem_mb > 300:
+                    logger.info(
+                        f"[Health] Memory: {mem_mb:.1f}MB | "
+                        f"Image disk: {disk_mb:.1f}MB"
+                    )
 
                 # Auto-cleanup if disk getting full
                 if disk_mb > 100:
@@ -218,7 +222,7 @@ def _start_health_monitor():
 
     t = threading.Thread(target=_loop, daemon=True, name="HealthMonitor")
     t.start()
-    logger.info("[Health] Health monitor started (checks every 10 min, thresholds: 350/420/470MB).")
+    logger.info("[Health] Health monitor started (checks every 60s, thresholds: 350/420/470MB).")
 
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────

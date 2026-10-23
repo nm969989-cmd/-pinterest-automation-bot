@@ -834,7 +834,8 @@ class PinScheduler:
                                         try:
                                             from telegram_listener import download_image
                                             from image_processor import process_image
-                                            safe_name = os.path.splitext(os.path.basename(image_path))[0]
+                                            raw_name = os.path.splitext(os.path.basename(image_path))[0] if image_path else ""
+                                            safe_name = raw_name if raw_name else f"resurrect_{pin['id']}"
                                             dl_path = download_image(cdn_url, safe_name)
                                             if dl_path:
                                                 image_path = process_image(dl_path)

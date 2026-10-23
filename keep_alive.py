@@ -162,10 +162,9 @@ def bridge_page(code):
     try:
         from pinterest_analytics import record_bridge_visit
         record_bridge_visit(code, anime_name, title, user_agent, referrer)
-        # Background check if this visit crossed a viral surge threshold
-        import threading
-        from viral_radar import check_and_notify_viral_surges
-        threading.Thread(target=check_and_notify_viral_surges, daemon=True).start()
+        # Debounced check if this visit crossed a viral surge threshold (max once per 5 min)
+        from viral_radar import trigger_debounced_radar_check
+        trigger_debounced_radar_check()
     except Exception:
         pass
 

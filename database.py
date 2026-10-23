@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import datetime
+import contextlib
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -8,12 +9,17 @@ logger = get_logger(__name__)
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db")
 
 
+@contextlib.contextmanager
 def _get_conn():
-    """Returns a SQLite connection with WAL mode for concurrency."""
+    """Returns a SQLite connection with WAL mode for concurrency, guaranteed closed on exit."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db():
@@ -2268,8 +2274,12 @@ def get_backlink_stats() -> dict:
         return {"total": 0, "today": 0, "by_platform": {}}
 
 
-def record_surge_alert(code: str, anime_name: str, visits_count: int, clicks_count: int, surge_score: float) -> None:
-    """Record an alert sent for a viral surge on a pin code."""
+def record_surge_alert(code: str, anime_name: str, visits_count: int, clicks_count: int, surge_score: float) -> bool:
+    """Record an alert sent for a viral surge on a pin code. Returns True on success, False on failure."""
+    clean_code = (code or "").strip()
+    if not clean_code:
+        return False
+    success = False
     try:
         with _get_conn() as conn:
             conn.execute(
@@ -2277,15 +2287,53 @@ def record_surge_alert(code: str, anime_name: str, visits_count: int, clicks_cou
                 INSERT INTO viral_surge_alerts (code, anime_name, visits_count, clicks_count, surge_score)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (code.strip(), (anime_name or "")[:200], visits_count, clicks_count, float(surge_score)),
+                (clean_code, (anime_name or "")[:200], visits_count, clicks_count, float(surge_score)),
             )
             conn.commit()
+            success = True
     except Exception as e:
-        logger.debug(f"[Database] record_surge_alert failed: {e}")
+        logger.error(f"[Database] record_surge_alert failed to insert into viral_surge_alerts: {e}")
+
+    # Mirror into bot_metadata so cooldown survives Render restarts via JSONBin
+    try:
+        import json
+        import time
+        raw = get_metadata("last_viral_alerts", "{}")
+        alerts_map = json.loads(raw) if raw else {}
+        alerts_map[clean_code] = time.time()
+        # Keep only last 100 alerts to stay lightweight (<5KB)
+        if len(alerts_map) > 100:
+            sorted_keys = sorted(alerts_map.keys(), key=lambda k: alerts_map[k], reverse=True)[:100]
+            alerts_map = {k: alerts_map[k] for k in sorted_keys}
+        set_metadata("last_viral_alerts", json.dumps(alerts_map))
+        success = True
+    except Exception as e:
+        logger.warning(f"[Database] record_surge_alert metadata mirror error: {e}")
+
+    return success
 
 
 def is_surge_alerted_recently(code: str, cooldown_hours: int = 12) -> bool:
     """Check if an alert was already triggered for this code within cooldown window."""
+    clean_code = (code or "").strip()
+    if not clean_code:
+        return False
+    cooldown_seconds = cooldown_hours * 3600
+
+    # 1. Check bot_metadata first (survives Render restarts via JSONBin)
+    try:
+        import json
+        import time
+        raw = get_metadata("last_viral_alerts", "{}")
+        if raw:
+            alerts_map = json.loads(raw)
+            last_ts = float(alerts_map.get(clean_code, 0.0))
+            if (time.time() - last_ts) < cooldown_seconds:
+                return True
+    except Exception as e:
+        logger.debug(f"[Database] metadata alert check error: {e}")
+
+    # 2. Check viral_surge_alerts table
     try:
         import datetime
         cutoff = (datetime.datetime.utcnow() - datetime.timedelta(hours=cooldown_hours)).strftime("%Y-%m-%d %H:%M:%S")
@@ -2296,7 +2344,7 @@ def is_surge_alerted_recently(code: str, cooldown_hours: int = 12) -> bool:
                 WHERE code = ? AND alerted_at >= ?
                 LIMIT 1
                 """,
-                (code.strip(), cutoff),
+                (clean_code, cutoff),
             ).fetchone()
             return bool(row)
     except Exception as e:
