@@ -20,8 +20,10 @@ def process_image(filepath, channel_name=None):
     - Converts RGBA/P to clean RGB JPEG.
     - If dimensions > 2400px, downscales proportionally to max 2400px (Lanczos).
     - Otherwise keeps 100% original sharp resolution.
-    - No pixels cropped.
+    - Explicitly closes image streams and runs garbage collection for Render Free Tier RAM safety.
     """
+    img = None
+    resized_img = None
     try:
         logger.info(f"Processing image: {filepath}")
         img = Image.open(filepath)
@@ -41,9 +43,11 @@ def process_image(filepath, channel_name=None):
             else:
                 new_h = MAX_DIM
                 new_w = int((img_w / img_h) * MAX_DIM)
-            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            target_to_save = resized_img
             logger.info(f"Proportionally scaled large image: {img_w}x{img_h} -> {new_w}x{new_h} (0% cropped)")
         else:
+            target_to_save = img
             logger.info(f"Preserved exact original dimensions: {img_w}x{img_h} (0% cropped)")
 
         filename = os.path.basename(filepath)
@@ -53,7 +57,7 @@ def process_image(filepath, channel_name=None):
         if not processed_path.lower().endswith(('.jpg', '.jpeg')):
             processed_path = os.path.splitext(processed_path)[0] + '.jpg'
             
-        img.save(processed_path, 'JPEG', quality=92, optimize=True)
+        target_to_save.save(processed_path, 'JPEG', quality=92, optimize=True)
         logger.info(f"Successfully saved full original size image to: {processed_path}")
 
         # Inpaint and clean any Telegram channel watermarks or stamps
@@ -70,4 +74,15 @@ def process_image(filepath, channel_name=None):
     except Exception as e:
         logger.error(f"Error processing image {filepath}: {str(e)}")
         return filepath # Return original if processing fails
+    finally:
+        # Strict memory cleanup for Render 512MB RAM limit
+        try:
+            if img:
+                img.close()
+            if resized_img:
+                resized_img.close()
+        except Exception:
+            pass
+        import gc
+        gc.collect()
 

@@ -147,7 +147,7 @@ def check_channel(channel: str) -> int:
             continue
 
         caption_div = msg.find("div", class_="tgme_widget_message_text")
-        caption = caption_div.text if caption_div else ""
+        caption = caption_div.get_text(separator="\n", strip=True) if caption_div else ""
         logger.info(f"Found new image in post {post_id}")
 
         safe_post_id = post_id.replace("/", "_")
@@ -226,7 +226,7 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
 
             # Found an unposted old image — process it
             caption_div = msg.find("div", class_="tgme_widget_message_text")
-            caption = caption_div.text if caption_div else ""
+            caption = caption_div.get_text(separator="\n", strip=True) if caption_div else ""
 
             safe_post_id = post_id.replace("/", "_")
             filepath = download_image(img_url, f"post_{safe_post_id}")

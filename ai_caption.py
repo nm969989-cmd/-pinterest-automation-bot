@@ -51,12 +51,16 @@ _VISION_PROMPT = (
     "Analyze the image and identify the anime series, character(s) and mood.\n\n"
     "Respond ONLY with valid JSON - no markdown:\n"
     '{{\n'
-    '  "anime_name": "<specific anime series name>",\n'
-    '  "character_name": "<specific character name or empty if none>",\n'
-    '  "title": "<Character Name - Catchy Hook max 90 chars, 1-2 emojis>",\n'
-    '  "description": "<3-4 exciting sentences about artwork + find merch on Amazon. End with 6-8 hashtags>"\n'
+    '  "anime_name": "Attack on Titan",\n'
+    '  "character_name": "Levi Ackerman",\n'
+    '  "title": "Levi Ackerman - Cleanest Blade in the Corps 🔥 Anime Art",\n'
+    '  "description": "High-octane artwork capturing Captain Levi in mid-air maneuver. Perfect for decorating your bedroom or gaming room with premium prints and posters. Grab official figures and wall art on Amazon today!\\n\\n#anime #attackontitan #levi #animeart"\n'
     "}}\n\n"
-    "Rules: title under 90 chars, description under 450 chars, hashtags at END, include #anime"
+    "CRITICAL RULES:\n"
+    "- Identify the real anime series and character from the image/caption.\n"
+    "- anime_name MUST be only the series title (e.g. 'Attack on Titan', 'Demon Slayer', 'Solo Leveling'). NEVER include quotes, dialogue, or full sentences.\n"
+    "- Never output angle brackets, placeholders, or copy the example names verbatim.\n"
+    "- title under 90 chars, description under 450 chars, hashtags at END, include #anime"
 )
 
 _TEXT_PROMPT = (
@@ -65,12 +69,15 @@ _TEXT_PROMPT = (
     "Caption: {caption}\n\n"
     "Respond ONLY with valid JSON - no markdown:\n"
     '{{\n'
-    '  "anime_name": "<specific anime series name>",\n'
-    '  "character_name": "<specific character name or empty if none>",\n'
-    '  "title": "<Character Name - Catchy Hook max 90 chars, 1-2 emojis>",\n'
-    '  "description": "<3-4 exciting sentences + Amazon merch mention + 6-8 hashtags at end>"\n'
-    "}}\n"
-    "Rules: title <90 chars, description <450 chars, hashtags at end, include #anime"
+    '  "anime_name": "Attack on Titan",\n'
+    '  "character_name": "Levi Ackerman",\n'
+    '  "title": "Levi Ackerman - Cleanest Blade in the Corps 🔥 Anime Art",\n'
+    '  "description": "High-octane artwork capturing Captain Levi in mid-air maneuver. Perfect for decorating your bedroom or gaming room with premium prints and posters. Grab official figures and wall art on Amazon today!\\n\\n#anime #attackontitan #levi #animeart"\n'
+    "}}\n\n"
+    "CRITICAL RULES:\n"
+    "- anime_name MUST be only the series title (e.g. 'Attack on Titan', 'Demon Slayer', 'Solo Leveling'). NEVER include quotes, dialogue, or full sentences.\n"
+    "- Never output angle brackets, placeholders, or copy the example names verbatim.\n"
+    "- title <90 chars, description <450 chars, hashtags at end, include #anime"
 )
 
 
@@ -103,7 +110,7 @@ def _inject_link(description_body, channel_name):
     return f"{before}\n\n{cta}\n\nSource: @{channel_name}\n{tags}"
 
 
-def _parse_ai_response(raw, channel_name):
+def _parse_ai_response(raw, channel_name, caption=""):
     """Parse JSON from AI response, return (anime_name, title, description) or None."""
     global _last_character_name
     if not raw or not isinstance(raw, str):
@@ -125,7 +132,21 @@ def _parse_ai_response(raw, channel_name):
         title      = str(data.get("title") or "").strip()[:100]
         desc_body  = str(data.get("description") or "").strip()[:480]
 
-        if not title:
+        # 1. Reject responses containing prompt template placeholders or angle brackets
+        for val in (anime_name, character, title, desc_body):
+            if "<" in val or ">" in val:
+                logger.warning(f"[AI] Rejected AI response containing placeholder angle brackets: '{val}'")
+                return None
+            for bad_token in ("specific anime series", "catchy hook", "character name -", "3-4 exciting sentences"):
+                if bad_token in val.lower():
+                    logger.warning(f"[AI] Rejected AI response containing schema instruction: '{val}'")
+                    return None
+
+        # 2. Canonicalize anime_name using board_router taxonomy (strips quotes/concatenations)
+        from board_router import extract_canonical_anime_name
+        anime_name = extract_canonical_anime_name(anime_name, caption=caption)
+
+        if not title or title.lower() == anime_name.lower():
             title = f"{character} - {anime_name} Poster" if character else f"{anime_name} Aesthetic Poster"
 
         description = _inject_link(desc_body, channel_name)
@@ -142,21 +163,12 @@ def _fallback_generate(caption, channel_name):
     global _last_character_name
     _last_character_name = ""
 
-    # Try to detect known anime name from caption
-    clean_anime = "Anime"
-    try:
-        from board_router import _ANIME_GENRE
-        low_cap = (caption or "").lower()
-        for known in sorted(_ANIME_GENRE.keys(), key=len, reverse=True):
-            if known in low_cap:
-                clean_anime = known.title()
-                break
-    except Exception:
-        pass
+    from board_router import extract_canonical_anime_name
+    clean_anime = extract_canonical_anime_name("", caption=caption)
 
-    first_line  = caption.split('\n')[0] if caption else "Awesome Anime Art"
+    first_line  = caption.split('\n')[0].strip() if caption else "Awesome Anime Art"
     clean_title = re.sub(r'[^\w\s\-\.]', '', first_line).strip()
-    if not clean_title or len(clean_title) > 60:
+    if not clean_title or len(clean_title) > 60 or clean_title.lower() == clean_anime.lower() or any(clean_title.lower().startswith(w) for w in ("he ", "she ", "they ", "saving ", "some ", "her ", "his ")):
         clean_title = f"{clean_anime} Aesthetic Art"
 
     title = f"{clean_title} - Epic Anime Poster"
@@ -221,9 +233,12 @@ def _openrouter_vision(image_path, caption, channel_name, api_key):
                     if choices and choices[0].get('message'):
                         msg = choices[0]['message']
                         raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
-                    result = _parse_ai_response(raw, channel_name)
+                    result = _parse_ai_response(raw, channel_name, caption=caption)
                     if result:
                         logger.info(f"[VISION] Success with {model}!")
+                        del img_b64
+                        import gc
+                        gc.collect()
                         return result
                     logger.warning(f"[VISION] {model} returned unparseable JSON, trying next...")
                 elif res.status_code in (429, 503):
@@ -275,7 +290,7 @@ def _openrouter_text(caption, channel_name, api_key):
                     if choices and choices[0].get('message'):
                         msg = choices[0]['message']
                         raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
-                    result = _parse_ai_response(raw, channel_name)
+                    result = _parse_ai_response(raw, channel_name, caption=caption)
                     if result:
                         logger.info(f"[AI:Text] Success with OpenRouter text model {model}")
                         return result
@@ -298,7 +313,7 @@ def _gemini_text(caption, channel_name, api_key):
             _gemini_client = _genai.Client(api_key=api_key)
         prompt   = _TEXT_PROMPT.format(caption=caption or "(no caption)", channel_name=channel_name)
         response = _gemini_client.models.generate_content(model=_GEMINI_MODEL, contents=prompt)
-        result   = _parse_ai_response(response.text, channel_name)
+        result   = _parse_ai_response(response.text, channel_name, caption=caption)
         if result:
             logger.info("[GEMINI] Caption generated from text analysis.")
         return result

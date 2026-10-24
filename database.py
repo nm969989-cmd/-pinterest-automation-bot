@@ -2570,8 +2570,69 @@ def get_uploaded_files_with_zero_visits(days_old: int = 7, limit: int = 10) -> l
         return []
 
 
+def heal_pending_queue() -> int:
+    """
+    Scans pin_queue for items with corrupted, placeholder, or quote-concatenated
+    anime_name or title fields, and automatically repairs them.
+    Returns the number of healed pins.
+    """
+    healed_count = 0
+    try:
+        from board_router import extract_canonical_anime_name, get_board_for_anime
+        from seo_matrix import build_multi_intent_title
+        from amazon_search import generate_amazon_link
+
+        with _get_conn() as conn:
+            rows = conn.execute("""
+                SELECT id, anime_name, title, description, link
+                FROM pin_queue
+            """).fetchall()
+
+            for row_id, anime_name, title, description, link in rows:
+                needs_heal = False
+
+                # Check for placeholders
+                if "<" in (anime_name or "") or "<" in (title or ""):
+                    needs_heal = True
+                # Check for concatenated quotes / overly long anime_name
+                elif len(anime_name or "") > 35 or any(ch in (anime_name or "") for ch in (".", "!", "?", "\n")):
+                    needs_heal = True
+
+                if needs_heal:
+                    clean_anime = extract_canonical_anime_name(anime_name or "")
+                    genre, board_id = get_board_for_anime(clean_anime)
+                    clean_title = build_multi_intent_title(
+                        original_title=title or "",
+                        anime_name=clean_anime,
+                        character_name="",
+                        genre=genre,
+                    )
+                    clean_link = generate_amazon_link(clean_anime, title=clean_title)
+                    new_desc = description or ""
+                    if anime_name and clean_anime:
+                        new_desc = new_desc.replace(anime_name, clean_anime)
+                    if link and clean_link:
+                        new_desc = new_desc.replace(link, clean_link)
+
+                    conn.execute("""
+                        UPDATE pin_queue
+                        SET anime_name = ?, title = ?, description = ?, link = ?, board_id = ?
+                        WHERE id = ?
+                    """, (clean_anime, clean_title, new_desc, clean_link, board_id, row_id))
+                    healed_count += 1
+                    logger.info(f"[Database] Healed queued pin #{row_id}: '{clean_anime}' | '{clean_title}'")
+
+        if healed_count:
+            logger.info(f"[Database] Total healed queue items: {healed_count}")
+    except Exception as e:
+        logger.error(f"[Database] heal_pending_queue failed: {e}")
+
+    return healed_count
+
+
 # Initialize on import
 init_db()
+heal_pending_queue()
 
 
 

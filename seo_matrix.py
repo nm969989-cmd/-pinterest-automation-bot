@@ -236,11 +236,22 @@ def build_multi_intent_title(
     clean_char = (character_name or "").strip().title()
     clean_title = (original_title or "").strip()
 
+    # Reject any bracketed placeholders in original_title
+    if "<" in clean_title or ">" in clean_title:
+        clean_title = ""
+
     # Build primary anchor (first 30-40 chars)
     if clean_char:
         anchor = f"{clean_anime} {clean_char}"
     else:
         anchor = f"{clean_anime}"
+
+    # Deduplicate: if clean_title starts with or repeats anchor or anime name, strip prefix
+    sub_title = clean_title
+    for prefix in [anchor, clean_anime, clean_char]:
+        if prefix and sub_title.lower().startswith(prefix.lower()):
+            sub_title = sub_title[len(prefix):].lstrip(" -:|—")
+            break
 
     # Search modifiers matching our multi-intent pillars
     search_modifiers = [
@@ -252,11 +263,14 @@ def build_multi_intent_title(
     ]
     modifier = random.choice(search_modifiers)
 
+    if not sub_title or len(sub_title) < 3:
+        sub_title = modifier
+
     # Candidate title structures
     candidates = [
-        f"{anchor} {modifier} | {clean_title}",
-        f"{anchor} | {clean_title} | 4K Wallpaper",
-        f"{anchor} - {clean_title} 🔥 Anime Art",
+        f"{anchor} {modifier} | {sub_title}",
+        f"{anchor} | {sub_title} | 4K Wallpaper",
+        f"{anchor} - {sub_title} 🔥 Anime Art",
     ]
 
     chosen = candidates[0]

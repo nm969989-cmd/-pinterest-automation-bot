@@ -63,18 +63,23 @@ def get_disk_usage_mb(folder: str = ".") -> float:
 # ── Memory monitoring ─────────────────────────────────────────────────────────
 
 def get_memory_mb() -> float:
-    """Returns current process memory usage in MB."""
+    """Returns current active resident memory (RSS) in MB (not historical peak)."""
+    # 1. Linux /proc/self/status (accurate LIVE memory on Render)
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+
+    # 2. Fallback to resource.ru_maxrss (peak RSS on Unix)
     try:
         import resource
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
     except Exception:
-        try:
-            with open("/proc/self/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        return int(line.split()[1]) / 1024
-        except Exception:
-            pass
+        pass
+
     return 0.0
 
 
@@ -134,9 +139,9 @@ def _start_watchdog():
 # ── Periodic health check ─────────────────────────────────────────────────────
 
 # Memory thresholds for graduated response (Render free tier = 512MB hard kill)
-_MEM_GC_THRESHOLD        = 350   # MB — light GC pass
-_MEM_AGGRESSIVE_THRESHOLD = 420  # MB — aggressive cleanup + GC
-_MEM_RESTART_THRESHOLD   = 470   # MB — controlled self-restart (saves state before Render OOM kills us)
+_MEM_GC_THRESHOLD        = 380   # MB — light GC pass
+_MEM_AGGRESSIVE_THRESHOLD = 430  # MB — aggressive cleanup + GC
+_MEM_RESTART_THRESHOLD   = 475   # MB — controlled self-restart (saves state before Render OOM kills us)
 
 
 def _emergency_restart():
@@ -166,23 +171,24 @@ def _emergency_restart():
 
 def _start_health_monitor():
     """
-    Logs memory/disk usage every 10 minutes (was 30 min — too slow to react before OOM).
-    Graduated memory response:
-      > 350 MB: light gc.collect()
-      > 420 MB: aggressive file cleanup + gc.collect()
-      > 470 MB: controlled self-restart (saves state, exits 0, Render restarts)
+    Logs memory/disk usage periodically and manages graduated memory protection:
+      > 380 MB: light gc.collect()
+      > 430 MB: aggressive file cleanup + gc.collect()
+      > 475 MB: controlled self-restart (saves state, exits 0, Render restarts)
     """
     def _loop():
         _iteration = 0
+        _last_warn_time = 0.0
         while True:
-            time.sleep(60)  # check every 60s (was 10 min — too slow for rapid spikes!)
+            time.sleep(60)  # check every 60s
             _iteration += 1
             try:
                 mem_mb  = get_memory_mb()
                 disk_mb = get_disk_usage_mb("downloads") + get_disk_usage_mb("processed")
+                now = time.time()
 
-                # Log periodically every 10 min or immediately if elevated (>300MB)
-                if _iteration % 10 == 0 or mem_mb > 300:
+                # Log periodically every 10 min (or if memory is critically elevated > 430MB)
+                if _iteration % 10 == 0 or mem_mb > _MEM_AGGRESSIVE_THRESHOLD:
                     logger.info(
                         f"[Health] Memory: {mem_mb:.1f}MB | "
                         f"Image disk: {disk_mb:.1f}MB"
@@ -194,35 +200,40 @@ def _start_health_monitor():
                     cleanup_old_files(max_age_hours=2)
                     gc.collect()
 
-                # ── Tier 3: Emergency self-restart (470MB — before Render's 512MB OOM kill) ──
+                # ── Tier 3: Emergency self-restart (475MB — before Render's 512MB OOM kill) ──
                 if mem_mb > _MEM_RESTART_THRESHOLD:
                     _emergency_restart()
-                    return  # _emergency_restart calls sys.exit, but just in case
+                    return
 
-                # ── Tier 2: Aggressive cleanup (420MB) ───────────────────────────────────────
+                # ── Tier 2: Aggressive cleanup (430MB) ───────────────────────────────────────
                 elif mem_mb > _MEM_AGGRESSIVE_THRESHOLD:
-                    logger.warning(
-                        f"[Health] Memory {mem_mb:.1f}MB is critically high! "
-                        f"Running aggressive cleanup (threshold: {_MEM_AGGRESSIVE_THRESHOLD}MB)..."
-                    )
+                    if now - _last_warn_time > 300:  # Warn at most once every 5 min
+                        logger.warning(
+                            f"[Health] Memory {mem_mb:.1f}MB is critically high! "
+                            f"Running aggressive cleanup (threshold: {_MEM_AGGRESSIVE_THRESHOLD}MB)..."
+                        )
+                        _last_warn_time = now
                     cleanup_old_files(max_age_hours=1)
                     gc.collect()
-                    gc.collect()  # two passes clears more cyclic garbage
-
-                # ── Tier 1: Light GC pass (350MB) ────────────────────────────────────────────
-                elif mem_mb > _MEM_GC_THRESHOLD:
-                    logger.warning(
-                        f"[Health] Memory {mem_mb:.1f}MB above {_MEM_GC_THRESHOLD}MB — "
-                        f"running GC..."
-                    )
                     gc.collect()
+
+                # ── Tier 1: Light GC pass (380MB) ────────────────────────────────────────────
+                elif mem_mb > _MEM_GC_THRESHOLD:
+                    gc.collect()
+                    # Throttle warning to at most once every 15 minutes to prevent Render log spam
+                    if now - _last_warn_time > 900:
+                        logger.warning(
+                            f"[Health] Memory {mem_mb:.1f}MB elevated above {_MEM_GC_THRESHOLD}MB — "
+                            f"ran GC."
+                        )
+                        _last_warn_time = now
 
             except Exception as e:
                 logger.error(f"[Health] Monitor error: {e}")
 
     t = threading.Thread(target=_loop, daemon=True, name="HealthMonitor")
     t.start()
-    logger.info("[Health] Health monitor started (checks every 60s, thresholds: 350/420/470MB).")
+    logger.info("[Health] Health monitor started (checks every 60s, thresholds: 380/430/475MB).")
 
 
 # ── Graceful shutdown ─────────────────────────────────────────────────────────

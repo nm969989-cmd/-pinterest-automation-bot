@@ -91,6 +91,10 @@ _ANIME_GENRE = {
     "in another world with my smartphone":      "isekai",
     "isekai quartet":                           "isekai",
     "the eminence in shadow":                   "isekai",
+    "frieren beyond journeys end":              "isekai",
+    "frieren: beyond journey's end":            "isekai",
+    "frieren beyond journey's end":             "isekai",
+    "sousou no frieren":                        "isekai",
     "frieren":                                  "isekai",
     "dungeon meshi":                            "isekai",
     "delicious in dungeon":                     "isekai",
@@ -120,6 +124,9 @@ _ANIME_GENRE = {
     "my dress-up darling":                      "romance",
     "horimiya":                                 "romance",
     "spy x family":                             "romance",
+    "kaguya-sama love is war":                  "romance",
+    "kaguya-sama: love is war":                 "romance",
+    "kaguya sama love is war":                  "romance",
     "kaguya-sama":                              "romance",
     "love is war":                              "romance",
     "nagatoro":                                 "romance",
@@ -255,4 +262,60 @@ def get_board_for_anime(anime_name: str) -> tuple[str, str]:
         )
 
     return genre, board_id
+
+
+# ── Canonical Anime Name Extraction & Sanitization ──────────────────────────
+
+_SORTED_KNOWN_ANIME = sorted(_ANIME_GENRE.keys(), key=len, reverse=True)
+
+def extract_canonical_anime_name(raw_name: str, caption: str = "") -> str:
+    """
+    Extracts a clean, canonical anime series name from potentially dirty input.
+    Handles:
+      1. AI hallucinations / placeholders (e.g. '<specific anime series name>')
+      2. Concatenated quotes from Telegram captions (e.g. 'He saw the ruined wall...Attack on Titan')
+      3. Taxonomy matching against 200+ series in _ANIME_GENRE.
+    """
+    import re
+
+    # 1. Reject obvious placeholder text
+    if not raw_name or "<" in raw_name or ">" in raw_name:
+        raw_name = ""
+
+    # 2. Check known anime taxonomy against raw_name first (longest match first)
+    if raw_name:
+        clean_raw = raw_name.lower().strip()
+        for known in _SORTED_KNOWN_ANIME:
+            # Word boundary or substring match
+            pattern = r'(?:\b|[._\-])' + re.escape(known) + r'(?:\b|[._\-]|$)'
+            if re.search(pattern, clean_raw) or known in clean_raw:
+                return known.title()
+
+    # 3. If raw_name did not match, check caption if provided
+    if caption:
+        clean_cap = caption.lower().strip()
+        for known in _SORTED_KNOWN_ANIME:
+            pattern = r'(?:\b|[._\-])' + re.escape(known) + r'(?:\b|[._\-]|$)'
+            if re.search(pattern, clean_cap) or known in clean_cap:
+                return known.title()
+
+    # 4. If no taxonomy match, try to clean the raw_name
+    if raw_name:
+        # If it has sentences/quotes, take the last segment after period/newline/dash
+        candidate = raw_name
+        for delim in ["\n", ".", "!", "?", " - ", ": "]:
+            if delim in candidate:
+                parts = [p.strip() for p in candidate.split(delim) if p.strip()]
+                if parts:
+                    candidate = parts[-1]
+
+        candidate = re.sub(r'[\'\"«»“”\<\>\[\]\{\}]', '', candidate).strip()
+        # If reasonable title length (3 to 35 chars) and doesn't look like a sentence
+        if 3 <= len(candidate) <= 35:
+            # Check if it starts with common sentence starters
+            first_word = candidate.lower().split()[0] if candidate.split() else ""
+            if first_word not in ("he", "she", "they", "we", "i", "it", "when", "after", "before", "the", "a", "saving", "some", "her", "his"):
+                return candidate.title()
+
+    return "Anime"
 
