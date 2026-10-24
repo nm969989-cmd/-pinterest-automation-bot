@@ -2109,57 +2109,60 @@ async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
         def _fix_stale_entries():
             results = {"fixed": 0, "failed": 0, "deleted": 0, "details": []}
-            with sqlite3.connect(DB_PATH) as conn:
+            from database import _get_conn
+            with _get_conn() as conn:
                 rows = conn.execute(
                     "SELECT id, title, image_path, image_url FROM pin_queue "
                     "WHERE image_url LIKE '%telesco.pe%' OR image_url LIKE '%/t.me/%'"
                 ).fetchall()
 
-                if not rows:
-                    return results
+            if not rows:
+                return results
 
-                for row_id, title, image_path, old_url in rows:
-                    # If local file still exists, re-upload it to a permanent host
-                    if image_path and os.path.exists(image_path):
-                        try:
-                            new_url = upload_image_to_host(image_path)
-                            if new_url:
+            for row_id, title, image_path, old_url in rows:
+                # If local file still exists, re-upload it to a permanent host
+                if image_path and os.path.exists(image_path):
+                    try:
+                        new_url = upload_image_to_host(image_path)
+                        if new_url:
+                            with _get_conn() as conn:
                                 conn.execute(
                                     "UPDATE pin_queue SET image_url=? WHERE id=?",
                                     (new_url, row_id)
                                 )
                                 conn.commit()
-                                results["fixed"] += 1
-                                results["details"].append(
-                                    f"✅ '{title[:30]}' → permanent URL stored"
-                                )
-                                logger.info(
-                                    f"[fixqueue] Re-uploaded '{title}' to permanent host: {new_url[:60]}"
-                                )
-                            else:
-                                results["failed"] += 1
-                                results["details"].append(
-                                    f"❌ '{title[:30]}' — upload failed (host down?)"
-                                )
-                        except Exception as e:
+                            results["fixed"] += 1
+                            results["details"].append(
+                                f"✅ '{title[:30]}' → permanent URL stored"
+                            )
+                            logger.info(
+                                f"[fixqueue] Re-uploaded '{title}' to permanent host: {new_url[:60]}"
+                            )
+                        else:
                             results["failed"] += 1
                             results["details"].append(
-                                f"❌ '{title[:30]}' — error: {str(e)[:40]}"
+                                f"❌ '{title[:30]}' — upload failed (host down?)"
                             )
-                    else:
-                        # Local file gone + CDN expired = unrecoverable.
-                        # DELETE immediately so the scheduler doesn't waste
-                        # 3 retry slots trying to re-download a dead URL.
+                    except Exception as e:
+                        results["failed"] += 1
+                        results["details"].append(
+                            f"❌ '{title[:30]}' — error: {str(e)[:40]}"
+                        )
+                else:
+                    # Local file gone + CDN expired = unrecoverable.
+                    # DELETE immediately so the scheduler doesn't waste
+                    # 3 retry slots trying to re-download a dead URL.
+                    with _get_conn() as conn:
                         conn.execute("DELETE FROM pin_queue WHERE id=?", (row_id,))
                         conn.commit()
-                        results["deleted"] += 1
-                        results["details"].append(
-                            f"🗑️ '{title[:30]}' — deleted (file missing & CDN expired)"
-                        )
-                        logger.warning(
-                            f"[fixqueue] Deleted unrecoverable pin '{title}' "
-                            f"(file missing + CDN expired)."
-                        )
+                    results["deleted"] += 1
+                    results["details"].append(
+                        f"🗑️ '{title[:30]}' — deleted (file missing & CDN expired)"
+                    )
+                    logger.warning(
+                        f"[fixqueue] Deleted unrecoverable pin '{title}' "
+                        f"(file missing + CDN expired)."
+                    )
             return results
 
         results = await asyncio.get_event_loop().run_in_executor(None, _fix_stale_entries)

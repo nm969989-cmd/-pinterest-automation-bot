@@ -218,11 +218,17 @@ def run_autonomous_stock_healer(batch_size: int = 25) -> dict:
                 "new_url": new_url,
             })
             # Mark health in DB with new URL
-            mark_link_health(code, is_healthy=True, new_target_url=new_url)
+            try:
+                mark_link_health(code, is_healthy=True, new_target_url=new_url)
+            except Exception as e:
+                logger.warning(f"[StockHealer] mark_link_health failed for {code}: {e}")
         else:
             healthy_count += 1
             # Mark health in DB (updates last_checked_at)
-            mark_link_health(code, is_healthy=True)
+            try:
+                mark_link_health(code, is_healthy=True)
+            except Exception as e:
+                logger.warning(f"[StockHealer] mark_link_health failed for {code}: {e}")
 
         time.sleep(0.4)
 

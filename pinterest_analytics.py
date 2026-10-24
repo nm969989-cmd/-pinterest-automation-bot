@@ -38,8 +38,14 @@ logger = get_logger(__name__)
 
 # ── Database setup ─────────────────────────────────────────────────────────────
 
+_analytics_table_ensured = False
+
+
 def _ensure_analytics_table() -> None:
-    """Create bridge_visits table if not already present."""
+    """Create bridge_visits table if not already present (runs only once per process)."""
+    global _analytics_table_ensured
+    if _analytics_table_ensured:
+        return
     try:
         from database import _get_conn
         with _get_conn() as conn:
@@ -64,6 +70,7 @@ def _ensure_analytics_table() -> None:
                 ON bridge_visits (visited_at)
             """)
             conn.commit()
+        _analytics_table_ensured = True
     except Exception as e:
         logger.error(f"[Analytics] Table setup failed: {e}")
 

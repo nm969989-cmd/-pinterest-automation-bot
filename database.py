@@ -2,29 +2,61 @@ import sqlite3
 import os
 import datetime
 import contextlib
+import threading
+import time
 from logger import get_logger
 
 logger = get_logger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db")
 
+_db_lock = threading.RLock()
+_local = threading.local()
+
 
 @contextlib.contextmanager
-def _get_conn():
-    """Returns a SQLite connection with WAL mode for concurrency, guaranteed closed on exit."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout = 30000")
-    try:
-        with conn:
-            yield conn
-    finally:
-        conn.close()
+def _get_conn(timeout: float = 60.0):
+    """
+    Thread-safe SQLite connection context manager with RLock and thread-local reuse.
+    Guarantees concurrency safety across all background threads and web requests.
+    """
+    with _db_lock:
+        if getattr(_local, "conn", None) is not None:
+            # Re-entrant call on the same thread: reuse active connection
+            yield _local.conn
+            return
+
+        conn = None
+        for attempt in range(5):
+            try:
+                conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=timeout)
+                conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+                conn.execute("PRAGMA synchronous = NORMAL")
+                conn.execute("PRAGMA temp_store = MEMORY")
+                conn.execute("PRAGMA cache_size = -64000")
+                break
+            except sqlite3.OperationalError as e:
+                if attempt < 4 and ("locked" in str(e).lower() or "busy" in str(e).lower()):
+                    time.sleep(0.1 * (2 ** attempt))
+                else:
+                    raise
+
+        _local.conn = conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            _local.conn = None
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def init_db():
-    """Creates tables if they don't exist yet."""
+    """Creates tables if they don't exist yet and enables WAL mode."""
     with _get_conn() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS processed_posts (
                 post_id TEXT PRIMARY KEY,
@@ -455,8 +487,13 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_revive_orig ON ghost_revive_log (original_title, anime_name)
         """)
+        # ── SEO Keyword Cache Table ──────────────────────────────────────────
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_revive_date ON ghost_revive_log (revived_at)
+            CREATE TABLE IF NOT EXISTS seo_keyword_cache (
+                anime_name    TEXT PRIMARY KEY,
+                keywords_json TEXT,
+                fetched_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
         """)
 
         conn.commit()

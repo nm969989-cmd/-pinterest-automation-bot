@@ -76,10 +76,9 @@ def build_state_payload() -> tuple[dict, int]:
     Returns: (payload_dict, payload_bytes)
     """
     import json
-    import sqlite3
-    from database import DB_PATH
+    from database import DB_PATH, _get_conn
 
-    with sqlite3.connect(DB_PATH, timeout=30.0) as conn:
+    with _get_conn() as conn:
         # Processed posts (last 200 post_ids to keep payload well within 100KB budget)
         posts = [
             row[0] for row in conn.execute(
@@ -271,11 +270,10 @@ def restore_db_from_cloud():
         return
 
     try:
-        import sqlite3
-        from database import DB_PATH, init_db
+        from database import DB_PATH, init_db, _get_conn
         init_db()  # ensure tables exist
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with _get_conn() as conn:
             # Restore processed posts
             posts = state.get("processed_posts", [])
             conn.executemany(
@@ -443,7 +441,7 @@ def restore_db_from_cloud():
         purged_count = 0
         purged_titles = []
         try:
-            with sqlite3.connect(DB_PATH) as conn2:
+            with _get_conn() as conn2:
                 stale = conn2.execute(
                     "SELECT id, title FROM pin_queue "
                     "WHERE image_url LIKE '%telesco.pe%' OR image_url LIKE '%/t.me/%'"

@@ -114,8 +114,14 @@ def _cache_keywords(anime_name: str, keywords: list[str]) -> None:
         logger.debug(f"[KeywordSEO] Cache write failed (non-critical): {e}")
 
 
+_cache_table_ensured = False
+
+
 def _ensure_cache_table() -> None:
-    """Create the seo_keyword_cache table if it doesn't exist yet."""
+    """Create the seo_keyword_cache table if it doesn't exist yet (runs only once per process)."""
+    global _cache_table_ensured
+    if _cache_table_ensured:
+        return
     try:
         from database import _get_conn
         with _get_conn() as conn:
@@ -127,6 +133,7 @@ def _ensure_cache_table() -> None:
                 )
             """)
             conn.commit()
+        _cache_table_ensured = True
     except Exception as e:
         logger.debug(f"[KeywordSEO] Table creation failed (non-critical): {e}")
 
