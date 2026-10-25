@@ -386,48 +386,53 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
 
     resolved_pin_url = (pin_url or pin.get("pin_url", "") or pin.get("pinterest_url", "")).strip()
 
-    platform_tasks = {
-        "arena":     lambda: _post_arena(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
-        "bluesky":   lambda: _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
-        "raindrop":  lambda: _post_raindrop(filename, title, description, link, original_image_url, image_path, config, pin_url=resolved_pin_url, anime_name=anime_name),
-        "mastodon":  lambda: _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
-        "pixelfed":  lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name),
-        "freeimage": lambda: _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
-        "imghippo":  lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
-        "wallhaven": lambda: _post_wallhaven(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url),
-    }
+    platform_tasks = {}
+    if getattr(config, "BLUESKY_ENABLED", False):
+        platform_tasks["bluesky"] = lambda: _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "RAINDROP_ENABLED", False):
+        platform_tasks["raindrop"] = lambda: _post_raindrop(filename, title, description, link, original_image_url, image_path, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "MASTODON_ENABLED", False):
+        platform_tasks["mastodon"] = lambda: _post_mastodon(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "FREEIMAGE_ENABLED", False):
+        platform_tasks["freeimage"] = lambda: _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
+    if getattr(config, "WALLHAVEN_ENABLED", False):
+        platform_tasks["wallhaven"] = lambda: _post_wallhaven(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
+    if getattr(config, "ARENA_ENABLED", False):
+        platform_tasks["arena"] = lambda: _post_arena(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "PIXELFED_ENABLED", False):
+        platform_tasks["pixelfed"] = lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "IMGHIPPO_ENABLED", False):
+        platform_tasks["imghippo"] = lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
 
-    with ThreadPoolExecutor(max_workers=_MAX_CROSSPOST_WORKERS, thread_name_prefix="crosspost") as executor:
-        future_to_platform = {
-            executor.submit(fn): platform
-            for platform, fn in platform_tasks.items()
-        }
-        try:
-            iterator = as_completed(future_to_platform, timeout=60)
-            for future in iterator:
-                platform = future_to_platform[future]
-                try:
-                    ok, url = future.result()
-                    results[f"{platform}_ok"] = ok
-                    results[f"{platform}_url"] = url or ""
-                except Exception as e:
-                    # Keep the loop alive so a slow/hung slow platform can no longer
-                    # wipe out every other platform's result (BUG 3).
-                    unfinished = sum(1 for f in future_to_platform if not f.done())
-                    logger.error(
-                        f"[Crosspost] Unexpected error in {platform} worker: {e} "
-                        f"({unfinished} workers still pending)"
-                    )
-                    results[f"{platform}_ok"] = False
-                    results[f"{platform}_url"] = ""
-        except concurrent.futures.TimeoutError:
-            # One or more platform workers exceeded the 60 s collection budget.
-            # Return the partial results collected so far instead of raising.
-            unfinished = sorted(p for f, p in future_to_platform.items() if not f.done())
-            logger.error(
-                "[Crosspost] Platform workers exceeded 60s collection budget; "
-                f"returning partial results. Unfinished: {unfinished or ['unknown']}"
-            )
+    if platform_tasks:
+        with ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost") as executor:
+            future_to_platform = {
+                executor.submit(fn): platform
+                for platform, fn in platform_tasks.items()
+            }
+            try:
+                iterator = as_completed(future_to_platform, timeout=60)
+                for future in iterator:
+                    platform = future_to_platform[future]
+                    try:
+                        ok, url = future.result()
+                        results[f"{platform}_ok"] = ok
+                        results[f"{platform}_url"] = url or ""
+                    except Exception as e:
+                        # Keep the loop alive so a slow/hung platform never wipes out others
+                        unfinished = sum(1 for f in future_to_platform if not f.done())
+                        logger.error(
+                            f"[Crosspost] Unexpected error in {platform} worker: {e} "
+                            f"({unfinished} workers still pending)"
+                        )
+                        results[f"{platform}_ok"] = False
+                        results[f"{platform}_url"] = ""
+            except concurrent.futures.TimeoutError:
+                unfinished = sorted(p for f, p in future_to_platform.items() if not f.done())
+                logger.error(
+                    "[Crosspost] Platform workers exceeded 60s collection budget; "
+                    f"returning partial results. Unfinished: {unfinished or ['unknown']}"
+                )
 
     elapsed = time.monotonic() - t_start
     logger.info(f"[Crosspost] All platform posts completed in {elapsed:.1f}s (parallel)")

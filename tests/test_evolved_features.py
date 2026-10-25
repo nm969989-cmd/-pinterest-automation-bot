@@ -23,13 +23,13 @@ class TestWinningKeywordEvolver(unittest.TestCase):
         init_db()
         # Clean test entries in evolved_keywords
         with _get_conn() as conn:
-            conn.execute("DELETE FROM evolved_keywords WHERE keyword LIKE 'TEST_%'")
+            conn.execute("DELETE FROM evolved_keywords WHERE keyword LIKE 'TEST_%' OR keyword = '4K Aesthetic Art'")
             conn.commit()
 
     def tearDown(self):
         from database import _get_conn
         with _get_conn() as conn:
-            conn.execute("DELETE FROM evolved_keywords WHERE keyword LIKE 'TEST_%'")
+            conn.execute("DELETE FROM evolved_keywords WHERE keyword LIKE 'TEST_%' OR keyword = '4K Aesthetic Art'")
             conn.commit()
 
     def test_record_and_get_top_keywords(self):
@@ -53,7 +53,7 @@ class TestWinningKeywordEvolver(unittest.TestCase):
         from database import record_keyword_evolution
         from seo_matrix import build_multi_intent_title
 
-        record_keyword_evolution("4K Aesthetic Art", won=True, clicks=10, visits=30)
+        record_keyword_evolution("TEST_4K Aesthetic Art", won=True, clicks=10, visits=30)
         title = build_multi_intent_title("Zoro", anime_name="One Piece", character_name="Zoro")
         self.assertIsInstance(title, str)
         self.assertLessEqual(len(title), 100)
