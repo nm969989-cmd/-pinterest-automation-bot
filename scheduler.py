@@ -511,6 +511,8 @@ class PinScheduler:
         _MAKE_HEALTH_INTERVAL = 6 * 3600  # 6 hours in seconds
         _last_make_health_check: float = 0.0  # Force an immediate check on first loop pass
         _last_viral_radar_check: float = time.time()  # Wait 2h after startup before periodic viral radar check
+        _last_recovery_alert_ts: float = 0.0  # Track timestamp of last recovery alert to prevent spam
+        _last_recovery_alert_key: str = ""    # Track date & slot count of last recovery alert
 
         # ── Full startup schedule recovery ────────────────────────────────────
         # On every restart (Render deploy, spin-down, crash), we check ALL slots
@@ -626,6 +628,7 @@ class PinScheduler:
                 )
                 expected_hb = min(slots_passed_hb, MAX_POSTS_PER_DAY)
                 missed_hb = max(0, expected_hb - today_posted_hb)
+                recovery_alert_key = f"{today_utc_str_hb}_{expected_hb}"
                 if missed_hb > 0 and _pending_catchup_count == 0:
                     logger.warning(
                         f"[Scheduler] LIVE RECOVERY: Schedule drifted — "
@@ -633,16 +636,23 @@ class PinScheduler:
                         f"Queuing {missed_hb} catch-up post(s) with anti-burst pacing (12-18 min intervals)."
                     )
                     _pending_catchup_count = missed_hb
-                    try:
-                        from telegram_bot import notify_admin
-                        notify_admin(
-                            f"⚡ *Live Schedule Recovery*\n"
-                            f"Detected {missed_hb} missed post(s) mid-day.\n"
-                            f"Posted: {today_posted_hb} | Expected by now: {expected_hb}\n"
-                            f"🛡️ *Anti-Burst Pacing Active*: Catch-up pins spaced 12–18 mins apart."
-                        )
-                    except Exception as _notify_err:
-                        logger.warning(f"[Scheduler] notify_admin failed during heartbeat recovery: {_notify_err}")
+                    now_ts_recovery = time.time()
+                    # Suppress repeated Telegram alert spam (only alert once per expected count or once every 4 hours)
+                    if recovery_alert_key != _last_recovery_alert_key or (now_ts_recovery - _last_recovery_alert_ts) > 14400:
+                        _last_recovery_alert_key = recovery_alert_key
+                        _last_recovery_alert_ts = now_ts_recovery
+                        try:
+                            from telegram_bot import notify_admin
+                            notify_admin(
+                                f"⚡ *Live Schedule Recovery*\n"
+                                f"Detected {missed_hb} missed post(s) mid-day.\n"
+                                f"Posted: {today_posted_hb} | Expected by now: {expected_hb}\n"
+                                f"🛡️ *Anti-Burst Pacing Active*: Catch-up pins spaced 12–18 mins apart."
+                            )
+                        except Exception as _notify_err:
+                            logger.warning(f"[Scheduler] notify_admin failed during heartbeat recovery: {_notify_err}")
+                    else:
+                        logger.info(f"[Scheduler] Live recovery in progress — suppressed duplicate Telegram alert ({recovery_alert_key}).")
                 elif missed_hb == 0 and slots_passed_hb > 0:
                     logger.info(
                         f"[Scheduler] Heartbeat OK — schedule on track: "

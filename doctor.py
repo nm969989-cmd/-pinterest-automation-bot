@@ -21,6 +21,7 @@ def run_full_system_diagnostic() -> dict:
     from database import get_3day_stats, _get_conn
     from crash_protection import get_memory_mb, get_disk_usage_mb
     import pa_api
+    from circuit_breaker import is_cooling_down, get_all_cooldowns
 
     warnings = []
     
@@ -88,30 +89,31 @@ def run_full_system_diagnostic() -> dict:
     # 8. Are.na Cross-Post Status
     arena_status = "⚪ Disabled"
     try:
-        from circuit_breaker import is_cooling_down, get_all_cooldowns
-        cooling, c_reason, c_rem = is_cooling_down("arena")
-        if cooling:
-            arena_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif config.ARENA_ENABLED and config.ARENA_ACCESS_TOKEN:
-            from arena_uploader import verify_arena_token, get_arena_channel_info
-            token_ok = verify_arena_token()
-            if token_ok:
-                info = get_arena_channel_info()
-                if info:
-                    used = info.get("length", 0)
-                    remaining = max(0, 200 - used)
-                    arena_status = f"🟢 Active ({used}/200 blocks, {remaining} free)"
-                    if remaining < 20:
-                        warnings.append(f"Are.na block quota low: only {remaining} blocks left (Guest plan, 200 max). Upgrade to Premium at $7/mo for unlimited.")
+        if getattr(config, "ARENA_ENABLED", False):
+            from circuit_breaker import is_cooling_down
+            cooling, c_reason, c_rem = is_cooling_down("arena")
+            if cooling:
+                arena_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+            elif config.ARENA_ACCESS_TOKEN:
+                from arena_uploader import verify_arena_token, get_arena_channel_info
+                token_ok = verify_arena_token()
+                if token_ok:
+                    info = get_arena_channel_info()
+                    if info:
+                        used = info.get("length", 0)
+                        remaining = max(0, 200 - used)
+                        arena_status = f"🟢 Active ({used}/200 blocks, {remaining} free)"
+                        if remaining < 20:
+                            warnings.append(f"Are.na block quota low: only {remaining} blocks left (Guest plan, 200 max). Upgrade to Premium at $7/mo for unlimited.")
+                    else:
+                        arena_status = "🟡 Token OK but channel not found"
+                        warnings.append("Are.na channel not found — check ARENA_CHANNEL_SLUG in .env")
                 else:
-                    arena_status = "🟡 Token OK but channel not found"
-                    warnings.append("Are.na channel not found — check ARENA_CHANNEL_SLUG in .env")
+                    arena_status = "🔴 Token Invalid"
+                    warnings.append("Are.na token is invalid — check ARENA_ACCESS_TOKEN in .env")
             else:
-                arena_status = "🔴 Token Invalid"
-                warnings.append("Are.na token is invalid — check ARENA_ACCESS_TOKEN in .env")
-        elif config.ARENA_ENABLED and not config.ARENA_ACCESS_TOKEN:
-            arena_status = "🔴 Token Missing"
-            warnings.append("ARENA_ENABLED=true but ARENA_ACCESS_TOKEN is empty in .env")
+                arena_status = "🔴 Token Missing"
+                warnings.append("ARENA_ENABLED=true but ARENA_ACCESS_TOKEN is empty in .env")
     except Exception as _arena_e:
         arena_status = f"🟡 Check failed ({_arena_e})"
 
@@ -188,55 +190,71 @@ def run_full_system_diagnostic() -> dict:
     # 14. Pixelfed Cross-Post Status
     pixelfed_status = "⚪ Disabled"
     try:
-        cooling, c_reason, c_rem = is_cooling_down("pixelfed")
-        if cooling:
-            pixelfed_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif config.PIXELFED_ENABLED and config.PIXELFED_ACCESS_TOKEN:
-            from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
-            pix_ok = verify_pixelfed_token()
-            if pix_ok:
-                pinfo = get_pixelfed_profile_info()
-                statuses = pinfo.get("statuses_count", 0) if pinfo else "?"
-                pixelfed_status = f"🟢 Active (@{pinfo.get('username', 'user')}, {statuses} posts)"
+        if getattr(config, "PIXELFED_ENABLED", False):
+            from circuit_breaker import is_cooling_down
+            cooling, c_reason, c_rem = is_cooling_down("pixelfed")
+            if cooling:
+                pixelfed_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
+            elif config.PIXELFED_ACCESS_TOKEN:
+                from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
+                pix_ok = verify_pixelfed_token()
+                if pix_ok:
+                    pinfo = get_pixelfed_profile_info()
+                    statuses = pinfo.get("statuses_count", 0) if pinfo else "?"
+                    pixelfed_status = f"🟢 Active (@{pinfo.get('username', 'user')}, {statuses} posts)"
+                else:
+                    pixelfed_status = "🔴 Token Invalid"
+                    warnings.append("Pixelfed token is invalid — check PIXELFED_ACCESS_TOKEN in .env")
             else:
-                pixelfed_status = "🔴 Token Invalid"
-                warnings.append("Pixelfed token is invalid — check PIXELFED_ACCESS_TOKEN in .env")
-        elif config.PIXELFED_ENABLED and not config.PIXELFED_ACCESS_TOKEN:
-            pixelfed_status = "🔴 Token Missing"
-            warnings.append("PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env")
+                pixelfed_status = "🔴 Token Missing"
+                warnings.append("PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env")
     except Exception as _pix_e:
         pixelfed_status = f"🟡 Check failed ({_pix_e})"
 
     # 15. Freeimage.host Cross-Post Status
     freeimage_status = "⚪ Disabled"
     try:
-        cooling, c_reason, c_rem = is_cooling_down("freeimage")
-        if cooling:
-            freeimage_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif getattr(config, "FREEIMAGE_ENABLED", False):
-            from freeimage_uploader import verify_freeimage_token
-            fi_ok = verify_freeimage_token()
-            if fi_ok:
-                freeimage_status = "🟢 Active (API Key Verified)"
+        if getattr(config, "FREEIMAGE_ENABLED", False):
+            from circuit_breaker import is_cooling_down
+            cooling, c_reason, c_rem = is_cooling_down("freeimage")
+            if cooling:
+                freeimage_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
             else:
-                freeimage_status = "🟡 Reachable"
+                from freeimage_uploader import verify_freeimage_token
+                fi_ok = verify_freeimage_token()
+                if fi_ok:
+                    freeimage_status = "🟢 Active (API Key Verified)"
+                else:
+                    freeimage_status = "🟡 Reachable"
     except Exception as _fi_e:
         freeimage_status = f"🟡 Check failed ({_fi_e})"
 
+    # 16. Wallhaven.cc Cross-Post Status
+    wallhaven_status = "⚪ Disabled"
+    try:
+        if getattr(config, "WALLHAVEN_ENABLED", False):
+            from wallhaven_uploader import verify_wallhaven_token
+            wh_ok = verify_wallhaven_token()
+            wh_user = getattr(config, "WALLHAVEN_USERNAME", "animizing")
+            wallhaven_status = f"🟢 Active (@{wh_user})" if wh_ok else "🟡 Reachable"
+    except Exception as _wh_e:
+        wallhaven_status = f"🟡 Check failed ({_wh_e})"
 
     # 17. Imghippo Cross-Post Status
     imghippo_status = "⚪ Disabled"
     try:
-        cooling, c_reason, c_rem = is_cooling_down("imghippo")
-        if cooling:
-            imghippo_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-        elif getattr(config, "IMGHIPPO_ENABLED", False):
-            from imghippo_uploader import verify_imghippo_token
-            hippo_ok = verify_imghippo_token()
-            if hippo_ok:
-                imghippo_status = "🟢 Active (API Key Verified)"
+        if getattr(config, "IMGHIPPO_ENABLED", False):
+            from circuit_breaker import is_cooling_down
+            cooling, c_reason, c_rem = is_cooling_down("imghippo")
+            if cooling:
+                imghippo_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
             else:
-                imghippo_status = "🟡 Reachable"
+                from imghippo_uploader import verify_imghippo_token
+                hippo_ok = verify_imghippo_token()
+                if hippo_ok:
+                    imghippo_status = "🟢 Active (API Key Verified)"
+                else:
+                    imghippo_status = "🟡 Reachable"
     except Exception as _hip_e:
         imghippo_status = f"🟡 Check failed ({_hip_e})"
 
@@ -286,6 +304,7 @@ def run_full_system_diagnostic() -> dict:
         "mastodon_status": mastodon_status,
         "pixelfed_status": pixelfed_status,
         "freeimage_status": freeimage_status,
+        "wallhaven_status": wallhaven_status,
         "imghippo_status": imghippo_status,
         "watermark_status": watermark_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
@@ -297,6 +316,7 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
     """
     Builds a beautifully styled Telegram markdown report card.
     """
+    import config
     header_title = "🏥 3-Day Automated System Health Report" if is_scheduled else "🏥 System Health Diagnostics (/doctor)"
     stats = diag["stats"]
 
@@ -313,6 +333,31 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         cb_section = "🛡️ Platform Circuit Breakers (Cooldown Active):\n" + "\n".join(cb_lines) + "\n\n"
     else:
         cb_section = "🛡️ Platform Circuit Breakers:\n  • Status: 🟢 All Clear (All 7 platforms active & protected)\n\n"
+
+    # Dynamically build integrations section showing only active/enabled services
+    integration_items = [
+        f"  • Make.com Webhook   : {diag['webhook_status']}",
+        f"  • Watermark Cleaner  : {diag.get('watermark_status', 'N/A')}",
+    ]
+    if getattr(config, "BLUESKY_ENABLED", False):
+        integration_items.append(f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}")
+    if getattr(config, "RAINDROP_ENABLED", False):
+        integration_items.append(f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}")
+    if getattr(config, "MASTODON_ENABLED", False):
+        integration_items.append(f"  • Mastodon           : {diag.get('mastodon_status', 'N/A')}")
+    if getattr(config, "FREEIMAGE_ENABLED", False):
+        integration_items.append(f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}")
+    if getattr(config, "WALLHAVEN_ENABLED", False):
+        integration_items.append(f"  • Wallhaven.cc       : {diag.get('wallhaven_status', '🟢 Active')}")
+    if getattr(config, "ARENA_ENABLED", False):
+        integration_items.append(f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}")
+    if getattr(config, "PIXELFED_ENABLED", False):
+        integration_items.append(f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}")
+    if getattr(config, "IMGHIPPO_ENABLED", False):
+        integration_items.append(f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}")
+
+    integration_items.append(f"  • Monitored Channels : {diag['monitored_channels']} channel(s)")
+    integrations_block = "\n".join(integration_items)
 
     report = (
         f"{header_title}\n"
@@ -338,17 +383,8 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         f"  • Clicks (3 Days)  : {stats['clicks_3d']} clicks\n"
         f"  • Est. 3-Day Rev   : {est_revenue}\n\n"
         f"{cb_section}"
-        f"🌐 Integrations & Webhooks:\n"
-        f"  • Make.com Webhook   : {diag['webhook_status']}\n"
-        f"  • Watermark Cleaner  : {diag.get('watermark_status', 'N/A')}\n"
-        f"  • Are.na Cross-Post  : {diag.get('arena_status', 'N/A')}\n"
-        f"  • Bluesky Cross-Post : {diag.get('bluesky_status', 'N/A')}\n"
-        f"  • Raindrop.io        : {diag.get('raindrop_status', 'N/A')}\n"
-        f"  • Mastodon           : {diag.get('mastodon_status', 'N/A')}\n"
-        f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}\n"
-        f"  • Freeimage.host     : {diag.get('freeimage_status', 'N/A')}\n"
-        f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}\n"
-        f"  • Monitored Channels : {diag['monitored_channels']} channel(s)\n\n"
+        f"🌐 Active Integrations & Channels:\n"
+        f"{integrations_block}\n\n"
         f"💡 Tip: Type /doctor anytime to run an instant check on demand."
     )
     return report

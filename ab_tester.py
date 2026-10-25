@@ -17,9 +17,31 @@ import config
 
 logger = get_logger(__name__)
 
+import re
+
 # Minimum hours before comparing A vs B and picking winner
 AB_DECISION_HOURS = int(getattr(config, "AB_DECISION_HOURS", 48))
 AB_MIN_VISITS = int(getattr(config, "AB_MIN_VISITS", 3))  # skip if too few visits
+
+
+def _extract_title_modifier(title: str, anime_name: str = "") -> str:
+    """Extracts the intent/modifier segment from a pin title for keyword evolution."""
+    if not title:
+        return ""
+    try:
+        from seo_matrix import BASE_SEARCH_MODIFIERS
+        for mod in BASE_SEARCH_MODIFIERS:
+            if mod.lower() in title.lower():
+                return mod
+    except Exception:
+        pass
+    segments = [s.strip() for s in re.split(r"[|\-—🔥]", title) if s.strip()]
+    for seg in segments:
+        if anime_name and anime_name.lower() in seg.lower() and len(seg) < len(anime_name) + 6:
+            continue
+        if 5 <= len(seg) <= 40:
+            return seg
+    return ""
 
 
 def _generate_b_title(original_title: str, anime_name: str, genre: str = "") -> str:
@@ -208,8 +230,20 @@ def check_and_decide_ab_tests() -> int:
                 declare_ab_winner(test_id, winner)
                 decided += 1
 
-                # Send Telegram notification
+                # Record in evolved_keywords for self-learning loop
                 w_data, l_data = results[winner], results[loser]
+                try:
+                    from database import record_keyword_evolution
+                    w_mod = _extract_title_modifier(w_data["title"], w_data.get("anime", ""))
+                    l_mod = _extract_title_modifier(l_data["title"], l_data.get("anime", ""))
+                    if w_mod:
+                        record_keyword_evolution(w_mod, won=True, clicks=w_data["clicks"], visits=w_data["visits"])
+                    if l_mod and l_mod.lower() != (w_mod or "").lower():
+                        record_keyword_evolution(l_mod, won=False, clicks=l_data["clicks"], visits=l_data["visits"])
+                except Exception as _evo_err:
+                    logger.warning(f"[A/B] Keyword evolution extraction error: {_evo_err}")
+
+                # Send Telegram notification
                 w_ctr = round((w_data["clicks"] / max(1, w_data["visits"])) * 100, 1)
                 l_ctr = round((l_data["clicks"] / max(1, l_data["visits"])) * 100, 1)
 
@@ -222,7 +256,7 @@ def check_and_decide_ab_tests() -> int:
                     f"❌ *Loser: Variant {loser}*\n"
                     f"  Title: _{l_data['title'][:70]}_\n"
                     f"  Visits: *{l_data['visits']}* | Clicks: *{l_data['clicks']}* ({l_ctr}% CTR)\n\n"
-                    f"✅ Winner pattern recorded!"
+                    f"✅ Winner pattern recorded in Evolver!"
                 )
                 try:
                     from telegram_bot import notify_admin

@@ -294,12 +294,19 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
                     character_name=character_name,
                     link_url=amazon_link,
                 )
+                color_tags = []
+                try:
+                    from image_processor import extract_image_color_tags
+                    color_tags = extract_image_color_tags(filepath)
+                except Exception:
+                    pass
                 optimized_tags = generate_multi_intent_tags(
                     anime_name=anime_name,
                     character_name=character_name,
                     genre=genre,
                     target_count=13,
                     include_disclosure=True,
+                    color_tags=color_tags,
                 )
                 description = description.rstrip() + "\n\n" + optimized_tags
                 if "#ad" not in description.lower() and "#affiliate" not in description.lower():

@@ -92,6 +92,18 @@ AESTHETIC_INTENT_TAGS = [
 
 DISCLOSURE_TAGS = ["#ad", "#affiliate"]
 
+# Baseline search intent modifiers for title building
+BASE_SEARCH_MODIFIERS = [
+    "4K Wallpaper & Art",
+    "Anime Room Decor & Art",
+    "HD Wallpaper & Figure Art",
+    "Anime Aesthetic 4K",
+    "Fan Art & Poster",
+    "Minimalist OLED Lockscreen",
+    "Aesthetic Phone Wallpaper",
+    "Otaku Wall Decor Print",
+]
+
 # ── Dynamic Multi-Intent Tag Generator ─────────────────────────────────────
 
 def _clean_tag(text: str) -> str:
@@ -137,6 +149,7 @@ def generate_multi_intent_tags(
     genre: str = "general",
     target_count: int = 13,
     include_disclosure: bool = True,
+    color_tags: Optional[List[str]] = None,
 ) -> str:
     """
     Constructs an intent-balanced hashtag cluster.
@@ -147,6 +160,7 @@ def generate_multi_intent_tags(
     - 2 Merch / Figures tags (Amazon match)
     - 2-3 Fandom & Character tags
     - 1-2 Organic Aesthetic tags
+    - 1-2 Visual Color Palette tags (#NeonGreen, #DarkAesthetic, etc. if detected)
     - 1 FTC Disclosure tag (#ad or #affiliate)
     
     Deduplicates and shuffles to ensure unique post fingerprints.
@@ -186,6 +200,13 @@ def generate_multi_intent_tags(
     # 5. Organic Aesthetic (Sample 1-2)
     k_aes = min(len(AESTHETIC_INTENT_TAGS), random.randint(1, 2))
     selected_tags.extend(random.sample(AESTHETIC_INTENT_TAGS, k_aes))
+
+    # 5b. Visual Color Palette Tags (Sample 1-2 if detected)
+    if color_tags:
+        clean_colors = [_clean_tag(c.lstrip("#")) for c in color_tags if c]
+        if clean_colors:
+            k_col = min(len(clean_colors), random.randint(1, 2))
+            selected_tags.extend(random.sample(clean_colors, k_col))
 
     # 6. FTC Disclosure
     if include_disclosure:
@@ -253,15 +274,21 @@ def build_multi_intent_title(
             sub_title = sub_title[len(prefix):].lstrip(" -:|—")
             break
 
-    # Search modifiers matching our multi-intent pillars
-    search_modifiers = [
-        "4K Wallpaper & Art",
-        "Anime Room Decor & Art",
-        "HD Wallpaper & Figure Art",
-        "Anime Aesthetic 4K",
-        "Fan Art & Poster",
-    ]
-    modifier = random.choice(search_modifiers)
+    # Search modifiers matching our multi-intent pillars with 80% exploitation of evolved winners
+    chosen_modifier = None
+    try:
+        if random.random() < 0.80:
+            from database import get_top_evolved_keywords
+            top_kw = get_top_evolved_keywords(limit=5)
+            if top_kw:
+                chosen_modifier = random.choice(top_kw)
+    except Exception:
+        chosen_modifier = None
+
+    if not chosen_modifier:
+        chosen_modifier = random.choice(BASE_SEARCH_MODIFIERS)
+
+    modifier = chosen_modifier
 
     if not sub_title or len(sub_title) < 3:
         sub_title = modifier

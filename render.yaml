@@ -74,7 +74,7 @@ services:
       - key: PIXELFED_ACCESS_TOKEN
         sync: false
       - key: PIXELFED_ENABLED
-        value: "true"
+        value: "false"
       # Freeimage.host Cross-Posting
       - key: FREEIMAGE_API_KEY
         sync: false
@@ -86,6 +86,22 @@ services:
         sync: false
       - key: IMGHIPPO_ENABLED
         value: "false"
+
+      # Cloudinary CDN Backup
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # Wallhaven.cc Anime Wallpaper Platform
+      - key: WALLHAVEN_API_KEY
+        sync: false
+      - key: WALLHAVEN_USERNAME
+        value: "animizing"
+      - key: WALLHAVEN_ENABLED
+        value: "true"
 
 
 

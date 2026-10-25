@@ -174,67 +174,27 @@ def get_post_confirmation_keyboard(
         if row1:
             rows.append(row1)
 
-        # Secondary platforms (paired 2 per row)
+        # Secondary platforms (paired 2 per row - only for successful posts)
         platform_btns = []
 
-        if getattr(config, "BLUESKY_ENABLED", False):
-            b_handle = getattr(config, "BLUESKY_HANDLE", "muthelyrics.bsky.social")
-            fallback_bsky = f"https://bsky.app/profile/{b_handle}"
-            b_link = bluesky_url if _is_valid_http_url(bluesky_url) else fallback_bsky
-            btn_txt = "🦋 View on Bluesky" if (bluesky_url and "/post/" in bluesky_url) else "🦋 Bluesky Feed"
-            if _is_valid_http_url(b_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=b_link))
+        if getattr(config, "BLUESKY_ENABLED", False) and _is_valid_http_url(bluesky_url):
+            btn_txt = "🦋 Bluesky Post" if "/post/" in bluesky_url else "🦋 Bluesky"
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=bluesky_url))
 
-        if getattr(config, "MASTODON_ENABLED", False):
-            fallback_masto = "https://mastodon.social/@muthelyrics"
-            m_link = mastodon_url if _is_valid_http_url(mastodon_url) else fallback_masto
-            btn_txt = "🐘 View on Mastodon" if (mastodon_url and "/@" in mastodon_url and mastodon_url != fallback_masto) else "🐘 Mastodon Feed"
-            if _is_valid_http_url(m_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=m_link))
+        if getattr(config, "MASTODON_ENABLED", False) and _is_valid_http_url(mastodon_url):
+            btn_txt = "🐘 Mastodon Post" if "/@" in mastodon_url else "🐘 Mastodon"
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=mastodon_url))
 
-        if getattr(config, "ARENA_ENABLED", False):
-            a_slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
-            fallback_arena = f"https://www.are.na/channel/{a_slug}" if a_slug else "https://www.are.na/manoj-muthelyrics"
-            a_link = arena_url if _is_valid_http_url(arena_url) else fallback_arena
-            if _is_valid_http_url(a_link):
-                platform_btns.append(InlineKeyboardButton("🔮 View on Are.na", url=a_link))
+        if getattr(config, "RAINDROP_ENABLED", False) and _is_valid_http_url(raindrop_url):
+            platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=raindrop_url))
 
-        if getattr(config, "RAINDROP_ENABLED", False):
-            r_col = getattr(config, "RAINDROP_COLLECTION_ID", "")
-            fallback_raindrop = f"https://app.raindrop.io/my/{r_col}" if r_col else "https://app.raindrop.io"
-            r_link = raindrop_url if _is_valid_http_url(raindrop_url) else fallback_raindrop
-            if _is_valid_http_url(r_link):
-                platform_btns.append(InlineKeyboardButton("💧 Raindrop Bookmark", url=r_link))
+        if getattr(config, "FREEIMAGE_ENABLED", False) and _is_valid_http_url(freeimage_url):
+            btn_txt = "🖼️ Freeimage Link" if "/i/" in freeimage_url else "🖼️ Freeimage"
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=freeimage_url))
 
-        if getattr(config, "PIXELFED_ENABLED", False):
-            inst = getattr(config, "PIXELFED_INSTANCE_URL", "https://pixelfed.social")
-            fallback_pix = f"{inst}/PinterestAutomationBot"
-            pix_link = pixelfed_url if _is_valid_http_url(pixelfed_url) else fallback_pix
-            btn_txt = "📷 View on Pixelfed" if (pixelfed_url and "/p/" in pixelfed_url) else "📷 Pixelfed Profile"
-            if _is_valid_http_url(pix_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=pix_link))
-
-        if getattr(config, "FREEIMAGE_ENABLED", False):
-            fallback_fi = "https://freeimage.host/muthelyrics"
-            fi_link = freeimage_url if _is_valid_http_url(freeimage_url) else fallback_fi
-            btn_txt = "🖼️ View on Freeimage" if (freeimage_url and "/i/" in freeimage_url) else "🖼️ Freeimage Gallery"
-            if _is_valid_http_url(fi_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=fi_link))
-
-        if getattr(config, "IMGHIPPO_ENABLED", False):
-            fallback_hippo = "https://www.imghippo.com/dashboard"
-            hippo_link = imghippo_url if _is_valid_http_url(imghippo_url) else fallback_hippo
-            btn_txt = "🦛 View on Imghippo" if (imghippo_url and "/files/" in imghippo_url) else "🦛 Imghippo Gallery"
-            if _is_valid_http_url(hippo_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
-
-        if getattr(config, "WALLHAVEN_ENABLED", False):
-            wh_user = getattr(config, "WALLHAVEN_USERNAME", "animizing")
-            fallback_wh = f"https://wallhaven.cc/user/{wh_user}"
-            wh_link = wallhaven_url if _is_valid_http_url(wallhaven_url) else fallback_wh
-            btn_txt = "🌌 View on Wallhaven" if (wallhaven_url and "/w/" in wallhaven_url) else "🌌 Wallhaven Art"
-            if _is_valid_http_url(wh_link):
-                platform_btns.append(InlineKeyboardButton(btn_txt, url=wh_link))
+        if getattr(config, "WALLHAVEN_ENABLED", False) and _is_valid_http_url(wallhaven_url):
+            btn_txt = "🌌 Wallhaven Wallpaper" if "/w/" in wallhaven_url else "🌌 Wallhaven"
+            platform_btns.append(InlineKeyboardButton(btn_txt, url=wallhaven_url))
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -2871,9 +2831,16 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
                     base_description=desc_template, anime_name=anime_name,
                     character_name=character_name, link_url=amazon_link
                 )
+                color_tags = []
+                try:
+                    from image_processor import extract_image_color_tags
+                    color_tags = extract_image_color_tags(draft["image_path"])
+                except Exception:
+                    pass
                 optimized_tags = generate_multi_intent_tags(
                     anime_name=anime_name, character_name=character_name,
-                    genre=genre, target_count=13, include_disclosure=True
+                    genre=genre, target_count=13, include_disclosure=True,
+                    color_tags=color_tags,
                 )
                 description = description.rstrip() + "\n\n" + optimized_tags
                 if "#ad" not in description.lower() and "#affiliate" not in description.lower():
@@ -3231,9 +3198,16 @@ async def handle_admin_photo_upload(update: "Update", context: "ContextTypes.DEF
                 base_description=desc_template, anime_name=anime_name,
                 character_name=character_name, link_url=amazon_link
             )
+            color_tags = []
+            try:
+                from image_processor import extract_image_color_tags
+                color_tags = extract_image_color_tags(processed_path)
+            except Exception:
+                pass
             optimized_tags = generate_multi_intent_tags(
                 anime_name=anime_name, character_name=character_name,
-                genre=genre, target_count=13, include_disclosure=True
+                genre=genre, target_count=13, include_disclosure=True,
+                color_tags=color_tags,
             )
             description = description.rstrip() + "\n\n" + optimized_tags
             if "#ad" not in description.lower() and "#affiliate" not in description.lower():
@@ -3328,53 +3302,38 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
 
     # Use config MAX_POSTS_PER_DAY so bar is always correct size (3, not 15)
     from config import MAX_POSTS_PER_DAY as _max
-    actual_max = _max  # always read from config, ignore stale state
+    actual_max = max(1, _max)  # always read from config, ignore stale state
 
-    type_emoji  = "🆕 NEW" if pin_type == "NEW" else "📦 BACKLOG"
-    # Build correctly-sized progress bar
-    filled  = min(posted_today, actual_max)
-    bar     = "".join(["✅" if i <= filled else "⬜" for i in range(1, actual_max + 1)])
+    # Clean, normalized 5-block progress bar that never wraps
+    filled = min(posted_today, actual_max)
+    pct = int((filled / actual_max) * 100)
+    filled_blocks = min(5, max(0, round((filled / actual_max) * 5)))
+    prog_bar = "🟩" * filled_blocks + "⬜" * (5 - filled_blocks)
+    progress_text = f"📌 Pin {posted_today} of {actual_max} Today  {prog_bar} ({pct}%)"
 
-    from database import get_tracked_target_url
-    target_url  = get_tracked_target_url(link)
-    amazon_line = f"\n🎯 Amazon     : {target_url}" if target_url != link else ""
+    status_line = "✅ Status: Live on Pinterest" if pin_live else "🚀 Status: Dispatched via Make.com"
 
-    def _platform_icon(result):
-        if result is True:   return "✅"
-        if result is False:  return "❌"
-        return "—"            # None = disabled
+    # Only display platforms that actually posted successfully
+    syndicated = []
+    if bluesky_ok is True:   syndicated.append("🦋 Bluesky")
+    if raindrop_ok is True:  syndicated.append("💧 Raindrop")
+    if mastodon_ok is True:  syndicated.append("🐘 Mastodon")
+    if freeimage_ok is True: syndicated.append("🖼️ Freeimage")
+    if wallhaven_ok is True: syndicated.append("🌌 Wallhaven")
 
-    cross_lines = ""
-    if (arena_ok is not None or bluesky_ok is not None or raindrop_ok is not None
-            or mastodon_ok is not None or pixelfed_ok is not None
-            or freeimage_ok is not None or imghippo_ok is not None
-            or wallhaven_ok is not None):
-        cross_lines = (
-            f"\n{'─' * 26}\n"
-            f"🔮 Are.na    {_platform_icon(arena_ok)}  "
-            f"🦋 Bluesky  {_platform_icon(bluesky_ok)}  "
-            f"💧 Raindrop   {_platform_icon(raindrop_ok)}\n"
-            f"🐘 Mastodon {_platform_icon(mastodon_ok)}  "
-            f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}  "
-            f"🖼️ Freeimage {_platform_icon(freeimage_ok)}\n"
-            f"🦛 Imghippo  {_platform_icon(imghippo_ok)}  "
-            f"🌌 Wallhaven {_platform_icon(wallhaven_ok)}"
-        )
+    if syndicated:
+        cross_text = f"\n\n🌐 Syndicated to:\n" + " • ".join(syndicated)
+    else:
+        cross_text = ""
 
-    _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Make.com (unverified)"
-    _live_note = (
-        ""
-        if pin_live else
-        "\n⏳ Make.com accepted it — NOT yet seen on your Pinterest profile.\n"
-        "Bot is checking your profile and will alert you if it never appears."
-    )
     caption = (
-        f"{_hdr} ({bar} {posted_today}/{actual_max})\n"
-        f"{'─' * 26}\n"
-        f"📝 {title}\n"
-        f"🎌 {anime_name} • {time_ist} IST"
-        f"{_live_note}"
-        f"{cross_lines}"
+        f"{progress_text}\n"
+        f"{'━' * 28}\n"
+        f"🎬 Anime: {anime_name}\n"
+        f"📝 Title: {title}\n"
+        f"⏰ Time: {time_ist} IST\n"
+        f"{status_line}"
+        f"{cross_text}"
     )
 
     # Auto-resolve Cloudinary CDN URL from database if not explicitly passed
@@ -4507,12 +4466,12 @@ async def cmd_dedup_scan(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
             queue_len = conn.execute("SELECT COUNT(*) FROM pin_queue").fetchone()[0]
 
         report = (
-            "🛡️ *Visual Deduplication Scan Complete!*\n\n"
+            "🛡️ *4-Layer Deduplication Scan Complete!*\n\n"
             f"• *Duplicates Purged from Queue:* `{purged}`\n"
             f"• *Missing Fingerprints Backfilled:* `{backfilled}`\n"
             f"• *Current Clean Queue Size:* `{queue_len}`\n"
             f"• *Total Fingerprinted Archive:* `{fingerprinted_uploads}/{total_uploads}` pins\n\n"
-            "✨ *Status:* 3-Tier Perceptual Guard (dHash ≤ 4 bits + SHA-256) is active across Scraper, Queue, and Scheduler."
+            "✨ *Status:* 4-Layer Guard (Source URL + Filename + SHA-256 + Visual dHash ≤ 4) is active across Scraper, Queue, and Scheduler."
         )
         await status_msg.edit_text(report, parse_mode="Markdown")
     except Exception as e:
@@ -4749,6 +4708,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("refreshanalytics",   cmd_refreshanalytics),
             ("pullanalytics",      cmd_refreshanalytics),
             ("dedup_scan",         cmd_dedup_scan),
+            ("dedup",              cmd_dedup_scan),
             ("cleandupes",         cmd_dedup_scan),
             ("ab",                 cmd_ab),
             ("abtest",             cmd_ab),
@@ -4788,6 +4748,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("repairlinks",   "Audit & repair dead links (Auto: 1st of month)"),
                 BotCommand("healnow",       "Heal out-of-stock links now (Auto: 6 hrs)"),
                 BotCommand("linkstats",     "Autonomous link healing & redirect stats"),
+                BotCommand("dedup",         "4-Layer duplicate audit & purge"),
                 BotCommand("dedup_scan",    "Scan queue & purge visual duplicate pins"),
                 BotCommand("stats",         "Pins count and queue size"),
                 BotCommand("clicks",        "Affiliate clicks & estimated revenue"),

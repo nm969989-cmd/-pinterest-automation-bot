@@ -496,6 +496,31 @@ def init_db():
             )
         """)
 
+        # ── Self-Learning Evolved Keywords Table ─────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS evolved_keywords (
+                keyword       TEXT PRIMARY KEY,
+                wins          INTEGER DEFAULT 0,
+                losses        INTEGER DEFAULT 0,
+                total_clicks  INTEGER DEFAULT 0,
+                total_visits  INTEGER DEFAULT 0,
+                score         REAL DEFAULT 1.0,
+                last_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_evolved_keywords_score
+            ON evolved_keywords (score DESC, wins DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploads_filename
+            ON uploaded_files (filename)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_image_url
+            ON pin_queue (image_url)
+        """)
+
         conn.commit()
     logger.info(f"Database initialized at: {DB_PATH}")
 
@@ -1050,13 +1075,28 @@ def mark_file_uploaded(filename: str, title: str = "", anime_name: str = "",
         conn.commit()
 
 
+def normalize_image_url(url: str) -> str:
+    """Strips query parameters, anchors, and trailing slashes for duplicate comparison."""
+    if not url or not isinstance(url, str):
+        return ""
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/").lower()
+        return clean
+    except Exception:
+        return url.strip().split("?")[0].rstrip("/").lower()
+
+
 def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = None,
+                       image_url: str = None, filename: str = None,
                        max_distance: int = 4, exclude_queue_id: int = None) -> tuple[bool, str]:
     """
-    Checks if an image is already in uploaded_files or pin_queue.
-    Checks:
-    1. Exact cryptographic SHA-256 match.
-    2. Visual difference hash (dHash) with Hamming distance <= max_distance.
+    Checks if an image is already in uploaded_files or pin_queue across 4 layers:
+    1. Source Image URL (normalized without query params)
+    2. Base Filename (normalized, ignoring path)
+    3. Exact Cryptographic SHA-256 match
+    4. Perceptual Difference Hash (dHash) with Hamming distance <= max_distance
     
     Returns (is_duplicate: bool, reason: str).
     """
@@ -1069,16 +1109,64 @@ def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = No
         except Exception as e:
             logger.warning(f"[Dedup] Error extracting fingerprints from {filepath}: {e}")
 
-    if not sha256 and not phash:
-        return False, ""
+    target_filename = ""
+    if filename:
+        target_filename = os.path.basename(filename).strip().lower()
+    elif filepath:
+        target_filename = os.path.basename(filepath).strip().lower()
 
-    try:
-        from image_dedup import hamming_distance
-    except ImportError:
-        return False, ""
+    generic_names = {"image.jpg", "image.png", "image.jpeg", "download.jpg", "download.png", "processed.jpg", "temp.jpg"}
+    if target_filename in generic_names or len(target_filename) < 6:
+        target_filename = ""
+
+    norm_url = normalize_image_url(image_url) if image_url else ""
 
     with _get_conn() as conn:
-        # 1. Exact SHA-256 in uploaded_files
+        # ── Layer 1: Source Image URL check ───────────────────────────────────
+        if norm_url and len(norm_url) > 10:
+            u_rows = conn.execute(
+                "SELECT filename, title, image_url FROM uploaded_files WHERE image_url IS NOT NULL AND image_url != '' ORDER BY uploaded_at DESC LIMIT 2000"
+            ).fetchall()
+            for u_fn, u_title, u_url in u_rows:
+                if normalize_image_url(u_url) == norm_url:
+                    return True, f"Source URL match with uploaded pin '{u_title}' ({u_fn})"
+
+            if exclude_queue_id:
+                q_rows = conn.execute(
+                    "SELECT id, title, image_url FROM pin_queue WHERE image_url IS NOT NULL AND image_url != '' AND id != ?",
+                    (exclude_queue_id,)
+                ).fetchall()
+            else:
+                q_rows = conn.execute(
+                    "SELECT id, title, image_url FROM pin_queue WHERE image_url IS NOT NULL AND image_url != ''"
+                ).fetchall()
+            for q_id, q_title, q_url in q_rows:
+                if normalize_image_url(q_url) == norm_url:
+                    return True, f"Source URL match with queued pin #{q_id} '{q_title}'"
+
+        # ── Layer 2: Base Filename check ──────────────────────────────────────
+        if target_filename:
+            u_row = conn.execute(
+                "SELECT filename, title FROM uploaded_files WHERE lower(filename) = ? LIMIT 1",
+                (target_filename,)
+            ).fetchone()
+            if u_row:
+                return True, f"Filename match with uploaded pin '{u_row[1]}' ({u_row[0]})"
+
+            if exclude_queue_id:
+                q_items = conn.execute(
+                    "SELECT id, title, image_path FROM pin_queue WHERE image_path IS NOT NULL AND id != ?",
+                    (exclude_queue_id,)
+                ).fetchall()
+            else:
+                q_items = conn.execute(
+                    "SELECT id, title, image_path FROM pin_queue WHERE image_path IS NOT NULL"
+                ).fetchall()
+            for q_id, q_title, q_path in q_items:
+                if q_path and os.path.basename(q_path).strip().lower() == target_filename:
+                    return True, f"Filename match with queued pin #{q_id} '{q_title}'"
+
+        # ── Layer 3: Exact SHA-256 match ──────────────────────────────────────
         if sha256:
             row = conn.execute(
                 "SELECT filename, title FROM uploaded_files WHERE sha256 = ? LIMIT 1",
@@ -1087,7 +1175,6 @@ def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = No
             if row:
                 return True, f"Exact SHA-256 match with uploaded pin '{row[1]}' ({row[0]})"
 
-            # Exact SHA-256 in pin_queue
             if exclude_queue_id:
                 row = conn.execute(
                     "SELECT id, title FROM pin_queue WHERE sha256 = ? AND id != ? LIMIT 1",
@@ -1101,43 +1188,46 @@ def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = No
             if row:
                 return True, f"Exact SHA-256 match with queued pin #{row[0]} '{row[1]}'"
 
-        # 2. Perceptual dHash check against uploaded_files
+        # ── Layer 4: Perceptual dHash check ───────────────────────────────────
         if phash and len(phash) == 16:
-            uploads = conn.execute(
-                "SELECT filename, title, phash FROM uploaded_files "
-                "WHERE phash IS NOT NULL AND length(phash) = 16 "
-                "ORDER BY uploaded_at DESC LIMIT 2000"
-            ).fetchall()
-            for u_fn, u_title, u_phash in uploads:
-                dist = hamming_distance(phash, u_phash)
-                if dist <= max_distance:
-                    return True, f"Visual duplicate of uploaded pin '{u_title}' ({u_fn}, dHash dist {dist}/{max_distance})"
+            try:
+                from image_dedup import hamming_distance
+                uploads = conn.execute(
+                    "SELECT filename, title, phash FROM uploaded_files "
+                    "WHERE phash IS NOT NULL AND length(phash) = 16 "
+                    "ORDER BY uploaded_at DESC LIMIT 2000"
+                ).fetchall()
+                for u_fn, u_title, u_phash in uploads:
+                    dist = hamming_distance(phash, u_phash)
+                    if dist <= max_distance:
+                        return True, f"Visual duplicate of uploaded pin '{u_title}' ({u_fn}, dHash dist {dist}/{max_distance})"
 
-            # Perceptual dHash check against pin_queue
-            if exclude_queue_id:
-                queue_items = conn.execute(
-                    "SELECT id, title, phash FROM pin_queue "
-                    "WHERE phash IS NOT NULL AND length(phash) = 16 AND id != ?",
-                    (exclude_queue_id,)
-                ).fetchall()
-            else:
-                queue_items = conn.execute(
-                    "SELECT id, title, phash FROM pin_queue "
-                    "WHERE phash IS NOT NULL AND length(phash) = 16"
-                ).fetchall()
-            for q_id, q_title, q_phash in queue_items:
-                dist = hamming_distance(phash, q_phash)
-                if dist <= max_distance:
-                    return True, f"Visual duplicate of queued pin #{q_id} '{q_title}' (dHash dist {dist}/{max_distance})"
+                if exclude_queue_id:
+                    queue_items = conn.execute(
+                        "SELECT id, title, phash FROM pin_queue "
+                        "WHERE phash IS NOT NULL AND length(phash) = 16 AND id != ?",
+                        (exclude_queue_id,)
+                    ).fetchall()
+                else:
+                    queue_items = conn.execute(
+                        "SELECT id, title, phash FROM pin_queue "
+                        "WHERE phash IS NOT NULL AND length(phash) = 16"
+                    ).fetchall()
+                for q_id, q_title, q_phash in queue_items:
+                    dist = hamming_distance(phash, q_phash)
+                    if dist <= max_distance:
+                        return True, f"Visual duplicate of queued pin #{q_id} '{q_title}' (dHash dist {dist}/{max_distance})"
+            except ImportError:
+                pass
 
     return False, ""
 
 
 def clean_duplicate_queue_items(max_distance: int = 4) -> int:
     """
-    Scans the entire pin_queue.
+    Scans the entire pin_queue across all 4 layers (URL, Filename, SHA-256, dHash).
     Removes any queued item that:
-    1. Has already been uploaded (exact SHA or pHash <= max_distance).
+    1. Has already been uploaded.
     2. Is a duplicate of an earlier queued item.
     Returns number of purged queue items.
     """
@@ -1149,13 +1239,17 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
     purged_count = 0
     with _get_conn() as conn:
         items = conn.execute(
-            "SELECT id, image_path, title, sha256, phash FROM pin_queue ORDER BY priority DESC, id ASC"
+            "SELECT id, image_path, title, sha256, phash, image_url FROM pin_queue ORDER BY priority DESC, id ASC"
         ).fetchall()
 
+    seen_urls = set()
+    seen_filenames = set()
     seen_shas = set()
     seen_phashes = []
 
-    for item_id, img_path, title, sha256, phash in items:
+    generic_names = {"image.jpg", "image.png", "image.jpeg", "download.jpg", "download.png", "processed.jpg", "temp.jpg"}
+
+    for item_id, img_path, title, sha256, phash, img_url in items:
         # Populate missing fingerprints if file exists
         if (not sha256 or not phash) and img_path and os.path.isfile(img_path):
             calc_sha, calc_phash = get_image_fingerprints(img_path)
@@ -1169,9 +1263,16 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
                     )
                     conn.commit()
 
-        # Check against uploaded_files
+        base_fn = os.path.basename(img_path).strip().lower() if img_path else ""
+        if base_fn in generic_names or len(base_fn) < 6:
+            base_fn = ""
+
+        norm_url = normalize_image_url(img_url) if img_url else ""
+
+        # 1. Check against uploaded_files & other items via 4-layer is_image_duplicate
         is_dup, reason = is_image_duplicate(
             filepath=img_path, sha256=sha256, phash=phash,
+            image_url=img_url, filename=base_fn,
             max_distance=max_distance, exclude_queue_id=item_id
         )
         if is_dup:
@@ -1180,13 +1281,28 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
             purged_count += 1
             continue
 
-        # Check against earlier items in this same scan
+        # 2. Check intra-queue duplicate tracking (Layer 1: URL)
+        if norm_url and norm_url in seen_urls:
+            logger.info(f"[Dedup Scan] Dropping duplicate in queue #{item_id} '{title}' (duplicate URL in queue)")
+            remove_queued_pin(item_id)
+            purged_count += 1
+            continue
+
+        # 3. Check intra-queue duplicate tracking (Layer 2: Filename)
+        if base_fn and base_fn in seen_filenames:
+            logger.info(f"[Dedup Scan] Dropping duplicate in queue #{item_id} '{title}' (duplicate filename in queue)")
+            remove_queued_pin(item_id)
+            purged_count += 1
+            continue
+
+        # 4. Check intra-queue duplicate tracking (Layer 3: SHA-256)
         if sha256 and sha256 in seen_shas:
             logger.info(f"[Dedup Scan] Dropping duplicate in queue #{item_id} '{title}' (duplicate SHA in queue)")
             remove_queued_pin(item_id)
             purged_count += 1
             continue
 
+        # 5. Check intra-queue duplicate tracking (Layer 4: dHash)
         is_intra_queue_dup = False
         if phash and len(phash) == 16:
             for s_phash, s_label in seen_phashes:
@@ -1200,6 +1316,11 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
         if is_intra_queue_dup:
             continue
 
+        # Register seen
+        if norm_url:
+            seen_urls.add(norm_url)
+        if base_fn:
+            seen_filenames.add(base_fn)
         if sha256:
             seen_shas.add(sha256)
         if phash and len(phash) == 16:
@@ -1344,12 +1465,18 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
         except Exception:
             pass
 
-    # Pre-enqueue visual duplicate check
-    if sha256 or phash or (image_path and os.path.isfile(image_path)):
-        is_dup, reason = is_image_duplicate(filepath=image_path, sha256=sha256, phash=phash)
-        if is_dup:
-            logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
-            return False
+    # Pre-enqueue 4-layer duplicate check
+    fn = os.path.basename(image_path) if image_path else ""
+    is_dup, reason = is_image_duplicate(
+        filepath=image_path,
+        sha256=sha256,
+        phash=phash,
+        image_url=image_url,
+        filename=fn,
+    )
+    if is_dup:
+        logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
+        return False
 
     if not is_organic:
         try:
@@ -2537,6 +2664,75 @@ def declare_ab_winner(test_id: str, winner_variant: str):
             conn.commit()
     except Exception as e:
         logger.error(f"[Database] declare_ab_winner failed: {e}")
+
+
+# ── Self-Learning Winning Keyword Evolver ────────────────────────────────────
+
+def record_keyword_evolution(keyword: str, won: bool, clicks: int = 0, visits: int = 0):
+    """
+    Records or updates a search keyword/modifier's performance in evolved_keywords.
+    Calculates Bayesian-adjusted win score: (wins + 1) / (wins + losses + 2).
+    """
+    if not keyword or not keyword.strip():
+        return
+    kw = keyword.strip()
+    try:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT wins, losses, total_clicks, total_visits FROM evolved_keywords WHERE keyword = ?",
+                (kw,)
+            ).fetchone()
+            if row:
+                wins = row[0] + (1 if won else 0)
+                losses = row[1] + (0 if won else 1)
+                t_clicks = row[2] + clicks
+                t_visits = row[3] + visits
+            else:
+                wins = 1 if won else 0
+                losses = 0 if won else 1
+                t_clicks = clicks
+                t_visits = visits
+
+            # Bayesian smoothed win score
+            score = round((wins + 1.0) / (wins + losses + 2.0), 4)
+            if t_visits > 0:
+                ctr_bonus = round(min(0.5, (t_clicks / t_visits)), 4)
+                score = round(score + ctr_bonus, 4)
+
+            conn.execute("""
+                INSERT INTO evolved_keywords (keyword, wins, losses, total_clicks, total_visits, score, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(keyword) DO UPDATE SET
+                    wins = excluded.wins,
+                    losses = excluded.losses,
+                    total_clicks = excluded.total_clicks,
+                    total_visits = excluded.total_visits,
+                    score = excluded.score,
+                    last_updated = CURRENT_TIMESTAMP
+            """, (kw, wins, losses, t_clicks, t_visits, score))
+            conn.commit()
+            logger.info(f"[Evolver] Recorded keyword '{kw}': won={won}, wins={wins}, losses={losses}, score={score}")
+    except Exception as e:
+        logger.error(f"[Evolver] Failed to record keyword evolution: {e}")
+
+
+def get_top_evolved_keywords(limit: int = 5) -> list[str]:
+    """
+    Returns top-performing search keywords/modifiers sorted by win score and wins.
+    Only returns keywords that have at least 1 win and score >= 0.5.
+    """
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute("""
+                SELECT keyword FROM evolved_keywords
+                WHERE wins > 0 AND score >= 0.5
+                ORDER BY score DESC, wins DESC, total_clicks DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            return [r[0] for r in rows if r[0]]
+    except Exception as e:
+        logger.error(f"[Evolver] Failed to fetch top evolved keywords: {e}")
+        return []
 
 
 # ── Revenue Tracking Helpers ─────────────────────────────────────────────────

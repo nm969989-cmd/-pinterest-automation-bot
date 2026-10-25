@@ -150,8 +150,12 @@ def build_weekly_report() -> str:
     return "\n".join(lines)
 
 
+_last_sent_week_key = ""
+
+
 def send_weekly_report(force: bool = False) -> bool:
     """Send the weekly report. Deduplication via bot_metadata."""
+    global _last_sent_week_key
     if not getattr(config, "WEEKLY_REPORT_ENABLED", True):
         return False
 
@@ -160,9 +164,11 @@ def send_weekly_report(force: bool = False) -> bool:
 
     from database import get_metadata, set_metadata
 
-    if not force and get_metadata(week_key, "") == "sent":
-        logger.info(f"[WeeklyReport] Already sent for {week_key}")
-        return False
+    if not force:
+        if _last_sent_week_key == week_key or get_metadata(week_key, "") == "sent":
+            _last_sent_week_key = week_key
+            logger.debug(f"[WeeklyReport] Already sent for {week_key}")
+            return False
 
     try:
         report = build_weekly_report()
@@ -170,6 +176,7 @@ def send_weekly_report(force: bool = False) -> bool:
 
         notify_admin(report, parse_mode="Markdown")
         set_metadata(week_key, "sent")
+        _last_sent_week_key = week_key
         logger.info(f"[WeeklyReport] Weekly report successfully sent for {week_key}")
         return True
     except Exception as e:
@@ -179,12 +186,17 @@ def send_weekly_report(force: bool = False) -> bool:
 
 def check_and_send_weekly_report() -> bool:
     """Called from scheduler loop every 30s. Triggers on Sunday at WEEKLY_REPORT_TIME IST."""
+    global _last_sent_week_key
     if not getattr(config, "WEEKLY_REPORT_ENABLED", True):
         return False
 
     now = _ist_now()
     target_day = int(getattr(config, "WEEKLY_REPORT_DAY", 6))  # 6=Sunday
     target_time = getattr(config, "WEEKLY_REPORT_TIME", "09:00").strip()
+
+    week_key = f"weekly_report_{now.strftime('%Y-W%W')}"
+    if _last_sent_week_key == week_key:
+        return False
 
     if now.weekday() == target_day and now.strftime("%H:%M") >= target_time:
         return send_weekly_report(force=False)

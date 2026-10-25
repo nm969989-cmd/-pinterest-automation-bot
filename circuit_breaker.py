@@ -154,6 +154,18 @@ def record_success(platform: str) -> bool:
         return False
 
 
+def _is_platform_enabled(platform: str) -> bool:
+    """Helper to check if a platform is enabled in config."""
+    try:
+        import config
+        plat_upper = platform.upper()
+        # Direct config mappings
+        cfg_key = f"{plat_upper}_ENABLED"
+        return bool(getattr(config, cfg_key, True))
+    except Exception:
+        return True
+
+
 def trip_token_expired(platform: str, renew_instructions: str = "") -> bool:
     """
     Trips the circuit breaker specifically for a token expiry (HTTP 401).
@@ -161,6 +173,10 @@ def trip_token_expired(platform: str, renew_instructions: str = "") -> bool:
     token renewal instructions so the user can fix it without digging in logs.
     Distinct from a rate-limit trip — this requires human action to resolve.
     """
+    if not _is_platform_enabled(platform):
+        logger.info(f"[CircuitBreaker] Suppressed token expired alert for disabled platform: {platform}")
+        return False
+
     reason = f"Token expired (HTTP 401) — manual renewal required"
     trip_breaker(platform, reason, cooldown_hours=1.0)
     try:
@@ -182,15 +198,18 @@ def trip_token_expired(platform: str, renew_instructions: str = "") -> bool:
 
 def get_all_cooldowns() -> dict:
     """
-    Returns a dictionary of all currently active platform cooldowns.
+    Returns a dictionary of all currently active platform cooldowns for ENABLED platforms.
     e.g. {'bluesky': {'reason': 'HTTP 429', 'remaining_hours': 4.2}}
     """
     active = {}
     known_platforms = [
         "pinterest", "arena", "bluesky", "mastodon",
-        "pixelfed", "raindrop", "freeimage", "imghippo"
+        "pixelfed", "raindrop", "freeimage", "imghippo", "wallhaven"
     ]
     for p in known_platforms:
+        # Ignore disabled platforms so stale breakers don't pollute health reports
+        if not _is_platform_enabled(p):
+            continue
         cooling, reason, rem = is_cooling_down(p)
         if cooling:
             active[p] = {

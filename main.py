@@ -166,12 +166,19 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
                 character_name=character_name,
                 link_url=pin_link,
             )
+            color_tags = []
+            try:
+                from image_processor import extract_image_color_tags
+                color_tags = extract_image_color_tags(processed_image_path)
+            except Exception:
+                pass
             optimized_tags = generate_multi_intent_tags(
                 anime_name=anime_name,
                 character_name=character_name,
                 genre=genre,
                 target_count=13,
                 include_disclosure=(not is_organic),
+                color_tags=color_tags,
             )
             description = description.rstrip() + "\n\n" + optimized_tags
             logger.info(f"[Main] Multi-Intent SEO description & tags built for '{anime_name}' (Organic={is_organic})")
