@@ -108,7 +108,10 @@ WALLHAVEN_USERNAME     = os.getenv('WALLHAVEN_USERNAME', 'animizing').strip()
 WALLHAVEN_ENABLED      = os.getenv('WALLHAVEN_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(WALLHAVEN_API_KEY or WALLHAVEN_USERNAME)
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
-MAX_POSTS_PER_DAY  = int(os.getenv('MAX_POSTS_PER_DAY',  3))
+_raw_max = int(os.getenv('MAX_POSTS_PER_DAY', 5))
+# Legacy Render blueprint fix: 15 was an early template placeholder before the 5-slot scheduler was built.
+# Sanitize 15 -> 5 to match the 5 IST slots (9 AM, 1 PM, 4 PM, 6 PM, 8 PM).
+MAX_POSTS_PER_DAY  = 5 if _raw_max == 15 else max(1, _raw_max)
 
 # Daily Performance Digest Config
 DAILY_DIGEST_ENABLED = os.getenv('DAILY_DIGEST_ENABLED', 'true').lower() in ('true', '1', 'yes')

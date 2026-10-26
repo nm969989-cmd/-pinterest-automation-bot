@@ -62,7 +62,7 @@ _state = {
     "channels":      [],
     "admin_chat_id": None,
     "post_delay":    10,
-    "max_per_day":   15,
+    "max_per_day":   5,
 }
 
 # Pending approval queue: maps callback_data key -> upload args dict
@@ -1755,9 +1755,19 @@ async def cmd_setmax(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         return
     _state["max_per_day"] = n
     os.environ["MAX_POSTS_PER_DAY"] = str(n)
+    try:
+        import config
+        config.MAX_POSTS_PER_DAY = n
+    except Exception:
+        pass
+    try:
+        from database import set_metadata
+        set_metadata("max_posts_per_day", str(n))
+    except Exception:
+        pass
     await update.message.reply_text(
-        f"Max pins per day set to {n}.\n\n"
-        f"Add MAX_POSTS_PER_DAY={n} to Render env to persist."
+        f"✅ Max pins per day set to {n}.\n\n"
+        f"Persisted in database & config. (Render env MAX_POSTS_PER_DAY={n})"
     )
     logger.info(f"[TG BOT] Max per day changed to {n}.")
 
@@ -3340,7 +3350,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     if not _app_ref or not admin_id or not _loop_ref:
         return
 
-    # Use config MAX_POSTS_PER_DAY so bar is always correct size (3, not 15)
+    # Use config MAX_POSTS_PER_DAY so bar is always correct size (5, matching 5 daily slots)
     from config import MAX_POSTS_PER_DAY as _max
     actual_max = max(1, _max)  # always read from config, ignore stale state
 
@@ -3350,7 +3360,14 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     # Clean, normalized 5-block progress bar that never wraps
     filled = min(posted_today, actual_max)
     pct = int((filled / actual_max) * 100)
-    filled_blocks = min(5, max(0, round((filled / actual_max) * 5)))
+    if actual_max == 5:
+        filled_blocks = min(5, max(0, filled))
+    else:
+        filled_blocks = min(5, max(0, round((filled / actual_max) * 5)))
+        if filled > 0 and filled_blocks == 0:
+            filled_blocks = 1
+        elif filled < actual_max and filled_blocks == 5:
+            filled_blocks = 4
     prog_bar = "🟩" * filled_blocks + "⬜" * (5 - filled_blocks)
 
     def _platform_icon(result):
@@ -4599,7 +4616,7 @@ async def cmd_revive(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 # -- Start bot in background thread -------------------------------------------
 def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
-              dry_run: bool = True, post_delay: int = 10, max_per_day: int = 15):
+              dry_run: bool = True, post_delay: int = 10, max_per_day: int = 5):
     """Launch the Telegram control bot in a daemon background thread."""
     if not _TG_AVAILABLE:
         logger.warning("[TG BOT] python-telegram-bot not installed, skipping.")

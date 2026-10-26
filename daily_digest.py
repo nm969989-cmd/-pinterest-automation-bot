@@ -45,7 +45,7 @@ def build_daily_digest_message(date_str: str = None) -> str:
         from database import count_posts_today, get_queue_counts, count_dead_letter_pins
 
         posts_today = count_posts_today(today_str)
-        max_posts = getattr(config, "MAX_POSTS_PER_DAY", 15)
+        max_posts = getattr(config, "MAX_POSTS_PER_DAY", 5)
         queue_counts = get_queue_counts()
         q_total = queue_counts.get("total", 0)
         q_new = queue_counts.get("new", 0)
@@ -55,7 +55,7 @@ def build_daily_digest_message(date_str: str = None) -> str:
         buffer_days = round(q_total / max(1, max_posts), 1) if q_total > 0 else 0.0
     except Exception as e:
         logger.warning(f"[DailyDigest] Failed gathering queue stats: {e}")
-        posts_today, max_posts, q_total, q_new, dead_letter, buffer_days = 0, 15, 0, 0, 0, 0.0
+        posts_today, max_posts, q_total, q_new, dead_letter, buffer_days = 0, 5, 0, 0, 0, 0.0
 
     # 2. Funnel & Analytics
     try:

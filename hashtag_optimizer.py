@@ -238,12 +238,17 @@ def optimize_hashtags(
             seen.add(lower_t)
             unique_tags.append(tag)
 
-    # Shuffle to eliminate robotic sequential fingerprints
-    random.shuffle(unique_tags)
+    # Dynamic count limit (between 10 and 14 tags per Pinterest SEO best practice)
+    max_tags = target_count or random.randint(10, 14)
 
-    # Dynamic count limit (between 8 and 12 tags unless specified)
-    max_tags = target_count or random.randint(8, 12)
-    final_tags = unique_tags[:max_tags]
+    # Ensure compliance disclosure tag is never sliced off by max_tags limit
+    if include_disclosure:
+        disc_tag = random.choice(_DISCLOSURE_TAGS)
+        unique_tags = [t for t in unique_tags if t.lower() not in [d.lower() for d in _DISCLOSURE_TAGS]]
+        final_tags = unique_tags[:max(1, max_tags - 1)]
+        final_tags.insert(random.randint(0, len(final_tags)), disc_tag)
+    else:
+        final_tags = unique_tags[:max_tags]
 
     result = " ".join(final_tags)
     logger.info(f"[Hashtag] Dynamically generated {len(final_tags)} tags for '{anime_name}' ({genre}): {result}")

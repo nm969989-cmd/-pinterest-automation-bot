@@ -16,9 +16,15 @@ import threading
 import datetime
 from collections import deque
 from logger import get_logger
-from config import MAX_POSTS_PER_DAY
+import config
 
 logger = get_logger(__name__)
+
+def _get_max_posts() -> int:
+    """Dynamically get daily max posts, honoring in-memory config updates from /setmax."""
+    return max(1, getattr(config, "MAX_POSTS_PER_DAY", 5))
+
+MAX_POSTS_PER_DAY = _get_max_posts()
 
 # Base IST posting times: 9:00 AM, 1:00 PM, 4:00 PM, 6:00 PM, 8:00 PM
 # IST = UTC+5:30, so in UTC: 3:30, 7:30, 10:30, 12:30, 14:30
@@ -166,7 +172,7 @@ def _assign_scheduled_date(queue_position: int) -> str:
     Given a position in the queue (0-indexed), calculate which date to post.
     3 slots/day: position 0-2 → today, 3-5 → tomorrow, etc.
     """
-    days_ahead = queue_position // MAX_POSTS_PER_DAY
+    days_ahead = queue_position // _get_max_posts()
     target_date = _ist_now().date() + datetime.timedelta(days=days_ahead)
     return target_date.strftime("%Y-%m-%d")
 
@@ -324,7 +330,7 @@ class PinScheduler:
             new_in_queue = counts["new"]
             today_posted = count_posts_today(_today_ist())
             # How many slots are left today?
-            slots_left_today = MAX_POSTS_PER_DAY - today_posted - new_in_queue
+            slots_left_today = _get_max_posts() - today_posted - new_in_queue
 
             if slots_left_today > 0:
                 sched_date = _today_ist()
@@ -455,7 +461,7 @@ class PinScheduler:
                 image_path=image_path,
                 pin_type=pin_type,
                 posted_today=posted_today,
-                max_today=MAX_POSTS_PER_DAY,
+                max_today=_get_max_posts(),
                 time_ist=time_ist,
                 arena_ok=arena_ok,
                 arena_url=arena_url,
@@ -496,7 +502,7 @@ class PinScheduler:
             total = h_utc * 60 + m_utc + 5 * 60 + 30  # UTC -> IST
             ist_times.append(f"{(total // 60) % 24:02d}:{total % 60:02d}")
         logger.info(
-            f"[Scheduler] Started. Max {MAX_POSTS_PER_DAY} pins/day. "
+            f"[Scheduler] Started. Max {_get_max_posts()} pins/day. "
             f"Today's jittered IST slots: {', '.join(ist_times)} "
             f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
@@ -549,7 +555,7 @@ class PinScheduler:
                 slots_passed_today += 1
 
         # How many posts SHOULD have been made by now?
-        expected_posts_by_now = min(slots_passed_today, MAX_POSTS_PER_DAY)
+        expected_posts_by_now = min(slots_passed_today, _get_max_posts())
         missed_posts = max(0, expected_posts_by_now - today_posted_startup)
 
         if missed_posts > 0:
@@ -626,7 +632,7 @@ class PinScheduler:
                         today_utc_date_hb.day, h, m
                     )).total_seconds() > 360
                 )
-                expected_hb = min(slots_passed_hb, MAX_POSTS_PER_DAY)
+                expected_hb = min(slots_passed_hb, _get_max_posts())
                 missed_hb = max(0, expected_hb - today_posted_hb)
                 recovery_alert_key = f"{today_utc_str_hb}_{expected_hb}"
                 if missed_hb > 0 and _pending_catchup_count == 0:
@@ -765,10 +771,10 @@ class PinScheduler:
                 slot_ist_m = slot_ist_total % 60
                 logger.info(
                     f"[Scheduler] Slot fired: {slot_ist_h:02d}:{slot_ist_m:02d} IST (jittered) | "
-                    f"Posted today: {today_posted}/{MAX_POSTS_PER_DAY}"
+                    f"Posted today: {today_posted}/{_get_max_posts()}"
                 )
 
-                if today_posted >= MAX_POSTS_PER_DAY:
+                if today_posted >= _get_max_posts():
                     logger.info("[Scheduler] Daily limit reached. Skipping slot.")
                 else:
                     # Try DB queue first (priority: new > backlog)
@@ -944,7 +950,7 @@ class PinScheduler:
                                     counts_after = count_posts_today(today_ist)
                                     logger.info(
                                         f"[Scheduler] Pin posted ({pin_type}). Today: "
-                                        f"{counts_after}/{MAX_POSTS_PER_DAY}"
+                                        f"{counts_after}/{_get_max_posts()}"
                                     )
 
                                     # ── Run cross-posts FIRST so results can be included in notification ──
