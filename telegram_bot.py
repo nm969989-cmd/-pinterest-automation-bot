@@ -3158,20 +3158,53 @@ def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str 
         logger.warning(f"[TG BOT] Could not notify admin with keyboard: {e}")
 
 
-def notify_link_clicked(anime_name: str, title: str, today_count: int):
+_last_click_alerts: dict[str, float] = {}
+
+def notify_link_clicked(anime_name: str, title: str, today_count: int, source: str = "Pinterest"):
     """
-    Sends a real-time notification to Telegram whenever a Pinterest user clicks your link.
-    Silenced by default as requested by user to avoid message spam.
+    Sends a notification to Telegram when a visitor clicks an affiliate link.
+    Features:
+      1. Dynamic source attribution (Pinterest, Bluesky, Telegram, Direct).
+      2. Milestone alerts (1st, 5th, 10th, 20th, 25th, 50th...).
+      3. 5-minute per-pin cooldown to prevent notification bursts from spamming admin.
     """
     import config
+    import time
     if not config.CLICK_NOTIFICATION:
         return
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
         return
 
+    # Anti-spam throttling & milestone gating:
+    # Always notify on milestone counts (1, 5, 10, 20, 25, 50, 75, 100...)
+    # Otherwise, require at least 300 seconds (5 min) cooldown since last alert for this pin
+    pin_key = f"{anime_name}:{title[:30]}"
+    now = time.time()
+    last_time = _last_click_alerts.get(pin_key, 0)
+    is_milestone = today_count in (1, 5, 10, 20, 25, 50, 75, 100) or (today_count > 0 and today_count % 50 == 0)
+
+    if not is_milestone and (now - last_time < 300):
+        # Throttle rapid clicks to avoid buzzing the user's phone
+        logger.debug(f"[TG BOT] Suppressed duplicate click alert for '{pin_key}' (cooldown: {int(now - last_time)}s)")
+        return
+
+    _last_click_alerts[pin_key] = now
+
+    # Clean old entries from _last_click_alerts if size grows > 1000
+    if len(_last_click_alerts) > 1000:
+        _last_click_alerts.clear()
+
+    # Dynamic headline based on source and milestone
+    if is_milestone and today_count > 1:
+        headline = f"🎉 Milestone: {today_count} Clicks Today!"
+    elif source and source != "Direct":
+        headline = f"🔔 Affiliate Link Clicked via {source}!"
+    else:
+        headline = f"🔔 Affiliate Link Clicked!"
+
     text = (
-        f"🔔 Affiliate Link Clicked on Pinterest!\n"
+        f"{headline}\n"
         f"{'─' * 28}\n"
         f"🎌 Anime : {anime_name or 'Anime'}\n"
         f"📝 Pin   : {title[:60]}\n"

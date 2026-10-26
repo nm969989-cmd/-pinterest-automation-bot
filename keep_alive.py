@@ -86,18 +86,46 @@ def redirect_link(code):
         except Exception:
             pass
 
-        # Record click with merchant
-        record_link_click(code, user_agent, referrer, merchant=merchant)
-        today_total = count_clicks_today()
+        # Bot and crawler filtering: prevent social preview bots (Pinterest, Bluesky, Mastodon, Telegram)
+        # from polluting real analytics and triggering spam click alerts
+        from pinterest_analytics import is_bot_user_agent
+        is_bot = is_bot_user_agent(user_agent)
 
-        # Notify admin via Telegram if enabled
-        from config import CLICK_NOTIFICATION
-        if CLICK_NOTIFICATION:
-            try:
-                from telegram_bot import notify_link_clicked
-                notify_link_clicked(anime_name=f"{anime_name} ({merchant.capitalize()})", title=title, today_count=today_total)
-            except Exception:
-                pass
+        if not is_bot:
+            # Record click with merchant for real human visitors
+            record_link_click(code, user_agent, referrer, merchant=merchant)
+            today_total = count_clicks_today()
+
+            # Determine traffic source from referrer
+            ref_lower = (referrer or "").lower()
+            if "pinterest" in ref_lower:
+                source = "Pinterest"
+            elif "t.me" in ref_lower or "telegram" in ref_lower:
+                source = "Telegram"
+            elif "bsky" in ref_lower or "bluesky" in ref_lower:
+                source = "Bluesky"
+            elif "mastodon" in ref_lower:
+                source = "Mastodon"
+            elif ref_lower:
+                source = ref_lower.split("/")[2] if "://" in ref_lower else ref_lower[:25]
+            else:
+                source = "Direct"
+
+            # Notify admin via Telegram if enabled
+            from config import CLICK_NOTIFICATION
+            if CLICK_NOTIFICATION:
+                try:
+                    from telegram_bot import notify_link_clicked
+                    notify_link_clicked(
+                        anime_name=f"{anime_name} ({merchant.capitalize()})",
+                        title=title,
+                        today_count=today_total,
+                        source=source
+                    )
+                except Exception:
+                    pass
+        else:
+            logger.debug(f"[Tracker] Filtered bot/crawler redirect for '{code}' (UA: {user_agent[:60]})")
 
         if merchant == "displate":
             from amazon_search import build_displate_url

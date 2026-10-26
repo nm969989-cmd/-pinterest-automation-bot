@@ -7,6 +7,7 @@ Priority:
   3. Regex              - offline fallback
 """
 
+import os
 import re
 import json
 import random
@@ -27,13 +28,12 @@ except ImportError:
 _OPENROUTER_URL  = "https://openrouter.ai/api/v1/chat/completions"
 _GEMINI_MODEL    = "gemini-1.5-flash"
 
-# Vision model fallback chain (tried in order, skip on rate-limit/error)
-# Uses openrouter/free auto-router and active free multimodal vision tiers
+# Vision model fallback chain (active multimodal free tiers on OpenRouter)
 _VISION_MODELS = [
-    "openrouter/free",
-    "meta-llama/llama-3.2-11b-vision-instruct:free",
-    "google/gemma-3-27b-it:free",
+    "nvidia/nemotron-3.5-super-vl:free",
     "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "openrouter/free",
 ]
 
 _last_character_name = ""
@@ -116,12 +116,17 @@ def _parse_ai_response(raw, channel_name, caption=""):
     if not raw or not isinstance(raw, str):
         return None
     try:
-        clean = re.sub(r'^```[a-z]*\n?', '', raw.strip())
-        clean = re.sub(r'\n?```$', '', clean)
-        # Extract the JSON object substring {...}
+        # Strip reasoning tags (e.g. <think>...</think>) from reasoning models
+        clean = re.sub(r'<think>[\s\S]*?</think>', '', raw, flags=re.IGNORECASE).strip()
+        # Strip markdown code fences
+        clean = re.sub(r'^```(?:json)?\s*', '', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'\s*```$', '', clean)
+        # Extract the outermost JSON object substring {...}
         json_match = re.search(r'\{[\s\S]*\}', clean)
-        if json_match:
-            clean = json_match.group(0)
+        if not json_match:
+            logger.debug(f"[AI] No JSON block found in AI response: '{raw[:100]}...'")
+            return None
+        clean = json_match.group(0)
 
         data = json.loads(clean)
         if not isinstance(data, dict):
@@ -232,7 +237,11 @@ def _openrouter_vision(image_path, caption, channel_name, api_key):
                     raw = ""
                     if choices and choices[0].get('message'):
                         msg = choices[0]['message']
-                        raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
+                        c = msg.get('content')
+                        if isinstance(c, list):
+                            raw = "".join(item.get('text', '') for item in c if isinstance(item, dict))
+                        else:
+                            raw = c or msg.get('text') or msg.get('reasoning') or ""
                     result = _parse_ai_response(raw, channel_name, caption=caption)
                     if result:
                         logger.info(f"[VISION] Success with {model}!")
@@ -271,8 +280,9 @@ def _openrouter_text(caption, channel_name, api_key):
             "X-Title": "Animanoizing Bot"
         }
         text_models = [
+            "nvidia/nemotron-3.5-lightning:free",
+            "liquid/lfm-2.5-2.6b:free",
             "openrouter/free",
-            "meta-llama/llama-3.3-70b-instruct:free",
         ]
         for model in text_models:
             try:
@@ -289,7 +299,11 @@ def _openrouter_text(caption, channel_name, api_key):
                     raw = ""
                     if choices and choices[0].get('message'):
                         msg = choices[0]['message']
-                        raw = msg.get('content') or msg.get('text') or msg.get('reasoning') or ""
+                        c = msg.get('content')
+                        if isinstance(c, list):
+                            raw = "".join(item.get('text', '') for item in c if isinstance(item, dict))
+                        else:
+                            raw = c or msg.get('text') or msg.get('reasoning') or ""
                     result = _parse_ai_response(raw, channel_name, caption=caption)
                     if result:
                         logger.info(f"[AI:Text] Success with OpenRouter text model {model}")
@@ -303,6 +317,28 @@ def _openrouter_text(caption, channel_name, api_key):
 
 _gemini_client = None
 
+def _gemini_vision(image_path, caption, channel_name, api_key):
+    """Vision-based Gemini content generator (analyzes actual anime artwork)."""
+    global _gemini_client
+    if not _GENAI_AVAILABLE or not image_path or not os.path.exists(image_path):
+        return None
+    try:
+        if _gemini_client is None:
+            _gemini_client = _genai.Client(api_key=api_key)
+        from PIL import Image
+        img = Image.open(image_path)
+        prompt = _VISION_PROMPT.format(caption=caption or "(no caption)", channel_name=channel_name)
+        response = _gemini_client.models.generate_content(model=_GEMINI_MODEL, contents=[img, prompt])
+        raw = response.text if hasattr(response, 'text') else str(response)
+        result = _parse_ai_response(raw, channel_name, caption=caption)
+        if result:
+            logger.info("[GEMINI:Vision] Caption generated from image analysis.")
+        return result
+    except Exception as e:
+        logger.warning(f"[GEMINI:Vision] Failed: {e}")
+        return None
+
+
 def _gemini_text(caption, channel_name, api_key):
     """Text-only Gemini fallback (no image)."""
     global _gemini_client
@@ -315,7 +351,7 @@ def _gemini_text(caption, channel_name, api_key):
         response = _gemini_client.models.generate_content(model=_GEMINI_MODEL, contents=prompt)
         result   = _parse_ai_response(response.text, channel_name, caption=caption)
         if result:
-            logger.info("[GEMINI] Caption generated from text analysis.")
+            logger.info("[GEMINI:Text] Caption generated from text analysis.")
         return result
     except Exception as e:
         logger.warning(f"[GEMINI] Failed: {e}")
@@ -333,13 +369,19 @@ def generate_pin_content(
     Generates (anime_name, title, description_template) for a Pinterest pin.
 
     Priority:
-      1. OpenRouter vision -- SEES the actual image (best quality, FREE)
-      2. Gemini text       -- text-only (good quality)
-      3. OpenRouter text   -- text-only NLP fallback (FREE)
-      4. Regex fallback    -- always works
+      1. Gemini vision     -- If GEMINI_API_KEY is configured (fast, accurate, high free limits)
+      2. OpenRouter vision -- SEES the actual image (multimodal free tier)
+      3. Gemini text       -- text-only fallback
+      4. OpenRouter text   -- text-only NLP fallback
+      5. Regex fallback    -- always works offline
 
     description_template contains '##LINK_PLACEHOLDER##' for affiliate link injection.
     """
+    if api_key and image_path and _GENAI_AVAILABLE:
+        result = _gemini_vision(image_path, caption, channel_name, api_key)
+        if result:
+            return result
+
     if openrouter_key and image_path:
         result = _openrouter_vision(image_path, caption, channel_name, openrouter_key)
         if result:

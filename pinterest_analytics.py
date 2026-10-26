@@ -80,7 +80,9 @@ BOT_USER_AGENT_KEYWORDS = (
     "telegrambot", "twitterbot", "whatsapp", "slackbot", "bluesky",
     "applebot", "bingbot", "yandex", "duckduckbot", "python-requests",
     "aiohttp", "httpx", "curl", "wget", "headless", "petalbot",
-    "semrush", "ahrefs", "bytespider", "googlebot"
+    "semrush", "ahrefs", "bytespider", "googlebot", "pinterest",
+    "mastodon", "http.rb", "urllib", "discordbot", "meta-externalagent",
+    "preview", "fetcher", "scraper", "scanner", "uptimerobot", "render"
 )
 
 
