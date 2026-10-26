@@ -10,6 +10,7 @@ Smart Pin Scheduler
 """
 
 import os
+import re
 import time
 import random
 import threading
@@ -911,6 +912,38 @@ class PinScheduler:
                                     image_path = verify_and_clean(image_path)
                                 except Exception as _wm_err:
                                     logger.warning(f"[Scheduler] Pre-upload watermark check error (non-fatal): {_wm_err}")
+
+                                # ── Anti-Shadowban 80/20 Guard & Link Tracker Injection ──
+                                from database import should_next_pin_be_organic
+                                is_org = pin.get("is_organic", 0)
+
+                                if getattr(config, "ORGANIC_TRUST_ENABLED", True) and should_next_pin_be_organic(getattr(config, "ORGANIC_TRUST_RATIO", 0.20)):
+                                    logger.info(
+                                        f"[Scheduler] 🌿 Anti-Shadowban Guard: 4+ consecutive monetized pins reached! "
+                                        f"Converting '{pin['title']}' to ORGANIC TRUST PIN."
+                                    )
+                                    is_org = 1
+                                    pin["is_organic"] = 1
+                                    pin["link"] = (
+                                        getattr(config, "ORGANIC_PIN_LINK", "")
+                                        or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+                                    )
+                                    pin["description"] = re.sub(
+                                        r'#ad\b|#affiliate\b|#sponsored\b', '', pin.get("description", "")
+                                    ).strip()
+                                elif not is_org and getattr(config, "APP_BASE_URL", ""):
+                                    # Wrap direct Amazon links with tracker if not already wrapped
+                                    if "amazon." in pin.get("link", "") and "/r/" not in pin.get("link", ""):
+                                        try:
+                                            from amazon_search import wrap_with_tracker
+                                            pin["link"] = wrap_with_tracker(
+                                                pin["link"],
+                                                anime_name=pin.get("anime_name", ""),
+                                                title=pin.get("title", ""),
+                                                image_url=pin.get("image_url", ""),
+                                            )
+                                        except Exception as _wrap_err:
+                                            logger.debug(f"[Scheduler] Tracker wrapping error (non-fatal): {_wrap_err}")
 
                                 # Build alt_text for Pinterest SEO
                                 alt_text = (

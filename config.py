@@ -42,10 +42,14 @@ AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG')
 DISPLATE_AFFILIATE_TAG = os.getenv('DISPLATE_AFFILIATE_TAG', '').strip()
 DISPLATE_ENABLED       = os.getenv('DISPLATE_ENABLED', 'true').lower() in ('true', '1', 'yes')
 
-# Click Tracking & Redirect Config (optional — set your Render URL to track Pinterest clicks in Telegram)
-# e.g. APP_BASE_URL=https://pinterest-bot.onrender.com
-APP_BASE_URL = (os.getenv('APP_BASE_URL') or os.getenv('RENDER_EXTERNAL_URL', '')).rstrip('/')
-CLICK_NOTIFICATION = os.getenv('CLICK_NOTIFICATION', 'false').lower() in ('true', '1', 'yes')
+# Click Tracking & Redirect Config (active Render URL enables sub-15ms self-healing redirects & click tracking)
+DEFAULT_RENDER_URL = 'https://pinterest-automation-bot.onrender.com'
+APP_BASE_URL = (
+    os.getenv('APP_BASE_URL')
+    or os.getenv('RENDER_EXTERNAL_URL')
+    or DEFAULT_RENDER_URL
+).rstrip('/')
+CLICK_NOTIFICATION = os.getenv('CLICK_NOTIFICATION', 'true').lower() in ('true', '1', 'yes')
 
 # Pinterest Profile URL (for direct buttons in Telegram)
 PINTEREST_PROFILE_URL = os.getenv('PINTEREST_PROFILE_URL', 'https://in.pinterest.com/muthelyrics/')

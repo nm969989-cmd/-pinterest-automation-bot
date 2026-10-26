@@ -469,6 +469,27 @@ async def cmd_organic(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     await msg.reply_text(text)
 
 
+async def cmd_rebalance(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Rebalance pin queue to enforce 80/20 organic trust ratio and wrap links with tracker."""
+    if not _is_admin(update): return
+    msg = update.effective_message
+    try:
+        from database import rebalance_queue_organic, get_organic_trust_stats
+        res = rebalance_queue_organic()
+        stats = get_organic_trust_stats()
+        text = (
+            f"🌿 *Queue Rebalancing Complete*\n\n"
+            f"• Rebalanced Pins: `{res['rebalanced']}`\n"
+            f"• 🌿 Organic Pins in Queue: `{res['organic_in_queue']}`\n"
+            f"• 💰 Monetized Pins in Queue: `{res['monetized_in_queue']}`\n\n"
+            f"🛡️ Current Affiliate Streak: `{stats['monetized_streak']}/4`\n"
+            f"💡 The queue now strictly interleaves organic profile pins to prevent Pinterest shadowbans."
+        )
+    except Exception as e:
+        text = f"❌ Error rebalancing queue: {e}"
+    await msg.reply_text(text, parse_mode="Markdown")
+
+
 async def cmd_dailyreport(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Send today's detailed multi-platform report on demand."""
     if not _is_admin(update): return
@@ -2351,7 +2372,38 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             return
 
         # ── Upload the good pin ───────────────────────────────────────────────
-        pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+        from database import should_next_pin_be_organic
+        import re
+        is_org = pin.get("is_organic", 0)
+
+        if getattr(config, "ORGANIC_TRUST_ENABLED", True) and should_next_pin_be_organic(getattr(config, "ORGANIC_TRUST_RATIO", 0.20)):
+            is_org = 1
+            pin["is_organic"] = 1
+            pin["link"] = (
+                getattr(config, "ORGANIC_PIN_LINK", "")
+                or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+            )
+            pin["description"] = re.sub(
+                r'#ad\b|#affiliate\b|#sponsored\b', '', pin.get("description", "")
+            ).strip()
+        elif not is_org and getattr(config, "APP_BASE_URL", ""):
+            if "amazon." in pin.get("link", "") and "/r/" not in pin.get("link", ""):
+                try:
+                    from amazon_search import wrap_with_tracker
+                    pin["link"] = wrap_with_tracker(
+                        pin["link"],
+                        anime_name=pin.get("anime_name", ""),
+                        title=pin.get("title", ""),
+                        image_url=pin.get("image_url", ""),
+                    )
+                except Exception:
+                    pass
+
+        if is_org:
+            pin_type = "ORGANIC 🌿"
+        else:
+            pin_type = "NEW" if pin["priority"] == 1 else "BACKLOG"
+
         stale_note = f"\n🗑 Skipped {stale_dropped} stale pin(s) with expired CDN URLs." if stale_dropped else ""
 
         # Pre-upload watermark check: ensure 100% clean image
@@ -2377,11 +2429,11 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             remaining = get_queue_counts()["total"]
             from database import get_tracked_target_url, mark_file_uploaded
             mark_file_uploaded(
-                os.path.basename(image_path),
-                pin["title"],
-                pin["anime_name"],
-                pin.get("image_url", ""),
-                pin.get("board_id", "")
+                filename=os.path.basename(image_path),
+                title=pin["title"],
+                anime_name=pin["anime_name"],
+                image_url=pin.get("image_url", ""),
+                is_organic=is_org,
             )
 
             # ── Dispatch cross-posts across all 10 platforms ───────────────────
@@ -4708,6 +4760,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("stats",         cmd_stats),
             ("organic",       cmd_organic),
             ("trustratio",    cmd_organic),
+            ("rebalance",     cmd_rebalance),
+            ("rebalance_queue", cmd_rebalance),
             ("digest",        cmd_digest),
             ("performance",   cmd_digest),
             ("dailyreport",   cmd_dailyreport),

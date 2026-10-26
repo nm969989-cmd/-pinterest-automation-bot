@@ -1598,6 +1598,88 @@ def get_organic_trust_stats() -> dict:
     }
 
 
+def rebalance_queue_organic(target_ratio: float = 0.20) -> dict:
+    """
+    Scans pending pin_queue and rebalances it so that the 80/20 organic trust ratio
+    is strictly respected, guaranteeing no more than 4 consecutive monetized pins.
+    """
+    import re
+    import config
+    from amazon_search import wrap_with_tracker
+
+    profile_url = getattr(config, "ORGANIC_PIN_LINK", "") or getattr(config, "PINTEREST_PROFILE_URL", "https://in.pinterest.com/muthelyrics/")
+
+    with _get_conn() as conn:
+        # Check current monetized streak from upload history
+        rows = conn.execute("""
+            SELECT is_organic FROM uploaded_files
+            ORDER BY uploaded_at DESC LIMIT 10
+        """).fetchall()
+        simulated_streak = 0
+        for r in rows:
+            if (r[0] or 0) == 0:
+                simulated_streak += 1
+            else:
+                break
+
+        queue_pins = conn.execute("""
+            SELECT id, title, description, link, anime_name, image_url, is_organic
+            FROM pin_queue
+            ORDER BY priority DESC, id ASC
+        """).fetchall()
+
+        rebalanced_count = 0
+        org_in_q = 0
+        mon_in_q = 0
+
+        for q_id, title, desc, link, anime, img_url, is_org in queue_pins:
+            is_org = is_org or 0
+            # Needs to be organic if simulated streak >= 4
+            should_be_organic = (simulated_streak >= 4)
+
+            if should_be_organic:
+                # Force organic
+                new_desc = re.sub(r'#ad\b|#affiliate\b|#sponsored\b', '', desc or '').strip()
+                new_desc = re.sub(r'\s+', ' ', new_desc)
+                conn.execute("""
+                    UPDATE pin_queue
+                    SET is_organic = 1, link = ?, description = ?
+                    WHERE id = ?
+                """, (profile_url, new_desc, q_id))
+                simulated_streak = 0
+                org_in_q += 1
+                if not is_org:
+                    rebalanced_count += 1
+            else:
+                # Monetized pin: wrap with tracker if APP_BASE_URL is active and link is direct Amazon link
+                new_link = link
+                if getattr(config, "APP_BASE_URL", "") and link and "amazon." in link and "/r/" not in link:
+                    try:
+                        new_link = wrap_with_tracker(link, anime_name=anime or "", title=title or "", image_url=img_url or "")
+                    except Exception:
+                        new_link = link
+
+                if new_link != link or is_org != 0:
+                    conn.execute("""
+                        UPDATE pin_queue
+                        SET is_organic = 0, link = ?
+                        WHERE id = ?
+                    """, (new_link, q_id))
+                    if is_org != 0 or new_link != link:
+                        rebalanced_count += 1
+                simulated_streak += 1
+                mon_in_q += 1
+
+        conn.commit()
+
+    return {
+        "rebalanced": rebalanced_count,
+        "organic_in_queue": org_in_q,
+        "monetized_in_queue": mon_in_q,
+        "simulated_streak": simulated_streak,
+    }
+
+
 def remove_queued_pin(pin_id: int):
     """Remove a pin from the queue after it has been posted."""
     with _get_conn() as conn:

@@ -23,7 +23,9 @@ services:
       - key: MAKE_WEBHOOK_URL
         sync: false
       - key: APP_BASE_URL
-        sync: false
+        value: "https://pinterest-automation-bot.onrender.com"
+      - key: CLICK_NOTIFICATION
+        value: "true"
       - key: OPENROUTER_API_KEY
         sync: false
       - key: JSONBIN_API_KEY
