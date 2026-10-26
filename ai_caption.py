@@ -225,7 +225,7 @@ def _openrouter_vision(image_path, caption, channel_name, api_key):
                             ]
                         }
                     ],
-                    "max_tokens": 400
+                    "max_tokens": 700
                 }
 
                 logger.info(f"[VISION] Trying model: {model}")
@@ -289,7 +289,7 @@ def _openrouter_text(caption, channel_name, api_key):
                 payload = {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 400
+                    "max_tokens": 700
                 }
                 logger.info(f"[AI:Text] Trying model: {model}")
                 res = http_requests.post(_OPENROUTER_URL, json=payload, headers=headers, timeout=20)
