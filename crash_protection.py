@@ -164,9 +164,13 @@ def _emergency_restart():
     except Exception as e:
         logger.error(f"[Health] Could not save state before restart: {e}")
     import os
-    import sys
-    # Exit cleanly — Render will auto-restart the web service.
-    sys.exit(0)
+    import logging
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+    # Exit entire process from daemon thread — Render will auto-restart the web service.
+    os._exit(0)
 
 
 def _start_health_monitor():

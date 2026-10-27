@@ -484,8 +484,12 @@ def _self_ping_loop():
     port = int(os.environ.get('PORT', 8080))
     local_url = f"http://localhost:{port}/ping"
     # Optional external ping URL (set in Render env vars or .env)
-    # Example: https://cron-job.org or your own UptimeRobot URL
+    # Falls back to APP_BASE_URL/ping so outbound-to-inbound traffic traverses Render's external router
     external_url = os.environ.get('EXTERNAL_PING_URL', '').strip()
+    if not external_url:
+        app_base = os.environ.get('APP_BASE_URL', '').strip().rstrip('/')
+        if app_base.startswith(('http://', 'https://')) and 'localhost' not in app_base:
+            external_url = f"{app_base}/ping"
     while True:
         try:
             import requests as _req

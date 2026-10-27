@@ -486,6 +486,18 @@ def resolve_to_direct_link(link: str, anime_name: str = "", character_name: str 
     if not link:
         return _build_search_link("", anime_name=clean_name, character_name=clean_char)
 
+    # ── Step 0a: Organic Trust Pins (Pinterest profile/board URLs) ──────────
+    if "pinterest." in link.lower() or "pin.it" in link.lower():
+        return link
+
+    # ── Step 0b: Multi-Merchant Bridge Showcase Page (/p/<code>) ────────────
+    if "/p/" in link and (
+        "onrender.com" in link.lower()
+        or "localhost" in link.lower()
+        or (APP_BASE_URL and APP_BASE_URL.lower() in link.lower())
+    ):
+        return link
+
     # ── Step 1: Tracker redirect → look up the real target Amazon URL ───────
     if "/r/" in link:
         try:

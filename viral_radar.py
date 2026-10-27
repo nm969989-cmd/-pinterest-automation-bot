@@ -560,6 +560,7 @@ def generate_spinoff_pins(code: str, count: int = 2) -> dict:
                 image_url=image_url,
                 priority=2,  # EXPRESS PRIORITY
                 scheduled_date=today_str,
+                allow_duplicate=True,
             )
             if success:
                 generated_count += 1

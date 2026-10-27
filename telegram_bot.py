@@ -4998,7 +4998,6 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             #
             # nonlocal required: we reassign 'app' in the except block.
             nonlocal app
-            import aiohttp
             poll_attempt = 0
             while True:
                 try:
@@ -5029,17 +5028,17 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                             f"(attempt {poll_attempt})"
                         )
                         try:
-                            async with aiohttp.ClientSession() as sess:
-                                async with sess.get(
-                                    f"https://api.telegram.org/bot{token}/getUpdates",
-                                    params={"timeout": 0, "limit": 1},
-                                    timeout=aiohttp.ClientTimeout(total=10)
-                                ) as resp:
-                                    kick_data = await resp.json()
-                                    if kick_data.get("ok"):
-                                        logger.info("[TG BOT] Async kick succeeded — old poller evicted.")
-                                    else:
-                                        logger.warning(f"[TG BOT] Async kick returned: {kick_data}")
+                            resp = await asyncio.to_thread(
+                                _req.get,
+                                f"https://api.telegram.org/bot{token}/getUpdates",
+                                params={"timeout": 0, "limit": 1},
+                                timeout=10,
+                            )
+                            kick_data = resp.json()
+                            if kick_data.get("ok"):
+                                logger.info("[TG BOT] Async kick succeeded — old poller evicted.")
+                            else:
+                                logger.warning(f"[TG BOT] Async kick returned: {kick_data}")
                         except Exception as kick_e:
                             logger.warning(f"[TG BOT] Async kick error: {kick_e}")
                         await asyncio.sleep(wait_s)

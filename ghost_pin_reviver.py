@@ -95,7 +95,12 @@ def run_ghost_reviver(dry_run: bool = False) -> list[dict]:
 
             new_title = _generate_revive_title(orig, anime)
             code = f"rv_{uuid.uuid4().hex[:6]}"
-            bridge_url = f"{base_url}/p/{code}" if base_url else img_url
+            try:
+                from amazon_search import generate_amazon_link
+                amazon_url = generate_amazon_link(anime, title=new_title)
+            except Exception:
+                amazon_url = f"https://www.amazon.com/s?k={anime.replace(' ', '+')}+anime+merch"
+            bridge_url = f"{base_url}/p/{code}" if base_url else amazon_url
             post_id = f"revive_{code}"
 
             # Build fresh multi-intent description
@@ -121,12 +126,12 @@ def run_ghost_reviver(dry_run: bool = False) -> list[dict]:
             if not dry_run:
                 record_tracked_link(
                     code=code,
-                    target_url=bridge_url,
+                    target_url=amazon_url,
                     anime_name=anime,
                     title=new_title,
                     image_url=img_url,
                 )
-                enqueue_pin(
+                enqueued = enqueue_pin(
                     post_id=post_id,
                     image_path="",
                     title=new_title,
@@ -136,7 +141,11 @@ def run_ghost_reviver(dry_run: bool = False) -> list[dict]:
                     image_url=img_url,
                     priority=0,
                     scheduled_date=today_str,
+                    allow_duplicate=True,
                 )
+                if not enqueued:
+                    logger.warning(f"[GhostReviver] Could not enqueue revived pin for '{anime}' ({post_id})")
+                    continue
                 # Log to ghost_revive_log
                 with _get_conn() as conn:
                     conn.execute("""

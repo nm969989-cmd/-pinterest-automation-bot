@@ -1223,6 +1223,18 @@ def is_image_duplicate(filepath: str = None, sha256: str = None, phash: str = No
     return False, ""
 
 
+def is_intentional_repin(post_id: str) -> bool:
+    """Returns True if post_id is an intentional A/B Variant B, Viral Spinoff, or Ghost Revival pin."""
+    if not post_id:
+        return False
+    pid = str(post_id).strip().lower()
+    return (
+        pid.startswith("spinoff_")
+        or pid.startswith("revive_")
+        or (pid.startswith("ab_") and ("_b_" in pid or pid.endswith("_b")))
+    )
+
+
 def clean_duplicate_queue_items(max_distance: int = 4) -> int:
     """
     Scans the entire pin_queue across all 4 layers (URL, Filename, SHA-256, dHash).
@@ -1239,7 +1251,7 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
     purged_count = 0
     with _get_conn() as conn:
         items = conn.execute(
-            "SELECT id, image_path, title, sha256, phash, image_url FROM pin_queue ORDER BY priority DESC, id ASC"
+            "SELECT id, post_id, image_path, title, sha256, phash, image_url FROM pin_queue ORDER BY priority DESC, id ASC"
         ).fetchall()
 
     seen_urls = set()
@@ -1249,7 +1261,9 @@ def clean_duplicate_queue_items(max_distance: int = 4) -> int:
 
     generic_names = {"image.jpg", "image.png", "image.jpeg", "download.jpg", "download.png", "processed.jpg", "temp.jpg"}
 
-    for item_id, img_path, title, sha256, phash, img_url in items:
+    for item_id, post_id, img_path, title, sha256, phash, img_url in items:
+        if is_intentional_repin(post_id):
+            continue
         # Populate missing fingerprints if file exists
         if (not sha256 or not phash) and img_path and os.path.isfile(img_path):
             calc_sha, calc_phash = get_image_fingerprints(img_path)
@@ -1448,12 +1462,14 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
                 board_id: str = "",
                 priority: int = 0, scheduled_date: str = "",
                 sha256: str = "", phash: str = "",
-                is_organic: int = 0) -> bool:
+                is_organic: int = 0,
+                allow_duplicate: bool = False) -> bool:
     """
     Add a pin to the persistent queue.
     priority=1 → new image (posted before backlog)
     priority=0 → backlog image
     is_organic=1 → organic trust pin (no affiliate link)
+    allow_duplicate=True → bypasses 4-layer duplicate check (used for A/B Variant B, Spinoffs, Ghost Reviver)
     Returns True if added, False if already in queue or duplicate.
     """
     if (not sha256 or not phash) and image_path and os.path.isfile(image_path):
@@ -1465,18 +1481,19 @@ def enqueue_pin(post_id: str, image_path: str, title: str, description: str,
         except Exception:
             pass
 
-    # Pre-enqueue 4-layer duplicate check
-    fn = os.path.basename(image_path) if image_path else ""
-    is_dup, reason = is_image_duplicate(
-        filepath=image_path,
-        sha256=sha256,
-        phash=phash,
-        image_url=image_url,
-        filename=fn,
-    )
-    if is_dup:
-        logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
-        return False
+    # Pre-enqueue 4-layer duplicate check (skipped for intentional re-pins)
+    if not allow_duplicate and not is_intentional_repin(post_id):
+        fn = os.path.basename(image_path) if image_path else ""
+        is_dup, reason = is_image_duplicate(
+            filepath=image_path,
+            sha256=sha256,
+            phash=phash,
+            image_url=image_url,
+            filename=fn,
+        )
+        if is_dup:
+            logger.warning(f"[DB] Rejecting enqueue_pin for '{title}': {reason}")
+            return False
 
     if not is_organic:
         try:
@@ -1512,7 +1529,8 @@ def get_next_queued_pin(today_str: str) -> dict | None:
     with _get_conn() as conn:
         row = conn.execute("""
             SELECT id, post_id, image_path, title, description, link,
-                   anime_name, image_url, priority, board_id, is_organic
+                   anime_name, image_url, priority, board_id, is_organic,
+                   sha256, phash
             FROM pin_queue
             WHERE scheduled_date <= ?
             ORDER BY priority DESC, id ASC
@@ -1535,6 +1553,8 @@ def get_next_queued_pin(today_str: str) -> dict | None:
         "anime_name": row[6], "image_url": row[7], "priority": row[8],
         "board_id": row[9] or "",
         "is_organic": is_organic,
+        "sha256": row[11] or "" if len(row) > 11 else "",
+        "phash": row[12] or "" if len(row) > 12 else "",
     }
 
 

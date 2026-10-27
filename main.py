@@ -169,7 +169,7 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             color_tags = []
             try:
                 from image_processor import extract_image_color_tags
-                color_tags = extract_image_color_tags(processed_image_path)
+                color_tags = extract_image_color_tags(processed_path)
             except Exception:
                 pass
             optimized_tags = generate_multi_intent_tags(

@@ -125,6 +125,7 @@ def maybe_enqueue_ab_test(
                 sha256=sha256,
                 phash=phash,
                 is_organic=is_organic,
+                allow_duplicate=(variant == "B"),
             )
             if success:
                 record_ab_test(

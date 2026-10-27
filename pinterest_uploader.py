@@ -549,7 +549,7 @@ def upload_via_make_webhook(image_path: str, title: str, description: str, link:
 
 
 def upload_to_pinterest(image_path, title, description, link, anime_name="",
-                        board_id="", alt_text=""):
+                        board_id="", alt_text="", allow_duplicate=False):
     """
     Master upload function.
     TRI-STATE RETURN: "live" = real pin on Pinterest (direct API),
@@ -563,7 +563,7 @@ def upload_to_pinterest(image_path, title, description, link, anime_name="",
     filename = os.path.basename(image_path)
 
     # ── Duplicate check ───────────────────────────────────────────────────────
-    if is_file_uploaded(filename):
+    if not allow_duplicate and is_file_uploaded(filename):
         logger.info(f"Duplicate detected (persistent), skipping: {filename}")
         return False
 

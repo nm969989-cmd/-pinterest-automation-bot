@@ -258,12 +258,20 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _hip_e:
         imghippo_status = f"🟡 Check failed ({_hip_e})"
 
-    # Watermark Cleaner & Inpainter Status (Zero Stock Rejections)
+    # Watermark Cleaner & Inpainter Status (Zero Stock Rejections — lazy-checked to save 90MB RAM on Render)
     watermark_status = "⚪ Disabled"
     try:
         if getattr(config, "WATERMARK_CLEANER_ENABLED", True):
-            import cv2
-            watermark_status = f"🟢 Active (OpenCV {cv2.__version__} Telea Inpainter)"
+            import importlib.util
+            import importlib.metadata
+            if importlib.util.find_spec("cv2") is not None:
+                try:
+                    cv_ver = importlib.metadata.version("opencv-python-headless")
+                except Exception:
+                    cv_ver = "4.x"
+                watermark_status = f"🟢 Active (OpenCV {cv_ver} Telea Inpainter)"
+            else:
+                watermark_status = "🟡 OpenCV not installed"
     except Exception as _wm_e:
         watermark_status = f"🟡 Check failed ({_wm_e})"
 

@@ -783,22 +783,24 @@ class PinScheduler:
 
                     if pin:
                         # ── Triple duplicate check (Filename, URL, and Visual pHash/SHA-256) ─
+                        from database import is_image_duplicate, is_intentional_repin
                         filename = pin["image_path"].split("/")[-1].split("\\")[-1] if pin["image_path"] else ""
+                        is_repin = is_intentional_repin(pin.get("post_id", ""))
                         is_dup = False
                         dup_reason = ""
 
-                        if is_file_uploaded(filename):
-                            is_dup, dup_reason = True, f"Filename '{filename}' already uploaded"
-                        elif is_image_url_uploaded(pin.get("image_url", "")):
-                            is_dup, dup_reason = True, "Image URL already uploaded"
-                        else:
-                            from database import is_image_duplicate
-                            is_dup, dup_reason = is_image_duplicate(
-                                filepath=pin.get("image_path", ""),
-                                sha256=pin.get("sha256", ""),
-                                phash=pin.get("phash", ""),
-                                exclude_queue_id=pin["id"]
-                            )
+                        if not is_repin:
+                            if is_file_uploaded(filename):
+                                is_dup, dup_reason = True, f"Filename '{filename}' already uploaded"
+                            elif is_image_url_uploaded(pin.get("image_url", "")):
+                                is_dup, dup_reason = True, "Image URL already uploaded"
+                            else:
+                                is_dup, dup_reason = is_image_duplicate(
+                                    filepath=pin.get("image_path", ""),
+                                    sha256=pin.get("sha256", ""),
+                                    phash=pin.get("phash", ""),
+                                    exclude_queue_id=pin["id"]
+                                )
 
                         if is_dup:
                             logger.info(f"[Scheduler] Duplicate detected, removing from queue: '{pin['title']}' ({dup_reason})")
@@ -959,6 +961,7 @@ class PinScheduler:
                                     anime_name=pin["anime_name"],
                                     board_id=pin.get("board_id", ""),
                                     alt_text=alt_text,
+                                    allow_duplicate=is_repin,
                                 )
                                 # Tri-state: "live"/"queued"/False. Both live+queued dequeue.
                                 success = bool(pin_status)
