@@ -57,20 +57,43 @@ def health():
     except Exception as e:
         return jsonify({"status": "ok", "error": str(e)}), 200
 
+def get_visitor_country(req) -> str:
+    """
+    Extracts visitor country code from reverse proxy / CDN headers (Cloudflare, Render, etc.).
+    Returns uppercase 2-letter ISO country code (e.g., 'IN', 'US') or empty string if unknown.
+    """
+    country = (
+        req.headers.get("CF-IPCountry")
+        or req.headers.get("X-Country-Code")
+        or req.headers.get("X-GeoIP-Country")
+        or ""
+    ).strip().upper()
+    if country in ("XX", "T1", "UNKNOWN", "NONE"):
+        return ""
+    return country[:2]
+
+
 @app.route('/r/<code>')
 def redirect_link(code):
     """
-    Multi-Merchant Affiliate Link Tracker and Redirector.
-    Supports query param `?m=amazon|displate|wallpaper`.
-    Logs click with corresponding merchant and redirects.
+    Multi-Merchant & Geo-Targeted Affiliate Link Tracker and Redirector.
+    Supports query param `?m=amazon|amazon_in|amazon_us|displate|wallpaper`.
+    Automatically detects visitor country (Cloudflare CF-IPCountry) and dual-routes:
+      - 🇮🇳 India visitors -> Amazon India with tag animeasthet06-21 (₹ INR)
+      - 🇺🇸 US/Global visitors -> Amazon US with tag animeasthet-20 ($ USD)
     """
     from flask import redirect, request
-    merchant = request.args.get('m', 'amazon').strip().lower()
+    merchant   = request.args.get('m', 'amazon').strip().lower()
     user_agent = request.headers.get('User-Agent', '')
     referrer   = request.referrer or ''
+    country    = get_visitor_country(request)
 
     try:
         from database import record_link_click, count_clicks_today, get_tracked_link_data
+        from config import AMAZON_AFFILIATE_TAG_IN, AMAZON_AFFILIATE_TAG_US, AMAZON_AFFILIATE_TAG
+        tag_in = AMAZON_AFFILIATE_TAG_IN or "animeasthet06-21"
+        tag_us = AMAZON_AFFILIATE_TAG_US or AMAZON_AFFILIATE_TAG or "animeasthet-20"
+
         link_data = get_tracked_link_data(code)
         target_amazon_url = link_data.get("target_url", "")
         anime_name        = link_data.get("anime_name", "Anime")
@@ -86,14 +109,19 @@ def redirect_link(code):
         except Exception:
             pass
 
+        # Determine if visitor should be routed to Amazon India
+        is_india_dest = (country == "IN" and merchant != "amazon_us") or (merchant == "amazon_in")
+        effective_merchant = merchant
+        if merchant in ("amazon", "amazon_in", "amazon_us"):
+            effective_merchant = "amazon_in" if is_india_dest else "amazon_us"
+
         # Bot and crawler filtering: prevent social preview bots (Pinterest, Bluesky, Mastodon, Telegram)
-        # from polluting real analytics and triggering spam click alerts
         from pinterest_analytics import is_bot_user_agent
         is_bot = is_bot_user_agent(user_agent)
 
         if not is_bot:
-            # Record click with merchant for real human visitors
-            record_link_click(code, user_agent, referrer, merchant=merchant)
+            # Record click with merchant and country code for real human visitors
+            record_link_click(code, user_agent, referrer, merchant=effective_merchant, country=country)
             today_total = count_clicks_today()
 
             # Determine traffic source from referrer
@@ -116,11 +144,13 @@ def redirect_link(code):
             if CLICK_NOTIFICATION:
                 try:
                     from telegram_bot import notify_link_clicked
+                    display_merchant = "Amazon India" if effective_merchant == "amazon_in" else ("Amazon US" if effective_merchant == "amazon_us" else effective_merchant.capitalize())
                     notify_link_clicked(
-                        anime_name=f"{anime_name} ({merchant.capitalize()})",
+                        anime_name=f"{anime_name} ({display_merchant})",
                         title=title,
                         today_count=today_total,
-                        source=source
+                        source=source,
+                        country=country
                     )
                 except Exception:
                     pass
@@ -137,12 +167,25 @@ def redirect_link(code):
                 return redirect(image_url, code=302)
             return redirect(target_amazon_url, code=302)
 
-        else: # default 'amazon'
-            return redirect(target_amazon_url, code=302)
+        else: # Amazon (Geo-Targeted)
+            if is_india_dest:
+                # Guaranteed 0-error Amazon India destination in ₹ INR with Fast Delivery
+                clean_anime = anime_name if anime_name and anime_name.lower() != "anime" else (title[:30] if title else "anime merchandise")
+                import urllib.parse
+                encoded = urllib.parse.quote_plus(f"{clean_anime} merchandise poster figure".strip())
+                india_url = f"https://www.amazon.in/s?k={encoded}&tag={tag_in}&sort=review-rank"
+                return redirect(india_url, code=302)
+            else:
+                # Amazon US / Global in $ USD
+                dest = target_amazon_url or f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag_us}&sort=review-rank"
+                if "/r/" in dest:
+                    from amazon_search import resolve_to_direct_link
+                    dest = resolve_to_direct_link(dest, anime_name=anime_name, title=title)
+                return redirect(dest, code=302)
 
     except Exception as e:
-        from config import AMAZON_AFFILIATE_TAG
-        tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
+        from config import AMAZON_AFFILIATE_TAG_US, AMAZON_AFFILIATE_TAG
+        tag = AMAZON_AFFILIATE_TAG_US or AMAZON_AFFILIATE_TAG or "animeasthet-20"
         return redirect(
             f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank",
             code=302
@@ -189,8 +232,9 @@ def bridge_page(code):
     # Record bridge visit for funnel analytics
     try:
         from pinterest_analytics import record_bridge_visit, is_bot_user_agent
+        country = get_visitor_country(request)
         if not is_bot_user_agent(user_agent):
-            record_bridge_visit(code, anime_name, title, user_agent, referrer)
+            record_bridge_visit(code, anime_name, title, user_agent, referrer, country=country)
             # Debounced check if this visit crossed a viral surge threshold (max once per 5 min)
             from viral_radar import trigger_debounced_radar_check
             trigger_debounced_radar_check()
@@ -200,7 +244,17 @@ def bridge_page(code):
     # Dynamic URLs through tracker (logs merchant click)
     from config import APP_BASE_URL
     base = (APP_BASE_URL or "").rstrip("/")
-    amazon_cta = f"{base}/r/{code}?m=amazon" if base else target_amazon_url
+    country = get_visitor_country(request)
+    is_india = (country == "IN")
+
+    if is_india:
+        amazon_cta = f"{base}/r/{code}?m=amazon_in" if base else target_amazon_url
+        amazon_btn_title = "Shop on Amazon India (₹)"
+        amazon_btn_sub = "Fast Delivery · COD & UPI Available"
+    else:
+        amazon_cta = f"{base}/r/{code}?m=amazon_us" if base else target_amazon_url
+        amazon_btn_title = "Shop on Amazon ($)"
+        amazon_btn_sub = "Figures, Nendoroids, Manga & Collectibles"
 
     from amazon_search import build_displate_url
     raw_displate = build_displate_url(anime_name=anime_name, title=title)
@@ -415,8 +469,8 @@ def bridge_page(code):
         <a class="btn-option btn-amazon" href="{amazon_cta}" rel="sponsored noopener" target="_blank">
           <span class="icon">🛒</span>
           <span class="btn-text">
-            <span class="btn-title">Shop on Amazon</span>
-            <span class="btn-sub">Figures, Nendoroids, Manga &amp; Collectibles</span>
+            <span class="btn-title">{amazon_btn_title}</span>
+            <span class="btn-sub">{amazon_btn_sub}</span>
           </span>
         </a>
 

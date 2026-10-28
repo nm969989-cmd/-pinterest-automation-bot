@@ -164,6 +164,7 @@ def init_db():
                 user_agent     TEXT,
                 referrer       TEXT,
                 merchant       TEXT DEFAULT 'amazon',
+                country        TEXT DEFAULT '',
                 image_url      TEXT DEFAULT '',
                 image_filename TEXT DEFAULT '',
                 clicked_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -179,11 +180,15 @@ def init_db():
                 pass
 
         # Add new columns to link_clicks if upgrading from older schema
-        for col in ["merchant TEXT DEFAULT 'amazon'", "image_url TEXT DEFAULT ''", "image_filename TEXT DEFAULT ''"]:
+        for col in ["merchant TEXT DEFAULT 'amazon'", "country TEXT DEFAULT ''", "image_url TEXT DEFAULT ''", "image_filename TEXT DEFAULT ''"]:
             try:
                 conn.execute(f"ALTER TABLE link_clicks ADD COLUMN {col}")
             except Exception:
                 pass
+        try:
+            conn.execute("ALTER TABLE bridge_visits ADD COLUMN country TEXT DEFAULT ''")
+        except Exception:
+            pass
 
         # ── Stock Uploads Tracking Table ─────────────────────────────────────
         conn.execute("""
@@ -412,6 +417,7 @@ def init_db():
                 title       TEXT,
                 user_agent  TEXT,
                 referrer    TEXT,
+                country     TEXT DEFAULT '',
                 is_pinterest INTEGER DEFAULT 0,
                 visited_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -2090,26 +2096,32 @@ def get_tracked_link_data(code: str) -> dict:
     }
 
 
-def record_link_click(code: str, user_agent: str = "", referrer: str = "", merchant: str = "amazon") -> tuple[str, str, str]:
+def record_link_click(code: str, user_agent: str = "", referrer: str = "", merchant: str = "amazon", country: str = "") -> tuple[str, str, str]:
     """
-    Records a click for the given link code and merchant ('amazon', 'displate', 'wallpaper').
+    Records a click for the given link code, merchant, and visitor country.
+    Automatically captures image attribution from tracked_links.
     Returns: (target_url, anime_name, title)
     """
-    import re
+    import re, os
     from config import AMAZON_AFFILIATE_TAG
     tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
+    country_code = (country or "").strip().upper()[:10]
 
     with _get_conn() as conn:
         row = conn.execute("""
-            SELECT target_url, anime_name, title FROM tracked_links WHERE code = ?
+            SELECT target_url, anime_name, title, image_url FROM tracked_links WHERE code = ?
         """, (code,)).fetchone()
 
         if row:
             target_url, anime_name, title = row[0], row[1] or "Anime", row[2] or "Anime Merch"
+            img_url = row[3] or ""
+            img_filename = os.path.basename(img_url.rstrip("/")) if img_url else ""
             conn.execute("""
-                INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer, merchant)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, anime_name, title, user_agent[:255], referrer[:255], merchant[:50]))
+                INSERT INTO link_clicks
+                    (code, anime_name, title, user_agent, referrer, merchant, country, image_url, image_filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (code, anime_name, title, user_agent[:255], referrer[:255], merchant[:50],
+                  country_code, img_url[:500], img_filename[:200]))
             conn.commit()
             return target_url, anime_name, title
 
@@ -2132,9 +2144,10 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "", merch
                     VALUES (?, ?, ?, ?, '')
                 """, (code, direct_product_url, "Anime", "Anime Product"))
                 conn.execute("""
-                    INSERT INTO link_clicks (code, anime_name, title, user_agent, referrer, merchant)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (code, "Anime", "Anime Product", user_agent[:255], referrer[:255], merchant[:50]))
+                    INSERT INTO link_clicks
+                        (code, anime_name, title, user_agent, referrer, merchant, country, image_url, image_filename)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, '', '')
+                """, (code, "Anime", "Anime Product", user_agent[:255], referrer[:255], merchant[:50], country_code))
                 conn.commit()
             except Exception:
                 pass
@@ -2196,6 +2209,25 @@ def get_click_stats() -> dict:
             LIMIT 3
         """).fetchall()
 
+        # Top clicked images
+        top_images = conn.execute("""
+            SELECT image_filename, anime_name, title, COUNT(*) as cnt
+            FROM link_clicks
+            WHERE image_filename IS NOT NULL AND image_filename != ''
+            GROUP BY image_filename
+            ORDER BY cnt DESC
+            LIMIT 5
+        """).fetchall()
+
+        # Top clicked visitor countries
+        top_countries = conn.execute("""
+            SELECT COALESCE(NULLIF(country, ''), 'Unknown') as c, COUNT(*) as cnt
+            FROM link_clicks
+            GROUP BY c
+            ORDER BY cnt DESC
+            LIMIT 5
+        """).fetchall()
+
         # Merchant breakdown (Today & Total)
         today_merchant_rows = conn.execute("""
             SELECT COALESCE(merchant, 'amazon') as m, COUNT(*) as cnt
@@ -2231,6 +2263,7 @@ def get_click_stats() -> dict:
         "top_anime": [(r[0], r[1]) for r in top_anime],
         "top_pins": [(r[0], r[1], r[2]) for r in top_pins],
         "top_images": [(r[0], r[1], r[2], r[3]) for r in top_images],
+        "top_countries": [(r[0], r[1]) for r in top_countries],
         "est_orders_min": est_orders_min,
         "est_orders_max": est_orders_max,
         "est_revenue_usd_min": est_revenue_usd_min,

@@ -57,6 +57,7 @@ def _ensure_analytics_table() -> None:
                     title       TEXT,
                     user_agent  TEXT,
                     referrer    TEXT,
+                    country     TEXT DEFAULT '',
                     is_pinterest INTEGER DEFAULT 0,  -- 1 if referrer is pinterest.com
                     visited_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -95,7 +96,7 @@ def is_bot_user_agent(user_agent: str) -> bool:
 
 
 def record_bridge_visit(code: str, anime_name: str, title: str,
-                        user_agent: str = "", referrer: str = "") -> None:
+                        user_agent: str = "", referrer: str = "", country: str = "") -> None:
     """
     Record a visit to the /p/<code> bridge landing page.
     Filters out bots, spiders, and crawlers so analytics only reflect genuine visitors.
@@ -106,19 +107,21 @@ def record_bridge_visit(code: str, anime_name: str, title: str,
 
     _ensure_analytics_table()
     is_pinterest = 1 if "pinterest" in (referrer or "").lower() else 0
+    country_code = (country or "").strip().upper()[:10]
     try:
         from database import _get_conn
         with _get_conn() as conn:
             conn.execute("""
                 INSERT INTO bridge_visits
-                    (code, anime_name, title, user_agent, referrer, is_pinterest)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (code, anime_name, title, user_agent, referrer, country, is_pinterest)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 code,
                 anime_name[:200] if anime_name else "",
                 title[:200]      if title      else "",
                 user_agent[:255] if user_agent else "",
                 referrer[:255]   if referrer   else "",
+                country_code,
                 is_pinterest,
             ))
             conn.commit()

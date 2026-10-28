@@ -35,8 +35,10 @@ MAKE_WEBHOOK_URL = os.getenv('MAKE_WEBHOOK_URL', '')
 # Auto-post mode: true = fully automatic, false = Telegram approval button required
 AUTO_POST_MODE = os.getenv('AUTO_POST_MODE', 'true').lower() in ('true', '1', 'yes')
 
-# Amazon Config
-AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG')
+# Amazon Config (Dual-Routing: India vs US/Global)
+AMAZON_AFFILIATE_TAG = os.getenv('AMAZON_AFFILIATE_TAG', 'animeasthet-20')
+AMAZON_AFFILIATE_TAG_US = os.getenv('AMAZON_AFFILIATE_TAG_US', AMAZON_AFFILIATE_TAG or 'animeasthet-20')
+AMAZON_AFFILIATE_TAG_IN = os.getenv('AMAZON_AFFILIATE_TAG_IN', 'animeasthet06-21')
 
 # Displate Affiliate Config (Metal Art Wall Posters — 15-25% commission)
 DISPLATE_AFFILIATE_TAG = os.getenv('DISPLATE_AFFILIATE_TAG', '').strip()

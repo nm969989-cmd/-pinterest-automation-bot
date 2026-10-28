@@ -224,9 +224,19 @@ def generate_multi_intent_tags(
     # Shuffle for non-repetitive bot footprint
     random.shuffle(unique_tags)
 
-    # Cap at target count (keeping disclosure if present)
+    # Cap at target count (keeping disclosure and detected color tags if present)
     has_ad = any(t.lower() in ("#ad", "#affiliate") for t in unique_tags)
     final_tags = unique_tags[:target_count]
+    if color_tags:
+        clean_colors_lower = [c.lower() for c in clean_colors]
+        if not any(t.lower() in clean_colors_lower for t in final_tags) and clean_colors:
+            # Guarantee at least one detected color palette tag is preserved in final cluster
+            picked_color = clean_colors[0]
+            # Replace a generic tag, keeping #ad and primary anime
+            for idx in range(len(final_tags)):
+                if final_tags[idx].lower() not in ("#ad", "#affiliate", primary_anime_tag.lower()):
+                    final_tags[idx] = picked_color
+                    break
     if include_disclosure and has_ad and not any(t.lower() in ("#ad", "#affiliate") for t in final_tags):
         final_tags[-1] = "#ad"
 

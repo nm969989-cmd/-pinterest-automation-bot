@@ -626,6 +626,17 @@ async def cmd_linkstats(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 
 
 
+def country_to_flag(code: str) -> str:
+    """Converts 2-letter ISO country code to emoji flag."""
+    if not code or len(code) != 2:
+        return "🌍"
+    try:
+        code = code.upper()
+        return chr(ord(code[0]) + 127397) + chr(ord(code[1]) + 127397)
+    except Exception:
+        return "🌍"
+
+
 async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show detailed affiliate link clicks and estimated revenue metrics."""
     if not _is_admin(update): return
@@ -652,10 +663,18 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         top_images_lines.append(f"  {i}. {display} ({cnt} clicks)")
     top_images_str = "\n".join(top_images_lines) if top_images_lines else "  No image click data yet."
 
-    # Use USD revenue for amazon.com US program
+    # Top Visitor Countries breakdown
+    top_countries_lines = []
+    for i, (cc, cnt) in enumerate(cstats.get("top_countries", []), 1):
+        flag = country_to_flag(cc)
+        name = "India" if cc == "IN" else ("United States" if cc == "US" else ("Brazil" if cc == "BR" else ("Philippines" if cc == "PH" else cc)))
+        top_countries_lines.append(f"  {i}. {flag} {name} ({cc}): {cnt} click(s)")
+    top_countries_str = "\n".join(top_countries_lines) if top_countries_lines else "  No country data yet."
+
+    # Estimated revenue (USD from US/Global + INR from India)
     usd_min = cstats.get('est_revenue_usd_min', round(cstats['est_revenue_min'] / 84, 2))
     usd_max = cstats.get('est_revenue_usd_max', round(cstats['est_revenue_max'] / 84, 2))
-    est_rev = f"$${usd_min:.2f} - $${usd_max:.2f} (~u20b9{cstats['est_revenue_min']}-u20b9{cstats['est_revenue_max']} INR)"
+    est_rev = f"${usd_min:.2f} - ${usd_max:.2f} USD (~₹{cstats['est_revenue_min']} - ₹{cstats['est_revenue_max']} INR)"
     est_orders = f"{cstats['est_orders_min']} - {cstats['est_orders_max']} items"
 
     tbm = cstats.get("today_by_merchant", {})
@@ -668,25 +687,25 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     by_m_str = ""
     if by_m:
         by_m_parts = [f"  • {m.capitalize()}: {cnt} click(s)" for m, cnt in by_m.items()]
-        by_m_str = f"\n\nu1f3ea Clicks by Merchant (All-Time):\n" + "\n".join(by_m_parts)
+        by_m_str = f"\n\n🏪 Clicks by Merchant (All-Time):\n" + "\n".join(by_m_parts)
 
     msg = (
-        f"u1f4ca Affiliate Clicks & Earnings Report\n"
-        f"{'u2550' * 30}\n"
-        f"u1f5b1ufe0f Clicks Today    : {cstats['today']}{tbm_str}\n"
-        f"u1f4c8 Clicks This Week : {cstats['week']}\n"
-        f"u1f310 All-Time Clicks  : {cstats['total']}"
+        f"📊 Affiliate Clicks & Earnings Report\n"
+        f"{'═' * 30}\n"
+        f"🖱️ Clicks Today    : {cstats['today']}{tbm_str}\n"
+        f"📈 Clicks This Week : {cstats['week']}\n"
+        f"🌐 All-Time Clicks  : {cstats['total']}"
         f"{by_m_str}\n\n"
-        f"u1f4b0 Estimated Performance (7 Days):\n"
+        f"💰 Estimated Performance (7 Days):\n"
         f"  • Estimated Orders  : {est_orders}\n"
         f"  • Estimated Revenue : {est_rev}\n\n"
-        f"u1f3cc Top Clicked Anime:\n{top_anime_str}\n\n"
-        f"u1f525 Top Clicked Pins:\n{top_pins_str}\n\n"
-        f"u1f5bcufe0f Top Clicked Images:\n{top_images_str}\n\n"
-        f"u1f4a1 Note: Actual confirmed purchases and payout balance are finalized on respective affiliate portals (Amazon.com US / Displate)."
+        f"🌍 Top Visitor Countries:\n{top_countries_str}\n\n"
+        f"🎌 Top Clicked Anime:\n{top_anime_str}\n\n"
+        f"🔥 Top Clicked Pins:\n{top_pins_str}\n\n"
+        f"🖼️ Top Clicked Images:\n{top_images_str}\n\n"
+        f"💡 Dual-Routing Active: Indian visitors earn in ₹ (Amazon.in); US/Global earn in $ (Amazon.com)."
     )
     await update.message.reply_text(msg)
-    logger.info("[TG BOT] /clicks report sent.")
     logger.info("[TG BOT] /clicks report sent.")
 
 
@@ -3171,7 +3190,7 @@ def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str 
 
 _last_click_alerts: dict[str, float] = {}
 
-def notify_link_clicked(anime_name: str, title: str, today_count: int, source: str = "Pinterest"):
+def notify_link_clicked(anime_name: str, title: str, today_count: int, source: str = "Pinterest", country: str = ""):
     """
     Sends a notification to Telegram when a visitor clicks an affiliate link.
     Features:
@@ -3214,10 +3233,12 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int, source: s
     else:
         headline = f"🔔 Affiliate Link Clicked!"
 
+    loc_line = f"🌍 Location: {country_to_flag(country)} {country}\n" if country else ""
     text = (
         f"{headline}\n"
         f"{'─' * 28}\n"
         f"🎌 Anime : {anime_name or 'Anime'}\n"
+        f"{loc_line}"
         f"📝 Pin   : {title[:60]}\n"
         f"🖱️ Clicks Today : {today_count}\n"
         f"Use /clicks to see all stats."
