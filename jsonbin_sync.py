@@ -186,15 +186,21 @@ def build_state_payload() -> tuple[dict, int]:
         ]
         # Analytics, Revenue, A/B Testing, Evolved Keywords & Logs (compact slices for Render Free Tier persistence)
         link_clicks = [
-            {"code": r[0], "anime_name": r[1], "title": r[2], "merchant": r[3] or "amazon", "clicked_at": r[4]}
+            {
+                "code": r[0], "anime_name": r[1], "title": r[2], "merchant": r[3] or "amazon",
+                "country": r[4] or "", "image_filename": r[5] or "", "clicked_at": r[6]
+            }
             for r in conn.execute(
-                "SELECT code, anime_name, title, merchant, clicked_at FROM link_clicks ORDER BY id DESC LIMIT 40"
+                "SELECT code, anime_name, title, merchant, country, image_filename, clicked_at FROM link_clicks ORDER BY id DESC LIMIT 40"
             ).fetchall()
         ]
         bridge_visits = [
-            {"code": r[0], "anime_name": r[1], "title": r[2], "is_pinterest": r[3] or 0, "visited_at": r[4]}
+            {
+                "code": r[0], "anime_name": r[1], "title": r[2], "country": r[3] or "",
+                "is_pinterest": r[4] or 0, "visited_at": r[5]
+            }
             for r in conn.execute(
-                "SELECT code, anime_name, title, is_pinterest, visited_at FROM bridge_visits ORDER BY id DESC LIMIT 40"
+                "SELECT code, anime_name, title, country, is_pinterest, visited_at FROM bridge_visits ORDER BY id DESC LIMIT 40"
             ).fetchall()
         ]
         ab_tests = [
@@ -606,17 +612,18 @@ def restore_db_from_cloud():
             # Restore append-only log tables when local DB is fresh (e.g., after Render restart)
             if state.get("link_clicks") and conn.execute("SELECT COUNT(*) FROM link_clicks").fetchone()[0] == 0:
                 conn.executemany(
-                    "INSERT INTO link_clicks (code, anime_name, title, merchant, clicked_at) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO link_clicks (code, anime_name, title, merchant, country, image_filename, clicked_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [(c.get("code",""), c.get("anime_name",""), c.get("title",""),
-                      c.get("merchant","amazon"), c.get("clicked_at") or "2000-01-01 00:00:00")
+                      c.get("merchant","amazon"), c.get("country",""), c.get("image_filename",""),
+                      c.get("clicked_at") or "2000-01-01 00:00:00")
                      for c in state["link_clicks"] if c.get("code")]
                 )
 
             if state.get("bridge_visits") and conn.execute("SELECT COUNT(*) FROM bridge_visits").fetchone()[0] == 0:
                 conn.executemany(
-                    "INSERT INTO bridge_visits (code, anime_name, title, is_pinterest, visited_at) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO bridge_visits (code, anime_name, title, country, is_pinterest, visited_at) VALUES (?, ?, ?, ?, ?, ?)",
                     [(v.get("code",""), v.get("anime_name",""), v.get("title",""),
-                      v.get("is_pinterest",0), v.get("visited_at") or "2000-01-01 00:00:00")
+                      v.get("country",""), v.get("is_pinterest",0), v.get("visited_at") or "2000-01-01 00:00:00")
                      for v in state["bridge_visits"] if v.get("code")]
                 )
 

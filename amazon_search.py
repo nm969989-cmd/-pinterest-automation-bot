@@ -500,6 +500,17 @@ def resolve_to_direct_link(link: str, anime_name: str = "", character_name: str 
     ):
         return link
 
+    # ── Step 0c: Smart Geo-Redirect Tracking Links (/r/<code>) ───────────────
+    # Preserves active bot redirect tracker links so Pinterest clicks route through
+    # Render for zero-latency Cloudflare country detection (India -> amazon.in, Global -> amazon.com)
+    # and real-time link click attribution.
+    if "/r/" in link and (
+        "onrender.com" in link.lower()
+        or "localhost" in link.lower()
+        or (APP_BASE_URL and APP_BASE_URL.lower() in link.lower())
+    ):
+        return link
+
     # ── Step 1: Tracker redirect → look up the real target Amazon URL ───────
     if "/r/" in link:
         try:

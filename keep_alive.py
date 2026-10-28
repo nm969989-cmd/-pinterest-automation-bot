@@ -179,8 +179,14 @@ def redirect_link(code):
                 # Amazon US / Global in $ USD
                 dest = target_amazon_url or f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag_us}&sort=review-rank"
                 if "/r/" in dest:
-                    from amazon_search import resolve_to_direct_link
-                    dest = resolve_to_direct_link(dest, anime_name=anime_name, title=title)
+                    from database import get_tracked_target_url
+                    dest = get_tracked_target_url(dest)
+                if "/r/" in dest:
+                    # Final safety: if still contains /r/, construct direct Amazon search URL
+                    clean_anime = anime_name if anime_name and anime_name.lower() != "anime" else (title[:30] if title else "anime merchandise")
+                    import urllib.parse
+                    encoded = urllib.parse.quote_plus(f"{clean_anime} merchandise poster figure".strip())
+                    dest = f"https://www.amazon.com/s?k={encoded}&tag={tag_us}&sort=review-rank"
                 return redirect(dest, code=302)
 
     except Exception as e:
