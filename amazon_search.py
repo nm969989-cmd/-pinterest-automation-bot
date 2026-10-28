@@ -33,7 +33,7 @@ _DEAD_ASINS = {
 }
 
 # ── Safe Fallback ASINs ───────────────────────────────────────────────────────
-# Verified live Amazon India anime product ASINs used when ASIN scraping fails.
+# Verified live Amazon US anime product ASINs used when ASIN scraping fails.
 # Pinterest REQUIRES a direct /dp/ASIN link — search URLs (/s?k=) are rejected
 # by Pinterest's crawler with error 2786 "Unable to reach the URL".
 # Rotate through these so pins don't all point to the same product.
@@ -193,10 +193,12 @@ def _build_deep_link(asin: str) -> str:
     with the affiliate tag attached — lands on the exact product page
     with 'Buy Now' / 'Add to Cart' button, not a search results page.
 
-    e.g. https://www.amazon.in/dp/B08XYZ1234?tag=yourtag-21
+    Uses amazon.com (NOT amazon.in) — Pinterest traffic is ~80% US/UK/Canada/Europe.
+    amazon.in shows "can't ship to your location" for non-India users.
+    e.g. https://www.amazon.com/dp/B08XYZ1234?tag=animeasthet-20
     """
     return (
-        f"https://www.amazon.in/dp/{asin}"
+        f"https://www.amazon.com/dp/{asin}"
         f"?tag={AMAZON_AFFILIATE_TAG}"
         f"&linkCode=ogi&th=1&psc=1"
     )
@@ -241,14 +243,14 @@ def _fetch_first_asin(search_query: str, anime_name: str = "", character_name: s
     # ── Priority 2: HTML scraper with relevance & dead ASIN validation ───────
     if search_query:
         encoded_query = urllib.parse.quote(search_query)
-        search_url = f"https://www.amazon.in/s?k={encoded_query}"
+        search_url = f"https://www.amazon.com/s?k={encoded_query}&i=toys"
 
         headers = {
             "User-Agent": random.choice(_USER_AGENTS),
-            "Accept-Language": "en-IN,en;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
-            "Referer": "https://www.amazon.in/",
+            "Referer": "https://www.amazon.com/",
         }
 
         try:
@@ -449,12 +451,12 @@ def generate_amazon_link(anime_name: str, character_name: str = "", title: str =
 
 def is_direct_product_link(url: str) -> bool:
     """
-    Returns True only if `url` is an Amazon.in /dp/ASIN direct product link
-    AND not a known dead/broken ASIN.
+    Returns True only if `url` is an Amazon /dp/ASIN direct product link
+    (amazon.com OR amazon.in) AND not a known dead/broken ASIN.
     """
     if not url or not url.startswith("http"):
         return False
-    if "amazon.in/dp/" in url:
+    if "amazon.com/dp/" in url or "amazon.in/dp/" in url:
         asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
         if asin_match:
             asin = asin_match.group(1)

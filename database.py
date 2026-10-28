@@ -157,14 +157,16 @@ def init_db():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS link_clicks (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                code        TEXT,
-                anime_name  TEXT,
-                title       TEXT,
-                user_agent  TEXT,
-                referrer    TEXT,
-                merchant    TEXT DEFAULT 'amazon',
-                clicked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                code           TEXT,
+                anime_name     TEXT,
+                title          TEXT,
+                user_agent     TEXT,
+                referrer       TEXT,
+                merchant       TEXT DEFAULT 'amazon',
+                image_url      TEXT DEFAULT '',
+                image_filename TEXT DEFAULT '',
+                clicked_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -176,11 +178,12 @@ def init_db():
             except Exception:
                 pass
 
-        # Add merchant to link_clicks if upgrading from older schema
-        try:
-            conn.execute("ALTER TABLE link_clicks ADD COLUMN merchant TEXT DEFAULT 'amazon'")
-        except Exception:
-            pass
+        # Add new columns to link_clicks if upgrading from older schema
+        for col in ["merchant TEXT DEFAULT 'amazon'", "image_url TEXT DEFAULT ''", "image_filename TEXT DEFAULT ''"]:
+            try:
+                conn.execute(f"ALTER TABLE link_clicks ADD COLUMN {col}")
+            except Exception:
+                pass
 
         # ── Stock Uploads Tracking Table ─────────────────────────────────────
         conn.execute("""
@@ -2048,7 +2051,7 @@ def get_tracked_link_data(code: str) -> dict:
     Supports stateless ASIN self-healing if code was not found in DB.
     """
     from config import AMAZON_AFFILIATE_TAG
-    tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+    tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
 
     with _get_conn() as conn:
         row = conn.execute("""
@@ -2070,7 +2073,7 @@ def get_tracked_link_data(code: str) -> dict:
         asin = code
 
     if asin:
-        direct_product_url = f"https://www.amazon.in/dp/{asin}?tag={tag}&linkCode=ogi&th=1&psc=1"
+        direct_product_url = f"https://www.amazon.com/dp/{asin}?tag={tag}&linkCode=ogi&th=1&psc=1"
         return {
             "target_url": direct_product_url,
             "anime_name": "Anime",
@@ -2078,7 +2081,7 @@ def get_tracked_link_data(code: str) -> dict:
             "image_url":  "",
         }
 
-    fallback_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+    fallback_url = f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
     return {
         "target_url": fallback_url,
         "anime_name": "Anime",
@@ -2094,7 +2097,7 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "", merch
     """
     import re
     from config import AMAZON_AFFILIATE_TAG
-    tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+    tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
 
     with _get_conn() as conn:
         row = conn.execute("""
@@ -2119,7 +2122,7 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "", merch
 
         if asin:
             direct_product_url = (
-                f"https://www.amazon.in/dp/{asin}"
+                f"https://www.amazon.com/dp/{asin}"
                 f"?tag={tag}&linkCode=ogi&th=1&psc=1"
             )
             logger.info(f"[DB] Reconstructed stateless product link for ASIN: {asin}")
@@ -2139,7 +2142,7 @@ def record_link_click(code: str, user_agent: str = "", referrer: str = "", merch
 
         # Best-in-class fallback: clean anime merchandise search (NO broken category node)
         fallback_url = (
-            f"https://www.amazon.in/s?k=anime+merchandise+poster+figure"
+            f"https://www.amazon.com/s?k=anime+merchandise+poster+figure"
             f"&tag={tag}&sort=review-rank"
         )
         return fallback_url, "Anime", "Anime Merch"
@@ -2209,11 +2212,15 @@ def get_click_stats() -> dict:
         """).fetchall()
         by_merchant = {r[0]: r[1] for r in total_merchant_rows}
 
-    # Calculate estimated conversions based on standard e-commerce metrics (2-4% CR, ₹35-80 avg commission)
+    # Calculate estimated conversions -- Amazon.com US program:
+    # ~2-5% conversion rate, avg $1.50-$3.50 commission per order (3% on $50 anime merch)
     est_orders_min = max(0, int(week_clicks * 0.02))
     est_orders_max = max(1 if week_clicks >= 5 else 0, int(week_clicks * 0.05))
-    est_revenue_min = est_orders_min * 35
-    est_revenue_max = est_orders_max * 95
+    est_revenue_usd_min = round(est_orders_min * 1.5, 2)
+    est_revenue_usd_max = round(est_orders_max * 3.5, 2)
+    # INR reference (1 USD ~ 84 INR)
+    est_revenue_min = int(est_revenue_usd_min * 84)
+    est_revenue_max = int(est_revenue_usd_max * 84)
 
     return {
         "today": today_clicks,
@@ -2223,8 +2230,11 @@ def get_click_stats() -> dict:
         "by_merchant": by_merchant,
         "top_anime": [(r[0], r[1]) for r in top_anime],
         "top_pins": [(r[0], r[1], r[2]) for r in top_pins],
+        "top_images": [(r[0], r[1], r[2], r[3]) for r in top_images],
         "est_orders_min": est_orders_min,
         "est_orders_max": est_orders_max,
+        "est_revenue_usd_min": est_revenue_usd_min,
+        "est_revenue_usd_max": est_revenue_usd_max,
         "est_revenue_min": est_revenue_min,
         "est_revenue_max": est_revenue_max,
     }

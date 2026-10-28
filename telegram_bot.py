@@ -646,7 +646,16 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         top_pins_lines.append(f"  • [{anime}] {title[:40]} ({cnt} clicks)")
     top_pins_str = "\n".join(top_pins_lines) if top_pins_lines else "  No pin click data yet."
 
-    est_rev = f"₹{cstats['est_revenue_min']} - ₹{cstats['est_revenue_max']}"
+    top_images_lines = []
+    for i, (img_fn, anime, title, cnt) in enumerate(cstats.get("top_images", []), 1):
+        display = img_fn[:35] if img_fn else (title[:35] if title else 'Unknown')
+        top_images_lines.append(f"  {i}. {display} ({cnt} clicks)")
+    top_images_str = "\n".join(top_images_lines) if top_images_lines else "  No image click data yet."
+
+    # Use USD revenue for amazon.com US program
+    usd_min = cstats.get('est_revenue_usd_min', round(cstats['est_revenue_min'] / 84, 2))
+    usd_max = cstats.get('est_revenue_usd_max', round(cstats['est_revenue_max'] / 84, 2))
+    est_rev = f"$${usd_min:.2f} - $${usd_max:.2f} (~u20b9{cstats['est_revenue_min']}-u20b9{cstats['est_revenue_max']} INR)"
     est_orders = f"{cstats['est_orders_min']} - {cstats['est_orders_max']} items"
 
     tbm = cstats.get("today_by_merchant", {})
@@ -659,23 +668,25 @@ async def cmd_clicks(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     by_m_str = ""
     if by_m:
         by_m_parts = [f"  • {m.capitalize()}: {cnt} click(s)" for m, cnt in by_m.items()]
-        by_m_str = f"\n\n🏪 Clicks by Merchant (All-Time):\n" + "\n".join(by_m_parts)
+        by_m_str = f"\n\nu1f3ea Clicks by Merchant (All-Time):\n" + "\n".join(by_m_parts)
 
     msg = (
-        f"📊 Affiliate Clicks & Earnings Report\n"
-        f"{'═' * 30}\n"
-        f"🖱️ Clicks Today    : {cstats['today']}{tbm_str}\n"
-        f"📈 Clicks This Week : {cstats['week']}\n"
-        f"🌐 All-Time Clicks  : {cstats['total']}"
+        f"u1f4ca Affiliate Clicks & Earnings Report\n"
+        f"{'u2550' * 30}\n"
+        f"u1f5b1ufe0f Clicks Today    : {cstats['today']}{tbm_str}\n"
+        f"u1f4c8 Clicks This Week : {cstats['week']}\n"
+        f"u1f310 All-Time Clicks  : {cstats['total']}"
         f"{by_m_str}\n\n"
-        f"💰 Estimated Performance (7 Days):\n"
+        f"u1f4b0 Estimated Performance (7 Days):\n"
         f"  • Estimated Orders  : {est_orders}\n"
         f"  • Estimated Revenue : {est_rev}\n\n"
-        f"🎌 Top Clicked Anime:\n{top_anime_str}\n\n"
-        f"🔥 Top Clicked Pins:\n{top_pins_str}\n\n"
-        f"💡 Note: Actual confirmed purchases and payout balance are finalized on respective affiliate portals (Amazon / Displate)."
+        f"u1f3cc Top Clicked Anime:\n{top_anime_str}\n\n"
+        f"u1f525 Top Clicked Pins:\n{top_pins_str}\n\n"
+        f"u1f5bcufe0f Top Clicked Images:\n{top_images_str}\n\n"
+        f"u1f4a1 Note: Actual confirmed purchases and payout balance are finalized on respective affiliate portals (Amazon.com US / Displate)."
     )
     await update.message.reply_text(msg)
+    logger.info("[TG BOT] /clicks report sent.")
     logger.info("[TG BOT] /clicks report sent.")
 
 

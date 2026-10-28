@@ -142,9 +142,9 @@ def redirect_link(code):
 
     except Exception as e:
         from config import AMAZON_AFFILIATE_TAG
-        tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
+        tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
         return redirect(
-            f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank",
+            f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank",
             code=302
         )
 
@@ -174,8 +174,8 @@ def bridge_page(code):
 
     if not target_amazon_url:
         from config import AMAZON_AFFILIATE_TAG
-        tag = AMAZON_AFFILIATE_TAG or "animeasthet06-21"
-        target_amazon_url = f"https://www.amazon.in/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
+        tag = AMAZON_AFFILIATE_TAG or "animeasthet-20"
+        target_amazon_url = f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag}&sort=review-rank"
     else:
         # Pre-resolve / heal Amazon product link before rendering showcase buttons
         try:
@@ -415,7 +415,7 @@ def bridge_page(code):
         <a class="btn-option btn-amazon" href="{amazon_cta}" rel="sponsored noopener" target="_blank">
           <span class="icon">🛒</span>
           <span class="btn-text">
-            <span class="btn-title">Shop on Amazon India</span>
+            <span class="btn-title">Shop on Amazon</span>
             <span class="btn-sub">Figures, Nendoroids, Manga &amp; Collectibles</span>
           </span>
         </a>
