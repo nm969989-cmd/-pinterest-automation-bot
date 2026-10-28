@@ -30,6 +30,17 @@ def _get_ist_now() -> datetime.datetime:
     return datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
 
 
+def _country_flag(code: str) -> str:
+    """Converts 2-letter ISO country code to emoji flag."""
+    if not code or len(code) != 2:
+        return "🌍"
+    try:
+        code = code.upper()
+        return chr(ord(code[0]) + 127397) + chr(ord(code[1]) + 127397)
+    except Exception:
+        return "🌍"
+
+
 def build_daily_digest_message(date_str: str = None) -> str:
     """
     Assembles a comprehensive, clean Markdown performance report from
@@ -86,17 +97,42 @@ def build_daily_digest_message(date_str: str = None) -> str:
             top_performer_text += f", {p_vis} from Pinterest"
         top_performer_text += ")"
     today_merch_breakdown = ""
+    today_countries_str = ""
+    est_rev_str = ""
+    top_image_str = ""
     try:
         from database import get_click_stats
         c_stats = get_click_stats()
         tbm = c_stats.get("today_by_merchant", {})
         if tbm and sum(tbm.values()) > 0:
             parts = []
-            if tbm.get("amazon"): parts.append(f"🛒 {tbm['amazon']} Amazon")
+            if tbm.get("amazon_in"): parts.append(f"🇮🇳 {tbm['amazon_in']} Amazon IN")
+            elif tbm.get("amazon"): parts.append(f"🛒 {tbm['amazon']} Amazon")
+            if tbm.get("amazon_us"): parts.append(f"🇺🇸 {tbm['amazon_us']} Amazon US")
             if tbm.get("displate"): parts.append(f"🖼️ {tbm['displate']} Displate")
             if tbm.get("wallpaper"): parts.append(f"📱 {tbm['wallpaper']} Wallpaper")
             if parts:
                 today_merch_breakdown = f" ({' | '.join(parts)})"
+
+        # Top Countries Breakdown
+        tc = c_stats.get("top_countries", [])
+        if tc:
+            tc_parts = [f"{_country_flag(c[0])} {c[0]} ({c[1]})" for c in tc[:4] if c[0]]
+            if tc_parts:
+                today_countries_str = " · ".join(tc_parts)
+
+        # Dual-Currency Revenue
+        usd_min = c_stats.get('est_revenue_usd_min', 0.0)
+        usd_max = c_stats.get('est_revenue_usd_max', 0.0)
+        inr_min = c_stats.get('est_revenue_min', 0)
+        inr_max = c_stats.get('est_revenue_max', 0)
+        if usd_max > 0:
+            est_rev_str = f"${usd_min:.2f} - ${usd_max:.2f} USD (~₹{inr_min} - ₹{inr_max} INR)"
+
+        # Top Artwork
+        ti = c_stats.get("top_images", [])
+        if ti and ti[0][0]:
+            top_image_str = f"{ti[0][0][:30]} ({ti[0][3]} clicks)"
 
         if not top_anime_list and c_stats.get("top_anime"):
             c_name, c_cnt = c_stats["top_anime"][0]
@@ -148,7 +184,7 @@ def build_daily_digest_message(date_str: str = None) -> str:
     if dead_letter > 0:
         lines.append(f"  • ⚠️ Dead-Letter (Failed): *{dead_letter}* pins")
 
-    lines.extend([
+    funnel_lines = [
         "",
         "🌐 *Traffic & Affiliate Funnel*",
         f"  • Bridge Page Visits: *{today_visits}* today",
@@ -156,7 +192,12 @@ def build_daily_digest_message(date_str: str = None) -> str:
         f"  • Affiliate Clicks: *{today_clicks}* today{today_merch_breakdown}",
         f"  • Daily CTR: *{today_ctr}%* 🎯",
         f"  • 7-Day Funnel: {bridge_total_7d} visits → {clicks_7d} clicks ({ctr_7d}% CTR)",
-    ])
+    ]
+    if est_rev_str:
+        funnel_lines.append(f"  • Est. 7-Day Revenue: *{est_rev_str}* 💰")
+    if today_countries_str:
+        funnel_lines.append(f"  • Top Visitor Countries: *{today_countries_str}* 🌍")
+    lines.extend(funnel_lines)
 
     try:
         from database import get_backlink_stats
@@ -166,10 +207,16 @@ def build_daily_digest_message(date_str: str = None) -> str:
     except Exception:
         pass
 
-    lines.extend([
+    top_content_lines = [
         "",
         "🏆 *Top Content*",
         f"  • {top_performer_text}",
+    ]
+    if top_image_str:
+        top_content_lines.append(f"  • Top Artwork: *{top_image_str}* 🖼️")
+    lines.extend(top_content_lines)
+
+    lines.extend([
         "",
         "🛡️ *Render Free-Tier Health*",
         f"  • RAM: *{mem_mb} MB* / 512 MB ({mem_pct}%) {mem_status}",
