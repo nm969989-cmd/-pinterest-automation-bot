@@ -442,6 +442,7 @@ class PinScheduler:
                             wallhaven_ok=None, wallhaven_url: str = "",
                             deviantart_ok=None, deviantart_url: str = "",
                             imgbb_ok=None, imgbb_url: str = "",
+                            imagekit_ok=None, imagekit_url: str = "",
                             pin_live: bool = True,
                             image_url: str = ""):
         """
@@ -486,6 +487,8 @@ class PinScheduler:
                 deviantart_url=deviantart_url,
                 imgbb_ok=imgbb_ok,
                 imgbb_url=imgbb_url,
+                imagekit_ok=imagekit_ok,
+                imagekit_url=imagekit_url,
                 pin_live=pin_live,
                 image_url=image_url,
             )
@@ -1044,6 +1047,8 @@ class PinScheduler:
                                             deviantart_url=cp_res.get("deviantart_url", ""),
                                             imgbb_ok=cp_res.get("imgbb_ok"),
                                             imgbb_url=cp_res.get("imgbb_url", ""),
+                                            imagekit_ok=cp_res.get("imagekit_ok"),
+                                            imagekit_url=cp_res.get("imagekit_url", ""),
                                         )
                                     except Exception as _notify_err:
                                         # Keep the posting slot (and stock dispatch below)

@@ -30,8 +30,8 @@ from circuit_breaker import is_cooling_down, trip_breaker
 logger = get_logger(__name__)
 
 # Maximum workers for parallel crossposting.
-# 9 platforms — one thread each. Bounded to avoid overwhelming the network.
-_MAX_CROSSPOST_WORKERS = 10
+# 11 platforms — one thread each. Bounded to avoid overwhelming the network.
+_MAX_CROSSPOST_WORKERS = 11
 
 
 def _check_breaker(platform: str, results: dict) -> bool:
@@ -347,6 +347,31 @@ def _post_imgbb(filename, title, anime_name, link, public_img_url, original_imag
         _handle_platform_error("imgbb", e)
         return False, ""
 
+
+def _post_imagekit(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
+    """Post to ImageKit — returns (ok, url)."""
+    if not getattr(config, "IMAGEKIT_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("imagekit", results):
+        return results.get("imagekit_ok"), results.get("imagekit_url", "")
+    try:
+        from imagekit_uploader import post_to_imagekit
+        from database import mark_imagekit_posted, is_imagekit_posted
+        profile_url = getattr(config, "IMAGEKIT_URL_ENDPOINT", "https://ik.imagekit.io/zno3dgy8z")
+        target_img = image_path if (image_path and os.path.exists(image_path)) else (public_img_url or original_image_url)
+        if not is_imagekit_posted(filename):
+            ik_url = post_to_imagekit(image_path=target_img, title=title, anime_name=anime_name, affiliate_url=link)
+            if ik_url:
+                mark_imagekit_posted(filename, post_url=ik_url, title=title, image_url=public_img_url or original_image_url)
+                return True, ik_url
+            return False, profile_url
+        return True, profile_url
+    except Exception as e:
+        logger.warning(f"[Crosspost] ImageKit error: {e}")
+        _handle_platform_error("imagekit", e)
+        return False, ""
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> dict:
@@ -439,6 +464,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "wallhaven_ok": None, "wallhaven_url": "",
         "deviantart_ok": None,"deviantart_url": "",
         "imgbb_ok": None,     "imgbb_url": "",
+        "imagekit_ok": None,  "imagekit_url": "",
     }
 
     # ── 2. Parallel platform posts ────────────────────────────────────────────
@@ -469,6 +495,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         platform_tasks["deviantart"] = lambda: _post_deviantart(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
     if getattr(config, "IMGBB_ENABLED", False):
         platform_tasks["imgbb"] = lambda: _post_imgbb(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
+    if getattr(config, "IMAGEKIT_ENABLED", False):
+        platform_tasks["imagekit"] = lambda: _post_imagekit(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
 
     if platform_tasks:
         with ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost") as executor:

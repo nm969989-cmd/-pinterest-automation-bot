@@ -156,6 +156,7 @@ def get_post_confirmation_keyboard(
     wallhaven_url: str = "",
     deviantart_url: str = "",
     imgbb_url: str = "",
+    imagekit_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
     if not _TG_AVAILABLE:
@@ -251,6 +252,13 @@ def get_post_confirmation_keyboard(
             btn_txt = "🖼️ View on ImgBB" if (imgbb_url and "ibb.co" in imgbb_url and imgbb_url != fallback_ibb) else "🖼️ ImgBB Gallery"
             if _is_valid_http_url(ibb_link):
                 platform_btns.append(InlineKeyboardButton(btn_txt, url=ibb_link))
+
+        if getattr(config, "IMAGEKIT_ENABLED", False):
+            fallback_ik = getattr(config, "IMAGEKIT_URL_ENDPOINT", "https://ik.imagekit.io/zno3dgy8z")
+            ik_link = imagekit_url if _is_valid_http_url(imagekit_url) else fallback_ik
+            btn_txt = "🖼️ View on ImageKit" if (imagekit_url and "ik.imagekit.io" in imagekit_url and imagekit_url != fallback_ik) else "🖼️ ImageKit CDN"
+            if _is_valid_http_url(ik_link):
+                platform_btns.append(InlineKeyboardButton(btn_txt, url=ik_link))
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -1353,7 +1361,7 @@ async def _send_daily_report(chat_id):
             get_arena_stats, get_bluesky_stats,
             get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats,
             get_freeimage_stats, get_imghippo_stats, get_deviantart_stats,
-            get_imgbb_stats, get_wallhaven_stats,
+            get_imgbb_stats, get_imagekit_stats, get_wallhaven_stats,
             get_click_stats
         )
         import config
@@ -1383,6 +1391,7 @@ async def _send_daily_report(chat_id):
         imghippo_st    = get_imghippo_stats(today_ist_str)
         deviantart_st  = get_deviantart_stats(today_ist_str)
         imgbb_st       = get_imgbb_stats(today_ist_str)
+        imagekit_st    = get_imagekit_stats(today_ist_str)
         wallhaven_st   = get_wallhaven_stats(today_ist_str)
 
         # Click & earnings stats
@@ -1409,6 +1418,7 @@ async def _send_daily_report(chat_id):
         imghippo_badge  = "🟢 ON" if getattr(config, "IMGHIPPO_ENABLED", False) else "⚪ OFF"
         deviantart_badge = "🟢 ON" if getattr(config, "DEVIANTART_ENABLED", False) else "⚪ OFF"
         imgbb_badge      = "🟢 ON" if getattr(config, "IMGBB_ENABLED", False) else "⚪ OFF"
+        imagekit_badge   = "🟢 ON" if getattr(config, "IMAGEKIT_ENABLED", False) else "⚪ OFF"
         wallhaven_badge  = "🟢 ON" if getattr(config, "WALLHAVEN_ENABLED", False) else "⚪ OFF" 
 
         summary_section = (
@@ -1424,6 +1434,7 @@ async def _send_daily_report(chat_id):
             f"  🦛 Imghippo  : {imghippo_st['today']} today  |  {imghippo_st['total']} all-time  ({imghippo_badge})\n"
             f"  🎨 DeviantArt: {deviantart_st['today']} today  |  {deviantart_st['total']} all-time  ({deviantart_badge})\n"
             f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n"
+            f"  🖼️ ImageKit  : {imagekit_st['today']} today  |  {imagekit_st['total']} all-time  ({imagekit_badge})\n"
             f"  🌌 Wallhaven : {wallhaven_st['today']} today  |  {wallhaven_st['total']} all-time  ({wallhaven_badge})\n\n"
         )
 
@@ -1469,6 +1480,8 @@ async def _send_daily_report(chat_id):
             crosspost_section += "  • DeviantArt: https://www.deviantart.com/muthelyrics\n"
         if getattr(config, "IMGBB_ENABLED", False):
             crosspost_section += "  • ImgBB: https://muthelyrics.imgbb.com/\n"
+        if getattr(config, "IMAGEKIT_ENABLED", False):
+            crosspost_section += "  • ImageKit: https://ik.imagekit.io/zno3dgy8z\n"
         if getattr(config, "WALLHAVEN_ENABLED", False):
             crosspost_section += "  • Wallhaven: https://wallhaven.cc/user/animizing\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
@@ -3489,6 +3502,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              wallhaven_ok=None, wallhaven_url: str = "",
                              deviantart_ok=None, deviantart_url: str = "",
                              imgbb_ok=None, imgbb_url: str = "",
+                             imagekit_ok=None, imagekit_url: str = "",
                              pin_live: bool = True,
                              image_url: str = ""):
     """
@@ -3548,6 +3562,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         active_items.append(f"🎨 DeviantArt {_platform_icon(deviantart_ok)}")
     if getattr(config, "IMGBB_ENABLED", False):
         active_items.append(f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}")
+    if getattr(config, "IMAGEKIT_ENABLED", False):
+        active_items.append(f"🖼️ ImageKit {_platform_icon(imagekit_ok)}")
 
     cross_lines = ""
     if active_items:
@@ -3596,6 +3612,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         wallhaven_url=wallhaven_url,
         deviantart_url=deviantart_url,
         imgbb_url=imgbb_url,
+        imagekit_url=imagekit_url,
     )
 
     async def _send():
@@ -4027,6 +4044,15 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         from database import get_imgbb_stats
         imgbb_st = get_imgbb_stats(today_str)
 
+        # ImageKit status
+        imagekit_status = "DISABLED (IMAGEKIT_ENABLED=false)"
+        from config import IMAGEKIT_ENABLED
+        if IMAGEKIT_ENABLED:
+            from imagekit_uploader import verify_imagekit_token
+            imagekit_status = "🟢 ACTIVE (Mumbai CDN Connected)" if verify_imagekit_token() else "🔴 KEY ERROR"
+        from database import get_imagekit_stats
+        imagekit_st = get_imagekit_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -4077,6 +4103,10 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {imgbb_status}\n"
             f"  • Posts: {imgbb_st['today']} today  |  {imgbb_st['total']} all-time\n"
             f"  • Link: https://muthelyrics.imgbb.com/\n\n"
+            f"🖼️ ImageKit.io:\n"
+            f"  • Status: {imagekit_status}\n"
+            f"  • Posts: {imagekit_st['today']} today  |  {imagekit_st['total']} all-time\n"
+            f"  • CDN Endpoint: https://ik.imagekit.io/zno3dgy8z\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /wallhaven — Wallhaven account stats & link\n"
@@ -4163,6 +4193,43 @@ async def cmd_imgbb(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         logger.error(f"[TG BOT] cmd_imgbb error: {e}", exc_info=True)
         await update.message.reply_text(f"ImgBB error: {e}")
+
+
+async def cmd_imagekit(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show ImageKit CDN status and stats."""
+    if not _is_admin(update): return
+    try:
+        from config import IMAGEKIT_ENABLED, IMAGEKIT_URL_ENDPOINT
+        from imagekit_uploader import verify_imagekit_token, get_imagekit_info
+        from database import get_imagekit_stats
+        
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+        
+        enabled_str = "🟢 ENABLED" if IMAGEKIT_ENABLED else "🔴 DISABLED"
+        valid = verify_imagekit_token()
+        status_str = "🟢 Active (Mumbai CDN Connected)" if valid else "🔴 API Key Error"
+        
+        stats = get_imagekit_stats(today_str)
+        today_cnt = stats.get("today", 0)
+        total_cnt = stats.get("total", 0)
+        info = get_imagekit_info()
+        
+        msg = (
+            f"🖼️ ImageKit.io Status: {enabled_str}\n"
+            f"{'═' * 30}\n"
+            f"• Auth Status : {status_str}\n"
+            f"• Today Posts : {today_cnt}\n"
+            f"• Total Posts : {total_cnt}\n"
+            f"• Public Key  : {info.get('public_key_masked')}\n"
+            f"• Private Key : {info.get('private_key_masked')}\n"
+            f"• CDN Endpoint: {info.get('url_endpoint')}\n"
+            f"• Region      : Mumbai (India) 🇮🇳\n"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imagekit error: {e}", exc_info=True)
+        await update.message.reply_text(f"ImageKit error: {e}")
 
 
 async def cmd_bluesky(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -5054,6 +5121,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("reviver",            cmd_revive),
             ("deviantart",         cmd_deviantart),
             ("imgbb",              cmd_imgbb),
+            ("imagekit",           cmd_imagekit),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
@@ -5131,6 +5199,9 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("imghippo_test", "Post test photo to Imghippo"),
                 BotCommand("wallhaven",     "Wallhaven profile & collection stats"),
                 BotCommand("wallhaven_search", "Search 4K anime wallpapers on Wallhaven"),
+                BotCommand("deviantart",    "DeviantArt profile & stash status"),
+                BotCommand("imgbb",         "ImgBB gallery & API status"),
+                BotCommand("imagekit",      "ImageKit CDN gallery & status"),
                 BotCommand("verify_public",      "🔍 Check if a Pinterest pin is visible to the public"),
                 BotCommand("bridge_url",          "🌉 Get bridge landing page URL for a pin code"),
                 BotCommand("pinanalytics",        "📈 Pinterest impressions, saves & clicks report"),

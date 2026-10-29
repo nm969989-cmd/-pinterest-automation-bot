@@ -119,6 +119,12 @@ IMGBB_ENABLED          = os.getenv('IMGBB_ENABLED', 'true').lower() in ('true', 
 IMGHIPPO_API_KEY       = os.getenv('IMGHIPPO_API_KEY', '').strip()
 IMGHIPPO_ENABLED       = os.getenv('IMGHIPPO_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(IMGHIPPO_API_KEY)
 
+# ImageKit.io Global CDN & Media Storage (Mumbai, India)
+IMAGEKIT_PUBLIC_KEY    = os.getenv('IMAGEKIT_PUBLIC_KEY', 'public_rp+18TLVQhsYO9qQnXiMxcTDi2c=').strip()
+IMAGEKIT_PRIVATE_KEY   = os.getenv('IMAGEKIT_PRIVATE_KEY', 'private_PrpAMecPmUx1IQDvZ0bNzg2s+8I=').strip()
+IMAGEKIT_URL_ENDPOINT  = os.getenv('IMAGEKIT_URL_ENDPOINT', 'https://ik.imagekit.io/zno3dgy8z').strip().rstrip('/')
+IMAGEKIT_ENABLED       = os.getenv('IMAGEKIT_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMAGEKIT_PRIVATE_KEY)
+
 # Wallhaven.cc Anime Wallpaper Platform
 WALLHAVEN_API_KEY      = os.getenv('WALLHAVEN_API_KEY', '').strip()
 WALLHAVEN_USERNAME     = os.getenv('WALLHAVEN_USERNAME', 'animizing').strip()
