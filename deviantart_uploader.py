@@ -166,23 +166,26 @@ def post_to_deviantart(
     # Prepare local image file
     upload_file = ""
     is_temp = False
-    if image_path and os.path.exists(image_path):
+    if image_path and os.path.exists(image_path) and os.path.isfile(image_path):
         upload_file = image_path
-    elif image_url:
-        try:
-            logger.info(f"[DeviantArt] Downloading image from {image_url[:60]}...")
-            ir = requests.get(image_url, timeout=30)
-            if ir.status_code != 200:
-                logger.error(f"[DeviantArt] Failed to download image: HTTP {ir.status_code}")
+    else:
+        target_url = image_url or (image_path if (image_path and str(image_path).startswith(("http://", "https://"))) else "")
+        if target_url:
+            try:
+                logger.info(f"[DeviantArt] Downloading image from {target_url[:60]}...")
+                ir = requests.get(target_url, timeout=30)
+                if ir.status_code == 200 and len(ir.content) > 1000:
+                    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    tmp.write(ir.content)
+                    tmp.close()
+                    upload_file = tmp.name
+                    is_temp = True
+                else:
+                    logger.error(f"[DeviantArt] Failed to download image: HTTP {ir.status_code}")
+                    return False, ""
+            except Exception as e:
+                logger.error(f"[DeviantArt] Error downloading image: {e}")
                 return False, ""
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            tmp.write(ir.content)
-            tmp.close()
-            upload_file = tmp.name
-            is_temp = True
-        except Exception as e:
-            logger.error(f"[DeviantArt] Error downloading image: {e}")
-            return False, ""
 
     if not upload_file or not os.path.exists(upload_file):
         return False, ""
