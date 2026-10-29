@@ -251,6 +251,7 @@ def post_to_deviantart(
             # Step 2: Publish to public gallery
             publish_data = {
                 "itemid": itemid,
+                "is_mature": 0,
                 "agree_submission_policy": 1,
                 "agree_tos": 1,
             }

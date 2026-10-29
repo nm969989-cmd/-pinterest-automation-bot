@@ -334,8 +334,9 @@ def _post_imgbb(filename, title, anime_name, link, public_img_url, original_imag
         from imgbb_uploader import post_to_imgbb
         from database import mark_imgbb_posted, is_imgbb_posted
         profile_url = "https://muthelyrics.imgbb.com/"
+        target_img = image_path if (image_path and os.path.exists(image_path)) else (public_img_url or original_image_url)
         if not is_imgbb_posted(filename):
-            ibb_url = post_to_imgbb(image_path=image_path, title=title, anime_name=anime_name, affiliate_url=link)
+            ibb_url = post_to_imgbb(image_path=target_img, title=title, anime_name=anime_name, affiliate_url=link)
             if ibb_url:
                 mark_imgbb_posted(filename, post_url=ibb_url, title=title, image_url=public_img_url or original_image_url)
                 return True, ibb_url
