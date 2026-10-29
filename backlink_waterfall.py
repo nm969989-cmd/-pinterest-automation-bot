@@ -157,6 +157,18 @@ def format_waterfall_caption(
             arena_parts.append(f"Showcase & Prints: {resolved_bridge}")
         return "\n\n".join(arena_parts)
 
+    elif plat in ("deviantart", "da"):
+        da_parts = [title.strip()]
+        if clean_body and clean_body != title.strip():
+            da_parts.append(clean_body)
+        if resolved_pin_url:
+            da_parts.append(f"📌 View on Pinterest: {resolved_pin_url}")
+        if resolved_bridge and not is_stealth:
+            da_parts.append(f"🖼️ Download 4K HD Wallpaper & Merch: {resolved_bridge}")
+        if tags_str:
+            da_parts.append(tags_str)
+        return "\n\n".join(da_parts)
+
     # ── 5. General Fallback ───────────────────────────────────────────────────
     return clean_body
 
@@ -182,7 +194,7 @@ def record_waterfall_backlinks(
 
     platform_keys = [
         "bluesky", "mastodon", "raindrop", "arena",
-        "pixelfed", "wallhaven", "freeimage", "imghippo"
+        "pixelfed", "wallhaven", "freeimage", "imghippo", "deviantart"
     ]
 
     for plat in platform_keys:

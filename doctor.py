@@ -258,6 +258,16 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _hip_e:
         imghippo_status = f"🟡 Check failed ({_hip_e})"
 
+    # 18. DeviantArt Cross-Post Status
+    deviantart_status = "⚪ Disabled"
+    try:
+        if getattr(config, "DEVIANTART_ENABLED", False):
+            from deviantart_uploader import verify_deviantart_token
+            da_ok = verify_deviantart_token()
+            deviantart_status = "🟢 Active (@muthelyrics)" if da_ok else "🔴 Token Error"
+    except Exception as _da_e:
+        deviantart_status = f"🟡 Check failed ({_da_e})"
+
     # Watermark Cleaner & Inpainter Status (Zero Stock Rejections — lazy-checked to save 90MB RAM on Render)
     watermark_status = "⚪ Disabled"
     try:
@@ -314,6 +324,7 @@ def run_full_system_diagnostic() -> dict:
         "freeimage_status": freeimage_status,
         "wallhaven_status": wallhaven_status,
         "imghippo_status": imghippo_status,
+        "deviantart_status": deviantart_status,
         "watermark_status": watermark_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
         "all_cooldowns": all_cooldowns,
@@ -363,6 +374,8 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         integration_items.append(f"  • Pixelfed           : {diag.get('pixelfed_status', 'N/A')}")
     if getattr(config, "IMGHIPPO_ENABLED", False):
         integration_items.append(f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}")
+    if getattr(config, "DEVIANTART_ENABLED", False):
+        integration_items.append(f"  • DeviantArt         : {diag.get('deviantart_status', '🟢 Active')}")
 
     integration_items.append(f"  • Monitored Channels : {diag['monitored_channels']} channel(s)")
     integrations_block = "\n".join(integration_items)

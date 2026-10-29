@@ -30,8 +30,8 @@ from circuit_breaker import is_cooling_down, trip_breaker
 logger = get_logger(__name__)
 
 # Maximum workers for parallel crossposting.
-# 8 platforms — one thread each. Bounded to avoid overwhelming the network.
-_MAX_CROSSPOST_WORKERS = 8
+# 9 platforms — one thread each. Bounded to avoid overwhelming the network.
+_MAX_CROSSPOST_WORKERS = 9
 
 
 def _check_breaker(platform: str, results: dict) -> bool:
@@ -287,6 +287,41 @@ def _post_wallhaven(filename, title, anime_name, link, public_img_url, original_
         return False, ""
 
 
+def _post_deviantart(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url="", anime_name=""):
+    """Post to DeviantArt — returns (ok, url)."""
+    if not getattr(config, "DEVIANTART_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("deviantart", results):
+        return results.get("deviantart_ok"), results.get("deviantart_url", "")
+    try:
+        from deviantart_uploader import post_to_deviantart
+        from database import mark_deviantart_posted, is_deviantart_posted
+        profile_url = "https://www.deviantart.com/muthelyrics"
+        if not is_deviantart_posted(filename):
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                da_desc = format_waterfall_caption("deviantart", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                da_desc = description or title
+            ok, dev_url = post_to_deviantart(
+                image_url=public_img_url,
+                title=title,
+                description=da_desc,
+                link=link,
+                image_path=image_path
+            )
+            if ok:
+                mark_deviantart_posted(filename, post_url=dev_url, title=title, image_url=public_img_url)
+                return True, dev_url or profile_url
+            return False, profile_url
+        return True, profile_url
+    except Exception as e:
+        logger.warning(f"[Crosspost] DeviantArt error: {e}")
+        _handle_platform_error("deviantart", e)
+        return False, ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> dict:
@@ -377,6 +412,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "freeimage_ok": None, "freeimage_url": "",
         "imghippo_ok": None,  "imghippo_url": "",
         "wallhaven_ok": None, "wallhaven_url": "",
+        "deviantart_ok": None,"deviantart_url": "",
     }
 
     # ── 2. Parallel platform posts ────────────────────────────────────────────
@@ -403,6 +439,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         platform_tasks["pixelfed"] = lambda: _post_pixelfed(filename, title, description, link, public_img_url, original_image_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
     if getattr(config, "IMGHIPPO_ENABLED", False):
         platform_tasks["imghippo"] = lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
+    if getattr(config, "DEVIANTART_ENABLED", False):
+        platform_tasks["deviantart"] = lambda: _post_deviantart(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
 
     if platform_tasks:
         with ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost") as executor:

@@ -154,6 +154,7 @@ def get_post_confirmation_keyboard(
     freeimage_url: str = "",
     imghippo_url: str = "",
     wallhaven_url: str = "",
+    deviantart_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
     if not _TG_AVAILABLE:
@@ -235,6 +236,13 @@ def get_post_confirmation_keyboard(
             btn_txt = "🦛 View on Imghippo" if (imghippo_url and "/files/" in imghippo_url) else "🦛 Imghippo Gallery"
             if _is_valid_http_url(hippo_link):
                 platform_btns.append(InlineKeyboardButton(btn_txt, url=hippo_link))
+
+        if getattr(config, "DEVIANTART_ENABLED", False):
+            fallback_da = "https://www.deviantart.com/muthelyrics"
+            da_link = deviantart_url if _is_valid_http_url(deviantart_url) else fallback_da
+            btn_txt = "🎨 View on DeviantArt" if (deviantart_url and "deviantart.com" in deviantart_url and deviantart_url != fallback_da) else "🎨 DeviantArt Gallery"
+            if _is_valid_http_url(da_link):
+                platform_btns.append(InlineKeyboardButton(btn_txt, url=da_link))
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -3455,6 +3463,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              freeimage_ok=None, freeimage_url: str = "",
                              imghippo_ok=None, imghippo_url: str = "",
                              wallhaven_ok=None, wallhaven_url: str = "",
+                             deviantart_ok=None, deviantart_url: str = "",
                              pin_live: bool = True,
                              image_url: str = ""):
     """
@@ -3510,6 +3519,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         active_items.append(f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}")
     if getattr(config, "IMGHIPPO_ENABLED", False):
         active_items.append(f"🦛 Imghippo  {_platform_icon(imghippo_ok)}")
+    if getattr(config, "DEVIANTART_ENABLED", False):
+        active_items.append(f"🎨 DeviantArt {_platform_icon(deviantart_ok)}")
 
     cross_lines = ""
     if active_items:
@@ -3556,6 +3567,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         freeimage_url=freeimage_url,
         imghippo_url=imghippo_url,
         wallhaven_url=wallhaven_url,
+        deviantart_url=deviantart_url,
     )
 
     async def _send():
@@ -4028,6 +4040,40 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         logger.error(f"[TG BOT] cmd_crosspost error: {e}", exc_info=True)
         await update.message.reply_text(f"Cross-post status error: {e}")
+
+
+async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show DeviantArt gallery and token status."""
+    if not _is_admin(update): return
+    try:
+        from config import DEVIANTART_ENABLED, DEVIANTART_CLIENT_ID
+        from deviantart_uploader import verify_deviantart_token
+        from database import get_deviantart_stats
+        
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+        
+        enabled_str = "🟢 ENABLED" if DEVIANTART_ENABLED else "🔴 DISABLED"
+        valid = verify_deviantart_token()
+        status_str = "🟢 Token Active (Auth OK)" if valid else "🔴 Token Expired / Auth Error"
+        
+        stats = get_deviantart_stats(today_str)
+        today_cnt = stats.get("today", 0)
+        total_cnt = stats.get("total", 0)
+        
+        msg = (
+            f"🎨 DeviantArt Status: {enabled_str}\n"
+            f"{'═' * 30}\n"
+            f"• Auth Status : {status_str}\n"
+            f"• Client ID   : {DEVIANTART_CLIENT_ID}\n"
+            f"• Today Posts : {today_cnt}\n"
+            f"• Total Posts : {total_cnt}\n"
+            f"• Gallery URL : https://www.deviantart.com/muthelyrics\n"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_deviantart error: {e}", exc_info=True)
+        await update.message.reply_text(f"DeviantArt error: {e}")
 
 
 async def cmd_bluesky(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -4917,6 +4963,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("weeklyreport",       cmd_weekly),
             ("revive",             cmd_revive),
             ("reviver",            cmd_revive),
+            ("deviantart",         cmd_deviantart),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))

@@ -93,6 +93,13 @@ MASTODON_INSTANCE_URL  = os.getenv('MASTODON_INSTANCE_URL', 'https://mastodon.so
 MASTODON_ACCESS_TOKEN  = os.getenv('MASTODON_ACCESS_TOKEN', '').strip()
 MASTODON_ENABLED       = os.getenv('MASTODON_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(MASTODON_ACCESS_TOKEN)
 
+# DeviantArt Art Community Cross-Post
+DEVIANTART_CLIENT_ID     = os.getenv('DEVIANTART_CLIENT_ID', '77484').strip()
+DEVIANTART_CLIENT_SECRET = os.getenv('DEVIANTART_CLIENT_SECRET', '089b87f80b4640d6fe58a8275ca68e71').strip()
+DEVIANTART_ACCESS_TOKEN  = os.getenv('DEVIANTART_ACCESS_TOKEN', 'c0d40f46aff6a6836113f5554f74c5c3db6a63fb89f1ac68e0').strip()
+DEVIANTART_REFRESH_TOKEN = os.getenv('DEVIANTART_REFRESH_TOKEN', 'cc16c5efad76228067c7b4c2976702b0b004a5d0').strip()
+DEVIANTART_ENABLED       = os.getenv('DEVIANTART_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET)
+
 
 # Pixelfed (Fediverse) Photo & Visual Art Sharing
 PIXELFED_INSTANCE_URL  = os.getenv('PIXELFED_INSTANCE_URL', 'https://pixelfed.social').strip().rstrip('/')

@@ -408,6 +408,27 @@ def init_db():
             ON wallhaven_posts (filename)
         """)
 
+        # ── DeviantArt Cross-Post Tracking ──────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deviantart_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_url    TEXT,
+                itemid      INTEGER,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_deviantart_filename
+            ON deviantart_posts (filename)
+        """)
+        try:
+            conn.execute("ALTER TABLE deviantart_posts ADD COLUMN post_url TEXT DEFAULT ''")
+        except Exception:
+            pass
+
         # ── Bridge Visits Tracking (Analytics & Viral Radar) ─────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS bridge_visits (
@@ -792,6 +813,55 @@ def get_pixelfed_stats(today_str: str = None) -> dict:
     }
 
 
+def is_deviantart_posted(filename: str) -> bool:
+    """Returns True if this image was already posted to DeviantArt (prevents duplicates)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM deviantart_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_deviantart_posted(filename: str, post_url: str = "",
+                          title: str = "", image_url: str = "", itemid: int = 0) -> None:
+    """Records a successful DeviantArt post. Ignores duplicates (INSERT OR IGNORE)."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO deviantart_posts (filename, post_url, itemid, title, image_url)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (filename, post_url, itemid, title, image_url)
+        )
+        conn.commit()
+
+
+def get_deviantart_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time DeviantArt posting statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM deviantart_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM deviantart_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, post_url, posted_at
+            FROM deviantart_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ]
+    }
+
+
 def get_multi_platform_stats(today_str: str = None) -> dict:
     """Returns an aggregated snapshot of all platforms (Pinterest, Are.na, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, Imghippo)."""
     if not today_str:
@@ -808,6 +878,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
     freeimage_stats = get_freeimage_stats(today_str)
     imghippo_stats = get_imghippo_stats(today_str)
     wallhaven_stats = get_wallhaven_stats(today_str)
+    deviantart_stats = get_deviantart_stats(today_str)
 
     return {
         "date": today_str,
@@ -824,6 +895,7 @@ def get_multi_platform_stats(today_str: str = None) -> dict:
         "freeimage": freeimage_stats,
         "imghippo": imghippo_stats,
         "wallhaven": wallhaven_stats,
+        "deviantart": deviantart_stats,
     }
 
 
