@@ -279,6 +279,13 @@ def main():
     except Exception as _da_err:
         logger.warning(f"[Main] DeviantArt startup token verification failed: {_da_err}")
 
+    # 0c. Smart Auth Preflight: Auto-disable platforms with expired/unauthorized tokens (zero ❌ guarantee)
+    try:
+        from auth_preflight import run_auth_preflight
+        run_auth_preflight()
+    except Exception as _pf_err:
+        logger.warning(f"[Main] Auth preflight failed (non-critical): {_pf_err}")
+
     # 1. Start Flask web server (Keep-alive for Render)
     keep_alive()
     logger.info("Keep-alive server started on port 8080.")

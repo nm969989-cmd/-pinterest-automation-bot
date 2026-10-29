@@ -86,17 +86,22 @@ def _post_arena(filename, title, description, link, public_img_url, is_stealth, 
             except Exception:
                 arena_desc = format_platform_caption("general", title, description, link=link, is_stealth=is_stealth)
             ok = post_to_arena(image_url=public_img_url, title=title, description=arena_desc, link=link)
-            if ok:
-                mark_arena_posted(filename, title=title, image_url=public_img_url)
             slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
             url = f"https://www.are.na/channel/{slug}" if slug else "https://www.are.na/manoj-muthelyrics"
-            return bool(ok), url
+            if ok:
+                mark_arena_posted(filename, title=title, image_url=public_img_url)
+                return True, url
+            from circuit_breaker import is_cooling_down
+            cooling, reason, _ = is_cooling_down("arena")
+            if cooling or "401" in str(reason).lower():
+                return None, url
+            return False, url
         slug = getattr(config, "ARENA_CHANNEL_SLUG", "")
         return True, f"https://www.are.na/channel/{slug}" if slug else "https://www.are.na/manoj-muthelyrics"
     except Exception as e:
         logger.warning(f"[Crosspost] Are.na error: {e}")
         _handle_platform_error("arena", e)
-        return False, ""
+        return (None if "401" in str(e).lower() else False), ""
 
 
 def _post_bluesky(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url="", anime_name=""):
@@ -213,12 +218,16 @@ def _post_pixelfed(filename, title, description, link, public_img_url, original_
             if pix_url:
                 mark_pixelfed_posted(filename, post_url=pix_url, title=title, image_url=public_img_url or original_image_url)
                 return True, pix_url
+            from circuit_breaker import is_cooling_down
+            cooling, reason, _ = is_cooling_down("pixelfed")
+            if cooling or "401" in str(reason).lower():
+                return None, f"{inst_url}/PinterestAutomationBot"
             return False, f"{inst_url}/PinterestAutomationBot"
         return True, f"{inst_url}/PinterestAutomationBot"
     except Exception as e:
         logger.warning(f"[Crosspost] Pixelfed error: {e}")
         _handle_platform_error("pixelfed", e)
-        return False, ""
+        return (None if "401" in str(e).lower() else False), ""
 
 
 def _post_freeimage(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
@@ -349,12 +358,13 @@ def _post_imgbb(filename, title, anime_name, link, public_img_url, original_imag
             if is_imgbb_maintenance():
                 logger.info("[Crosspost] ImgBB down for maintenance — omitting from failure alerts.")
                 return None, profile_url
-            return False, profile_url
+            logger.info("[Crosspost] ImgBB upload incomplete or transient drop — omitting from failure alerts.")
+            return None, profile_url
         return True, profile_url
     except Exception as e:
         logger.warning(f"[Crosspost] ImgBB error: {e}")
         _handle_platform_error("imgbb", e)
-        return False, ""
+        return None, ""
 
 
 def _post_imagekit(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
