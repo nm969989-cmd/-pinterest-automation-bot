@@ -268,6 +268,16 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _da_e:
         deviantart_status = f"🟡 Check failed ({_da_e})"
 
+    # 19. ImgBB Cross-Post Status
+    imgbb_status = "⚪ Disabled"
+    try:
+        if getattr(config, "IMGBB_ENABLED", False):
+            from imgbb_uploader import verify_imgbb_token
+            ibb_ok = verify_imgbb_token()
+            imgbb_status = "🟢 Active (@muthelyrics)" if ibb_ok else "🔴 Token Error"
+    except Exception as _ibb_e:
+        imgbb_status = f"🟡 Check failed ({_ibb_e})"
+
     # Watermark Cleaner & Inpainter Status (Zero Stock Rejections — lazy-checked to save 90MB RAM on Render)
     watermark_status = "⚪ Disabled"
     try:
@@ -325,6 +335,7 @@ def run_full_system_diagnostic() -> dict:
         "wallhaven_status": wallhaven_status,
         "imghippo_status": imghippo_status,
         "deviantart_status": deviantart_status,
+        "imgbb_status": imgbb_status,
         "watermark_status": watermark_status,
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
         "all_cooldowns": all_cooldowns,
@@ -376,6 +387,8 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         integration_items.append(f"  • Imghippo           : {diag.get('imghippo_status', 'N/A')}")
     if getattr(config, "DEVIANTART_ENABLED", False):
         integration_items.append(f"  • DeviantArt         : {diag.get('deviantart_status', '🟢 Active')}")
+    if getattr(config, "IMGBB_ENABLED", False):
+        integration_items.append(f"  • ImgBB              : {diag.get('imgbb_status', '🟢 Active')}")
 
     integration_items.append(f"  • Monitored Channels : {diag['monitored_channels']} channel(s)")
     integrations_block = "\n".join(integration_items)

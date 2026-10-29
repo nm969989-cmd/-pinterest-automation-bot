@@ -194,7 +194,7 @@ def record_waterfall_backlinks(
 
     platform_keys = [
         "bluesky", "mastodon", "raindrop", "arena",
-        "pixelfed", "wallhaven", "freeimage", "imghippo", "deviantart"
+        "pixelfed", "wallhaven", "freeimage", "imghippo", "deviantart", "imgbb"
     ]
 
     for plat in platform_keys:

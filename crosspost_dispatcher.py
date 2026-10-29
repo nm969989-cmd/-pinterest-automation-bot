@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 # Maximum workers for parallel crossposting.
 # 9 platforms — one thread each. Bounded to avoid overwhelming the network.
-_MAX_CROSSPOST_WORKERS = 9
+_MAX_CROSSPOST_WORKERS = 10
 
 
 def _check_breaker(platform: str, results: dict) -> bool:
@@ -322,6 +322,30 @@ def _post_deviantart(filename, title, description, link, public_img_url, image_p
         return False, ""
 
 
+
+def _post_imgbb(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
+    """Post to ImgBB — returns (ok, url)."""
+    if not getattr(config, "IMGBB_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("imgbb", results):
+        return results.get("imgbb_ok"), results.get("imgbb_url", "")
+    try:
+        from imgbb_uploader import post_to_imgbb
+        from database import mark_imgbb_posted, is_imgbb_posted
+        profile_url = "https://muthelyrics.imgbb.com/"
+        if not is_imgbb_posted(filename):
+            ibb_url = post_to_imgbb(image_path=image_path, title=title, anime_name=anime_name, affiliate_url=link)
+            if ibb_url:
+                mark_imgbb_posted(filename, post_url=ibb_url, title=title, image_url=public_img_url or original_image_url)
+                return True, ibb_url
+            return False, profile_url
+        return True, profile_url
+    except Exception as e:
+        logger.warning(f"[Crosspost] ImgBB error: {e}")
+        _handle_platform_error("imgbb", e)
+        return False, ""
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> dict:
@@ -413,6 +437,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "imghippo_ok": None,  "imghippo_url": "",
         "wallhaven_ok": None, "wallhaven_url": "",
         "deviantart_ok": None,"deviantart_url": "",
+        "imgbb_ok": None,     "imgbb_url": "",
     }
 
     # ── 2. Parallel platform posts ────────────────────────────────────────────
@@ -441,6 +466,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         platform_tasks["imghippo"] = lambda: _post_imghippo(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
     if getattr(config, "DEVIANTART_ENABLED", False):
         platform_tasks["deviantart"] = lambda: _post_deviantart(filename, title, description, link, public_img_url, image_path, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "IMGBB_ENABLED", False):
+        platform_tasks["imgbb"] = lambda: _post_imgbb(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
 
     if platform_tasks:
         with ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost") as executor:

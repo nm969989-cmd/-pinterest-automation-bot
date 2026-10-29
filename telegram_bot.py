@@ -155,6 +155,7 @@ def get_post_confirmation_keyboard(
     imghippo_url: str = "",
     wallhaven_url: str = "",
     deviantart_url: str = "",
+    imgbb_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
     if not _TG_AVAILABLE:
@@ -243,6 +244,13 @@ def get_post_confirmation_keyboard(
             btn_txt = "🎨 View on DeviantArt" if (deviantart_url and "deviantart.com" in deviantart_url and deviantart_url != fallback_da) else "🎨 DeviantArt Gallery"
             if _is_valid_http_url(da_link):
                 platform_btns.append(InlineKeyboardButton(btn_txt, url=da_link))
+
+        if getattr(config, "IMGBB_ENABLED", False):
+            fallback_ibb = "https://muthelyrics.imgbb.com/"
+            ibb_link = imgbb_url if _is_valid_http_url(imgbb_url) else fallback_ibb
+            btn_txt = "🖼️ View on ImgBB" if (imgbb_url and "ibb.co" in imgbb_url and imgbb_url != fallback_ibb) else "🖼️ ImgBB Gallery"
+            if _is_valid_http_url(ibb_link):
+                platform_btns.append(InlineKeyboardButton(btn_txt, url=ibb_link))
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -3464,6 +3472,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              imghippo_ok=None, imghippo_url: str = "",
                              wallhaven_ok=None, wallhaven_url: str = "",
                              deviantart_ok=None, deviantart_url: str = "",
+                             imgbb_ok=None, imgbb_url: str = "",
                              pin_live: bool = True,
                              image_url: str = ""):
     """
@@ -3521,6 +3530,8 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         active_items.append(f"🦛 Imghippo  {_platform_icon(imghippo_ok)}")
     if getattr(config, "DEVIANTART_ENABLED", False):
         active_items.append(f"🎨 DeviantArt {_platform_icon(deviantart_ok)}")
+    if getattr(config, "IMGBB_ENABLED", False):
+        active_items.append(f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}")
 
     cross_lines = ""
     if active_items:
@@ -3568,6 +3579,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         imghippo_url=imghippo_url,
         wallhaven_url=wallhaven_url,
         deviantart_url=deviantart_url,
+        imgbb_url=imgbb_url,
     )
 
     async def _send():
@@ -4074,6 +4086,41 @@ async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
     except Exception as e:
         logger.error(f"[TG BOT] cmd_deviantart error: {e}", exc_info=True)
         await update.message.reply_text(f"DeviantArt error: {e}")
+
+
+
+
+async def cmd_imgbb(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show ImgBB gallery and API key status."""
+    if not _is_admin(update): return
+    try:
+        from config import IMGBB_ENABLED
+        from imgbb_uploader import verify_imgbb_token
+        from database import get_imgbb_stats
+        
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+        
+        enabled_str = "🟢 ENABLED" if IMGBB_ENABLED else "🔴 DISABLED"
+        valid = verify_imgbb_token()
+        status_str = "🟢 API Key Active (Auth OK)" if valid else "🔴 API Key Error"
+        
+        stats = get_imgbb_stats(today_str)
+        today_cnt = stats.get("today", 0)
+        total_cnt = stats.get("total", 0)
+        
+        msg = (
+            f"🖼️ ImgBB Status: {enabled_str}\n"
+            f"{'═' * 30}\n"
+            f"• Auth Status : {status_str}\n"
+            f"• Today Posts : {today_cnt}\n"
+            f"• Total Posts : {total_cnt}\n"
+            f"• Profile URL : https://muthelyrics.imgbb.com/\n"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_imgbb error: {e}", exc_info=True)
+        await update.message.reply_text(f"ImgBB error: {e}")
 
 
 async def cmd_bluesky(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -4964,6 +5011,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("revive",             cmd_revive),
             ("reviver",            cmd_revive),
             ("deviantart",         cmd_deviantart),
+            ("imgbb",              cmd_imgbb),
         ]
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, handler))
