@@ -104,7 +104,7 @@ DEVIANTART_ENABLED       = os.getenv('DEVIANTART_ENABLED', 'true').lower() in ('
 # Pixelfed (Fediverse) Photo & Visual Art Sharing
 PIXELFED_INSTANCE_URL  = os.getenv('PIXELFED_INSTANCE_URL', 'https://pixelfed.social').strip().rstrip('/')
 PIXELFED_ACCESS_TOKEN  = os.getenv('PIXELFED_ACCESS_TOKEN', '').strip()
-PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(PIXELFED_ACCESS_TOKEN)
+PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
 # Freeimage.host Dedicated Image Uploading
 FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '6d207e02198a847aa98d0a2a901485a5').strip()

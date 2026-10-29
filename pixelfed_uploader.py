@@ -43,11 +43,41 @@ def _get_headers() -> dict:
     }
 
 
-def verify_pixelfed_token() -> bool:
-    """Checks if the PIXELFED_ACCESS_TOKEN is valid by verifying credentials."""
-    from config import PIXELFED_ACCESS_TOKEN
+def get_pixelfed_status() -> dict:
+    """
+    Returns structured status information distinguishing disabled, unauthenticated (HTTP 401),
+    active (HTTP 200), token missing, and error states.
+    Returns:
+        {
+            "enabled": bool,
+            "authenticated": bool,
+            "status_code": int | None,
+            "state": "disabled" | "active" | "unauthenticated" | "missing_token" | "error",
+            "message": str,
+            "username": str,
+        }
+    """
+    from config import PIXELFED_ENABLED, PIXELFED_ACCESS_TOKEN
+    if not PIXELFED_ENABLED:
+        return {
+            "enabled": False,
+            "authenticated": False,
+            "status_code": None,
+            "state": "disabled",
+            "message": "Pixelfed is disabled (PIXELFED_ENABLED=false)",
+            "username": "",
+        }
+
     if not PIXELFED_ACCESS_TOKEN:
-        return False
+        return {
+            "enabled": True,
+            "authenticated": False,
+            "status_code": None,
+            "state": "missing_token",
+            "message": "PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env",
+            "username": "",
+        }
+
     base_url = _get_instance_url()
     try:
         res = requests.get(
@@ -55,19 +85,58 @@ def verify_pixelfed_token() -> bool:
             headers=_get_headers(),
             timeout=10,
         )
-        if res.status_code == 200 and "id" in res.json():
-            data = res.json()
-            logger.info(f"[Pixelfed] Token valid — logged in as @{data.get('username', '?')}")
-            return True
+        if res.status_code == 200:
+            try:
+                data = res.json()
+            except Exception:
+                data = {}
+            if "id" in data:
+                username = data.get("username", "")
+                logger.info(f"[Pixelfed] Token valid — logged in as @{username}")
+                return {
+                    "enabled": True,
+                    "authenticated": True,
+                    "status_code": 200,
+                    "state": "active",
+                    "message": f"Active (@{username})",
+                    "username": username,
+                }
         elif res.status_code == 401:
             logger.warning("[Pixelfed] Token invalid (HTTP 401 Unauthorized).")
-            return False
-        else:
-            logger.warning(f"[Pixelfed] Token verification returned HTTP {res.status_code}")
-            return res.status_code != 401
+            return {
+                "enabled": True,
+                "authenticated": False,
+                "status_code": 401,
+                "state": "unauthenticated",
+                "message": "HTTP 401 Unauthorized",
+                "username": "",
+            }
+        logger.warning(f"[Pixelfed] Token verification returned HTTP {res.status_code}")
+        return {
+            "enabled": True,
+            "authenticated": False,
+            "status_code": res.status_code,
+            "state": "error",
+            "message": f"HTTP {res.status_code} Error",
+            "username": "",
+        }
     except Exception as e:
         logger.warning(f"[Pixelfed] Token check failed: {e}")
-        return False
+        return {
+            "enabled": True,
+            "authenticated": False,
+            "status_code": None,
+            "state": "error",
+            "message": f"Connection error: {e}",
+            "username": "",
+        }
+
+
+def verify_pixelfed_token() -> bool:
+    """Checks if the PIXELFED_ACCESS_TOKEN is valid by verifying credentials."""
+    status = get_pixelfed_status()
+    return status.get("authenticated", False)
+
 
 
 def get_pixelfed_profile_info() -> dict | None:

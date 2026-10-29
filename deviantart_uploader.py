@@ -118,6 +118,13 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") 
                             set_metadata("deviantart_refresh_token", new_ref)
                     except Exception as db_err:
                         logger.warning(f"[DeviantArt] Failed to persist refreshed tokens in DB: {db_err}")
+
+                    try:
+                        import jsonbin_sync
+                        jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
+                    except Exception as sync_err:
+                        logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
+
                     logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
                     return new_acc
             elif r.status_code == 400 or r.status_code == 401:
@@ -314,4 +321,51 @@ def verify_deviantart_token() -> bool:
         return False
     except Exception:
         return False
+
+
+def refresh_deviantart_startup_token() -> bool:
+    """
+    Called on startup (e.g. in main.py after restore_db_from_cloud())
+    to proactively verify current token validity against /user/whoami,
+    refreshing expired tokens immediately with OAuth refresh_token so that
+    the bot starts with a healthy OAuth access token.
+    """
+    from config import DEVIANTART_ENABLED
+    if not DEVIANTART_ENABLED:
+        logger.debug("[DeviantArt] Startup check skipped: DEVIANTART_ENABLED is False")
+        return False
+
+    token = _get_access_token()
+    if not token:
+        logger.warning("[DeviantArt] Startup token check: no access token available, attempting refresh.")
+        token = _get_access_token(force_refresh=True)
+        return bool(token)
+
+    try:
+        r = requests.get(
+            "https://www.deviantart.com/api/v1/oauth2/user/whoami",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            user_data = r.json()
+            username = user_data.get("username", "unknown")
+            logger.info(f"[DeviantArt] Startup token verified — logged in as @{username}")
+            return True
+        elif r.status_code == 401:
+            logger.info("[DeviantArt] Startup token expired (HTTP 401). Proactively refreshing...")
+            new_token = _get_access_token(force_refresh=True)
+            if new_token:
+                logger.info("[DeviantArt] Startup token refresh successful.")
+                return True
+            else:
+                logger.warning("[DeviantArt] Startup token refresh failed.")
+                return False
+        else:
+            logger.warning(f"[DeviantArt] Startup token check returned HTTP {r.status_code}")
+            return False
+    except Exception as e:
+        logger.warning(f"[DeviantArt] Startup token check failed with exception: {e}")
+        return False
+
 

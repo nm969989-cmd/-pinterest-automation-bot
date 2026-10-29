@@ -1,7 +1,7 @@
 """
 crosspost_dispatcher.py — Unified Multi-Platform Cross-Posting Dispatcher
 ==========================================================================
-Coordinates automated publishing across all 7 social & image hosting platforms:
+Coordinates automated publishing across all 11 social & image hosting platforms:
   1. Are.na
   2. Bluesky
   3. Raindrop.io
@@ -9,6 +9,10 @@ Coordinates automated publishing across all 7 social & image hosting platforms:
   5. Pixelfed
   6. Freeimage.host
   7. Imghippo
+  8. Wallhaven.cc
+  9. DeviantArt
+  10. ImgBB
+  11. ImageKit.io
 
 Used identically by:
   - Smart Pin Scheduler (automatic time-slot posting)
@@ -340,6 +344,10 @@ def _post_imgbb(filename, title, anime_name, link, public_img_url, original_imag
             if ibb_url:
                 mark_imgbb_posted(filename, post_url=ibb_url, title=title, image_url=public_img_url or original_image_url)
                 return True, ibb_url
+            from imgbb_uploader import is_imgbb_maintenance
+            if is_imgbb_maintenance():
+                logger.info("[Crosspost] ImgBB down for maintenance — omitting from failure alerts.")
+                return None, profile_url
             return False, profile_url
         return True, profile_url
     except Exception as e:
@@ -379,6 +387,28 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
     Executes cross-posting to all enabled platforms in PARALLEL using ThreadPoolExecutor.
     Injects Dual-Anchor Backlink Waterfall (Pinterest Pin + Bridge Page) across all
     syndication channels to maximize Google Search ranking and referral authority.
+
+    Args:
+        pin (dict): Dictionary representing the pin to post, containing keys:
+            - 'title': Post/pin title.
+            - 'description': Text description / hashtags.
+            - 'link': Target affiliate / tracked bridge URL.
+            - 'anime_name': Associated anime series.
+            - 'image_url': Original or CDN image URL.
+        image_path (str): Local filesystem path to the image file, or fallback reference.
+        pin_url (str, optional): Live canonical Pinterest Pin URL for Anchor 1 authority backlinks.
+
+    Concurrency & Lifecycle:
+        - Downloads remote image to temporary file if local file does not exist.
+        - Resolves 3-tier sequential CDN image URL (primary host -> Freeimage -> Imghippo).
+        - Launches parallel threads via ThreadPoolExecutor with up to 11 workers (_MAX_CROSSPOST_WORKERS = 11).
+        - Enforces a 60-second total collection budget via as_completed(timeout=60); returns partial results if timed out.
+        - Sanitizes all returned URLs, cleans up temporary downloads, and persists backlink records.
+
+    Returns:
+        dict: Syndication results dictionary mapping each of the 11 platforms to:
+            - '{platform}_ok': True (success), False (failed), or None (disabled / breaker paused / maintenance).
+            - '{platform}_url': Live post/viewer URL on the syndication platform, or fallback profile link.
     """
     import config
 

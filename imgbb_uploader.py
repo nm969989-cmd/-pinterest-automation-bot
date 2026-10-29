@@ -13,6 +13,7 @@ Every post generates:
 import os
 import io
 import time
+import base64
 import requests
 from logger import get_logger
 
@@ -30,6 +31,38 @@ _HEADERS = {
 
 _MAX_RETRIES = 3
 _RETRY_DELAYS = [0, 4, 12]
+
+_imgbb_in_maintenance = False
+
+
+def is_imgbb_maintenance() -> bool:
+    """Returns True if ImgBB API was detected to be down for maintenance."""
+    return _imgbb_in_maintenance
+
+
+def set_imgbb_maintenance(state: bool = True):
+    """Sets the ImgBB maintenance state flag."""
+    global _imgbb_in_maintenance
+    _imgbb_in_maintenance = state
+
+
+def _check_maintenance_response(res: requests.Response | None) -> bool:
+    """Checks whether the response indicates ImgBB is down for maintenance."""
+    if res is None:
+        return False
+    if res.status_code == 400:
+        try:
+            err = res.json().get("error", {})
+            msg = str(err.get("message", "")).lower()
+            code = err.get("code")
+            if "down for maintenance" in msg or "maintenance" in msg:
+                return True
+            if code == 100 and ("maintenance" in msg or "maintenance" in res.text.lower()):
+                return True
+        except Exception:
+            if "down for maintenance" in res.text.lower() or "maintenance" in res.text.lower():
+                return True
+    return False
 
 
 def _get_api_key() -> str:
@@ -52,9 +85,19 @@ def verify_imgbb_token() -> bool:
             headers=_HEADERS,
             timeout=8
         )
-        data = res.json()
+        if _check_maintenance_response(res):
+            global _imgbb_in_maintenance
+            _imgbb_in_maintenance = True
+            logger.info("[ImgBB] ImgBB API is currently down for maintenance.")
+            return False
+
+        try:
+            data = res.json()
+        except Exception:
+            return False
+
         # Code 130 means "Empty upload source" -> Key is valid and authenticated!
-        # Code 100 means "Invalid API v1 key" -> Rejected
+        # Code 100 means "Invalid API v1 key" -> Rejected (unless maintenance)
         return data.get("error", {}).get("code") == 130
     except Exception as e:
         logger.warning(f"[ImgBB] Connectivity check failed: {e}")
@@ -102,9 +145,22 @@ def post_to_imgbb(image_path: str,
         clean_title = f"{anime_name} Anime Art Poster" if anime_name else "Anime Aesthetic Poster"
     safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in clean_title)[:60]
 
-    is_url = image_path.startswith("http://") or image_path.startswith("https://")
-    if not is_url and not os.path.exists(image_path):
-        logger.error(f"[ImgBB] File not found: {image_path}")
+    # Ephemeral filesystem check: fallback to database URL lookup if local file is missing
+    is_url = bool(image_path and (image_path.startswith("http://") or image_path.startswith("https://")))
+    if not is_url and (not image_path or not os.path.exists(image_path)):
+        try:
+            from database import get_uploaded_file_image_url
+            lookup_fn = os.path.basename(image_path) if image_path else ""
+            if lookup_fn:
+                resolved_url = get_uploaded_file_image_url(lookup_fn)
+                if resolved_url and (resolved_url.startswith("http://") or resolved_url.startswith("https://")):
+                    image_path = resolved_url
+                    is_url = True
+        except Exception as db_err:
+            logger.debug(f"[ImgBB] Ephemeral filesystem URL lookup failed: {db_err}")
+
+    if not is_url and (not image_path or not os.path.exists(image_path)):
+        logger.error(f"[ImgBB] File not found and no remote URL available: {image_path}")
         return None
 
     last_error = None
@@ -117,12 +173,15 @@ def post_to_imgbb(image_path: str,
                 "name": safe_name,
             }
 
+            res = None
             if is_url:
+                # Direct URL upload with in-memory Base64 encoding fallback
                 try:
                     dl = requests.get(image_path, headers=_HEADERS, timeout=20)
                     if dl.status_code == 200 and dl.content:
-                        files = {"image": (f"{safe_name}.jpg", io.BytesIO(dl.content), "image/jpeg")}
-                        res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
+                        b64_str = base64.b64encode(dl.content).decode("utf-8")
+                        payload["image"] = b64_str
+                        res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=60)
                     else:
                         payload["image"] = image_path
                         res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=45)
@@ -130,9 +189,27 @@ def post_to_imgbb(image_path: str,
                     payload["image"] = image_path
                     res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=45)
             else:
-                with open(image_path, "rb") as f:
-                    files = {"image": (os.path.basename(image_path), f, "image/jpeg")}
-                    res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
+                # Local file exists: Base64 encode file bytes or multipart
+                try:
+                    with open(image_path, "rb") as f:
+                        file_bytes = f.read()
+                    b64_str = base64.b64encode(file_bytes).decode("utf-8")
+                    payload["image"] = b64_str
+                    res = requests.post(_API_URL, data=payload, headers=_HEADERS, timeout=60)
+                except Exception:
+                    with open(image_path, "rb") as f:
+                        files = {"image": (os.path.basename(image_path), f, "image/jpeg")}
+                        res = requests.post(_API_URL, data=payload, files=files, headers=_HEADERS, timeout=60)
+
+            # Check for API maintenance immediately to abort retries cleanly
+            if _check_maintenance_response(res):
+                global _imgbb_in_maintenance
+                _imgbb_in_maintenance = True
+                logger.warning(
+                    "[ImgBB] ImgBB API is currently down for maintenance (HTTP 400, code 100). "
+                    "Aborting retries immediately without tripping false failure alerts."
+                )
+                return None
 
             if res.status_code == 200:
                 try:

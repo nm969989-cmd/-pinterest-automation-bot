@@ -184,6 +184,12 @@ def build_state_payload() -> tuple[dict, int]:
                 "SELECT filename, post_url, title, image_url, posted_at FROM wallhaven_posts ORDER BY id DESC LIMIT 25"
             ).fetchall()
         ]
+        deviantart = [
+            {"filename": r[0], "post_url": r[1], "itemid": r[2] or 0, "title": r[3], "image_url": r[4], "posted_at": r[5]}
+            for r in conn.execute(
+                "SELECT filename, post_url, itemid, title, image_url, posted_at FROM deviantart_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
         # Analytics, Revenue, A/B Testing, Evolved Keywords & Logs (compact slices for Render Free Tier persistence)
         link_clicks = [
             {
@@ -294,6 +300,7 @@ def build_state_payload() -> tuple[dict, int]:
         "freeimage_posts":    freeimage,
         "imghippo_posts":     imghippo,
         "wallhaven_posts":    wallhaven,
+        "deviantart_posts":   deviantart,
         "link_clicks":        link_clicks,
         "bridge_visits":      bridge_visits,
         "ab_tests":           ab_tests,
@@ -316,6 +323,7 @@ def build_state_payload() -> tuple[dict, int]:
         for k in [
             "arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts",
             "pixelfed_posts", "freeimage_posts", "imghippo_posts", "wallhaven_posts",
+            "deviantart_posts",
             "link_clicks", "bridge_visits", "stock_uploads", "dead_letter_queue",
             "ghost_revive_log", "backlink_ledger", "viral_surge_alerts",
         ]:
@@ -565,6 +573,19 @@ def restore_db_from_cloud():
                       w.get("title",""), w.get("image_url",""),
                       w.get("posted_at") or "2000-01-01 00:00:00")
                      for w in wallhaven_posts if w.get("filename")]
+                )
+
+            # Restore DeviantArt posts
+            deviantart_posts = state.get("deviantart_posts", [])
+            if deviantart_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO deviantart_posts "
+                    "(filename, post_url, itemid, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    [(d.get("filename",""), d.get("post_url",""),
+                      d.get("itemid", 0), d.get("title",""),
+                      d.get("image_url",""),
+                      d.get("posted_at") or "2000-01-01 00:00:00")
+                     for d in deviantart_posts if d.get("filename")]
                 )
 
             # Restore A/B tests (UNIQUE on test_id, variant)

@@ -272,6 +272,13 @@ def main():
     # 0. Restore persisted state from JSONBin cloud (survives Render restarts!)
     restore_db_from_cloud()
 
+    # 0b. Proactively verify and refresh DeviantArt OAuth tokens after state restoration
+    try:
+        from deviantart_uploader import refresh_deviantart_startup_token
+        refresh_deviantart_startup_token()
+    except Exception as _da_err:
+        logger.warning(f"[Main] DeviantArt startup token verification failed: {_da_err}")
+
     # 1. Start Flask web server (Keep-alive for Render)
     keep_alive()
     logger.info("Keep-alive server started on port 8080.")

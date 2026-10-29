@@ -276,6 +276,50 @@ def get_post_confirmation_keyboard(
         return None
 
 
+def format_crosspost_status_block(results: dict) -> str:
+    """
+    Formats the cross-post syndication status block for Telegram notifications.
+    Displays ONLY active/enabled platforms with status indicators (✅/❌).
+    Completely omits disabled platforms and unattempted/skipped platforms (status None, no '—').
+    """
+    import config
+
+    platforms_meta = [
+        ("bluesky",    "BLUESKY_ENABLED",    "🦋 Bluesky"),
+        ("raindrop",   "RAINDROP_ENABLED",   "💧 Raindrop"),
+        ("mastodon",   "MASTODON_ENABLED",   "🐘 Mastodon"),
+        ("freeimage",  "FREEIMAGE_ENABLED",  "🖼️ Freeimage"),
+        ("wallhaven",  "WALLHAVEN_ENABLED",  "🌌 Wallhaven"),
+        ("arena",      "ARENA_ENABLED",      "🔮 Are.na"),
+        ("pixelfed",   "PIXELFED_ENABLED",   "📷 Pixelfed"),
+        ("imghippo",   "IMGHIPPO_ENABLED",   "🦛 Imghippo"),
+        ("deviantart", "DEVIANTART_ENABLED", "🎨 DeviantArt"),
+        ("imgbb",      "IMGBB_ENABLED",      "🖼️ ImgBB"),
+        ("imagekit",   "IMAGEKIT_ENABLED",   "🖼️ ImageKit"),
+    ]
+
+    active_items = []
+    for key, config_flag, label in platforms_meta:
+        # Check 1: Must be enabled in config
+        if not getattr(config, config_flag, False):
+            continue
+
+        # Check 2: Must have an active execution result (True or False)
+        status = results.get(f"{key}_ok")
+        if status is True:
+            active_items.append(f"{label} ✅")
+        elif status is False:
+            active_items.append(f"{label} ❌")
+        # If status is None: completely omit!
+
+    if not active_items:
+        return ""
+
+    grouped_lines = []
+    for i in range(0, len(active_items), 3):
+        grouped_lines.append("  ".join(active_items[i:i+3]))
+    return f"\n{'─' * 26}\n" + "\n".join(grouped_lines)
+
 
 # -- Command handlers ---------------------------------------------------------
 
@@ -328,8 +372,8 @@ async def cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         "/channels       - Monitored channels\n"
         "/ping           - Check bot is alive\n\n"
         "--- CROSS-POSTING & SEO ---\n"
-        "/crosspost      - Multi-platform status (All 10 connected platforms)\n"
-        "/backlinks      - Backlink SEO Waterfall counts across 7 platforms\n"
+        "/crosspost      - Multi-platform status (All 11 connected platforms)\n"
+        "/backlinks      - Backlink SEO Waterfall counts across 11 platforms\n"
         "/radar          - Viral Pin Surge Radar & live trending pins\n"
         "/spinoff <code> - Generate 2 Express Spinoff pins for a viral artwork\n"
         "/arena          - Are.na channel stats & block count\n"
@@ -2511,29 +2555,10 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 is_organic=is_org,
             )
 
-            # ── Dispatch cross-posts across all 10 platforms ───────────────────
+            # ── Dispatch cross-posts across all 11 platforms ───────────────────
             from crosspost_dispatcher import dispatch_all_crossposts
             cp_res = dispatch_all_crossposts(pin, image_path, pin_url=pin.get("pin_url", ""))
-
-            def _platform_icon(result):
-                if result is True:   return "✅"
-                if result is False:  return "❌"
-                return "—"  # None = disabled or circuit-breaker skipped
-
-
-            cross_lines = ""
-            if any(cp_res[k] is not None for k in cp_res if k.endswith("_ok")):
-                cross_lines = (
-                    f"\n{'─' * 26}\n"
-                    f"🔮 Are.na    {_platform_icon(cp_res.get('arena_ok'))}  "
-                    f"🦋 Bluesky  {_platform_icon(cp_res.get('bluesky_ok'))}  "
-                    f"💧 Raindrop   {_platform_icon(cp_res.get('raindrop_ok'))}\n"
-                    f"🐘 Mastodon {_platform_icon(cp_res.get('mastodon_ok'))}  "
-                    f"📷 Pixelfed  {_platform_icon(cp_res.get('pixelfed_ok'))}  "
-                    f"🖼️ Freeimage {_platform_icon(cp_res.get('freeimage_ok'))}\n"
-                    f"🦛 Imghippo  {_platform_icon(cp_res.get('imghippo_ok'))}  "
-                    f"🌌 Wallhaven {_platform_icon(cp_res.get('wallhaven_ok'))}"
-                )
+            cross_lines = format_crosspost_status_block(cp_res)
 
             target_url = get_tracked_target_url(pin["link"])
             if pin_status == "live":
@@ -3509,7 +3534,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
     Send a rich Telegram notification after every successful Pinterest post.
     pin_live=False → Make.com accepted the webhook but the pin is NOT yet
     confirmed on Pinterest; header says "queue" instead of "Posted".
-    Sends the actual image + details with 1-tap buttons for all 10 social & image hosting platforms.
+    Sends the actual image + details with 1-tap buttons for all 11 social & image hosting platforms.
     """
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not _app_ref or not admin_id or not _loop_ref:
@@ -3535,42 +3560,20 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
             filled_blocks = 4
     prog_bar = "🟩" * filled_blocks + "⬜" * (5 - filled_blocks)
 
-    def _platform_icon(result):
-        if result is True:   return "✅"
-        if result is False:  return "❌"
-        return "—"  # None = disabled or circuit-breaker paused
-
-    import config
-    active_items = []
-    if getattr(config, "BLUESKY_ENABLED", False):
-        active_items.append(f"🦋 Bluesky  {_platform_icon(bluesky_ok)}")
-    if getattr(config, "RAINDROP_ENABLED", False):
-        active_items.append(f"💧 Raindrop   {_platform_icon(raindrop_ok)}")
-    if getattr(config, "MASTODON_ENABLED", False):
-        active_items.append(f"🐘 Mastodon {_platform_icon(mastodon_ok)}")
-    if getattr(config, "FREEIMAGE_ENABLED", False):
-        active_items.append(f"🖼️ Freeimage {_platform_icon(freeimage_ok)}")
-    if getattr(config, "WALLHAVEN_ENABLED", False):
-        active_items.append(f"🌌 Wallhaven {_platform_icon(wallhaven_ok)}")
-    if getattr(config, "ARENA_ENABLED", False):
-        active_items.append(f"🔮 Are.na    {_platform_icon(arena_ok)}")
-    if getattr(config, "PIXELFED_ENABLED", False):
-        active_items.append(f"📷 Pixelfed  {_platform_icon(pixelfed_ok)}")
-    if getattr(config, "IMGHIPPO_ENABLED", False):
-        active_items.append(f"🦛 Imghippo  {_platform_icon(imghippo_ok)}")
-    if getattr(config, "DEVIANTART_ENABLED", False):
-        active_items.append(f"🎨 DeviantArt {_platform_icon(deviantart_ok)}")
-    if getattr(config, "IMGBB_ENABLED", False):
-        active_items.append(f"🖼️ ImgBB     {_platform_icon(imgbb_ok)}")
-    if getattr(config, "IMAGEKIT_ENABLED", False):
-        active_items.append(f"🖼️ ImageKit {_platform_icon(imagekit_ok)}")
-
-    cross_lines = ""
-    if active_items:
-        grouped_lines = []
-        for i in range(0, len(active_items), 3):
-            grouped_lines.append("  ".join(active_items[i:i+3]))
-        cross_lines = f"\n{'─' * 26}\n" + "\n".join(grouped_lines)
+    results_map = {
+        "bluesky_ok": bluesky_ok,
+        "raindrop_ok": raindrop_ok,
+        "mastodon_ok": mastodon_ok,
+        "freeimage_ok": freeimage_ok,
+        "wallhaven_ok": wallhaven_ok,
+        "arena_ok": arena_ok,
+        "pixelfed_ok": pixelfed_ok,
+        "imghippo_ok": imghippo_ok,
+        "deviantart_ok": deviantart_ok,
+        "imgbb_ok": imgbb_ok,
+        "imagekit_ok": imagekit_ok,
+    }
+    cross_lines = format_crosspost_status_block(results_map)
 
     _hdr = "📌 Pin Confirmed Live!" if pin_live else "📤 Sent to Make.com (unverified)"
     _live_note = (
@@ -3890,7 +3893,7 @@ async def cmd_arena_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-    """Show real-time multi-platform status (Pinterest, Are.na, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, Imghippo) with quick links."""
+    """Show real-time multi-platform status across all 11 platforms (Pinterest, Are.na, Bluesky, Raindrop, Mastodon, Pixelfed, Freeimage, Imghippo, Wallhaven, DeviantArt, ImgBB, ImageKit) with quick links."""
     if not _is_admin(update):
         return
     try:
@@ -3984,23 +3987,33 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 mastodon_status = "🔴 AUTH ERROR (Check token)"
         mastodon_st = get_mastodon_stats(today_str)
 
-        # Pixelfed status
-        pixelfed_status = "DISABLED (PIXELFED_ENABLED=false)"
-        pixelfed_posts_str = ""
-        pixelfed_link = PIXELFED_INSTANCE_URL
+        # Pixelfed status (omitted completely if disabled)
+        pixelfed_block = ""
         if PIXELFED_ENABLED:
-            from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
-            pix_token_ok = verify_pixelfed_token()
-            if pix_token_ok:
+            from pixelfed_uploader import get_pixelfed_status, get_pixelfed_profile_info
+            p_status = get_pixelfed_status()
+            pixelfed_posts_str = ""
+            pixelfed_link = PIXELFED_INSTANCE_URL
+            if p_status.get("authenticated"):
                 pp = get_pixelfed_profile_info()
                 cnt = pp.get("statuses_count", 0) if pp else "?"
                 pixelfed_status = "🟢 ACTIVE"
                 pixelfed_posts_str = f" ({cnt} posts)"
                 if pp and pp.get("url"):
                     pixelfed_link = pp["url"]
+            elif p_status.get("status_code") == 401 or p_status.get("state") == "unauthenticated":
+                pixelfed_status = "🔴 AUTH ERROR (HTTP 401: Token invalid or expired)"
+            elif p_status.get("state") == "missing_token":
+                pixelfed_status = "🔴 TOKEN MISSING (Check PIXELFED_ACCESS_TOKEN)"
             else:
-                pixelfed_status = "🔴 AUTH ERROR (Check token)"
-        pixelfed_st = get_pixelfed_stats(today_str)
+                pixelfed_status = f"🔴 ERROR ({p_status.get('message', 'Check configuration')})"
+            pixelfed_st = get_pixelfed_stats(today_str)
+            pixelfed_block = (
+                f"📷 Pixelfed:\n"
+                f"  • Status: {pixelfed_status}{pixelfed_posts_str}\n"
+                f"  • Posts: {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time\n"
+                f"  • Link: {pixelfed_link}\n\n"
+            )
 
         # Freeimage status
         freeimage_status = "DISABLED (FREEIMAGE_ENABLED=false)"
@@ -4039,8 +4052,13 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         imgbb_status = "DISABLED (IMGBB_ENABLED=false)"
         from config import IMGBB_ENABLED
         if IMGBB_ENABLED:
-            from imgbb_uploader import verify_imgbb_token
-            imgbb_status = "🟢 ACTIVE (API Key Verified)" if verify_imgbb_token() else "🔴 KEY ERROR"
+            from imgbb_uploader import verify_imgbb_token, is_imgbb_maintenance
+            if verify_imgbb_token():
+                imgbb_status = "🟢 ACTIVE (API Key Verified)"
+            elif is_imgbb_maintenance():
+                imgbb_status = "🟡 MAINTENANCE (Down for maintenance)"
+            else:
+                imgbb_status = "🔴 KEY ERROR"
         from database import get_imgbb_stats
         imgbb_st = get_imgbb_stats(today_str)
 
@@ -4078,10 +4096,7 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Status: {mastodon_status}{mastodon_posts_str}\n"
             f"  • Posts: {mastodon_st['today']} today  |  {mastodon_st['total']} all-time\n"
             f"  • Link: {mastodon_link}\n\n"
-            f"📷 Pixelfed:\n"
-            f"  • Status: {pixelfed_status}{pixelfed_posts_str}\n"
-            f"  • Posts: {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time\n"
-            f"  • Link: {pixelfed_link}\n\n"
+            f"{pixelfed_block}"
             f"🖼️ Freeimage.host:\n"
             f"  • Status: {freeimage_status}\n"
             f"  • Posts: {freeimage_st['today']} today  |  {freeimage_st['total']} all-time\n"
@@ -4425,29 +4440,40 @@ async def cmd_pixelfed(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show Pixelfed account stats and profile URL."""
     if not _is_admin(update): return
     try:
-        from pixelfed_uploader import get_pixelfed_profile_info, verify_pixelfed_token
         from config import PIXELFED_ENABLED, PIXELFED_INSTANCE_URL
-        enabled_str = "ENABLED" if PIXELFED_ENABLED else "DISABLED (set PIXELFED_ENABLED=true)"
-        valid = verify_pixelfed_token()
-        info = get_pixelfed_profile_info() if valid else None
-        if info:
-            msg = (
-                f"📷 Pixelfed Status: {enabled_str}\n"
-                f"{'═' * 30}\n"
-                f"Username  : @{info['username']}\n"
-                f"Instance  : {PIXELFED_INSTANCE_URL}\n"
-                f"Followers : {info['followers_count']}\n"
-                f"Posts     : {info['statuses_count']}\n"
-                f"Profile   : {info['url']}"
+        if not PIXELFED_ENABLED:
+            await update.message.reply_text(
+                "📷 Pixelfed: ⚪ DISABLED\n"
+                "Pixelfed cross-posting is currently disabled. Set PIXELFED_ENABLED=true in .env to enable."
             )
-        elif valid:
-            msg = (
-                f"📷 Pixelfed: {enabled_str}\n"
-                f"Token: Valid ✅\n"
-                f"Instance: {PIXELFED_INSTANCE_URL}"
-            )
+            return
+
+        from pixelfed_uploader import get_pixelfed_profile_info, get_pixelfed_status
+        status = get_pixelfed_status()
+        if status.get("authenticated"):
+            info = get_pixelfed_profile_info()
+            if info:
+                msg = (
+                    f"📷 Pixelfed Status: ENABLED\n"
+                    f"{'═' * 30}\n"
+                    f"Username  : @{info['username']}\n"
+                    f"Instance  : {PIXELFED_INSTANCE_URL}\n"
+                    f"Followers : {info['followers_count']}\n"
+                    f"Posts     : {info['statuses_count']}\n"
+                    f"Profile   : {info['url']}"
+                )
+            else:
+                msg = (
+                    f"📷 Pixelfed: ENABLED\n"
+                    f"Token: Valid ✅\n"
+                    f"Instance: {PIXELFED_INSTANCE_URL}"
+                )
+        elif status.get("status_code") == 401 or status.get("state") == "unauthenticated":
+            msg = "📷 Pixelfed: 🔴 HTTP 401 Unauthorized. Access token is invalid or expired. Check PIXELFED_ACCESS_TOKEN in .env"
+        elif status.get("state") == "missing_token":
+            msg = "📷 Pixelfed: 🔴 Token missing. Set PIXELFED_ACCESS_TOKEN in .env"
         else:
-            msg = "📷 Pixelfed: 🔴 Token invalid or not configured. Check PIXELFED_ACCESS_TOKEN in .env"
+            msg = f"📷 Pixelfed: 🔴 {status.get('message', 'Verification failed.')}"
         await update.message.reply_text(msg)
     except Exception as e:
         logger.error(f"[TG BOT] cmd_pixelfed error: {e}", exc_info=True)

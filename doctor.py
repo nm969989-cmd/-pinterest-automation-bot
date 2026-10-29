@@ -195,19 +195,22 @@ def run_full_system_diagnostic() -> dict:
             cooling, c_reason, c_rem = is_cooling_down("pixelfed")
             if cooling:
                 pixelfed_status = f"🟡 Cooldown ({c_rem}h left: {c_reason})"
-            elif config.PIXELFED_ACCESS_TOKEN:
-                from pixelfed_uploader import verify_pixelfed_token, get_pixelfed_profile_info
-                pix_ok = verify_pixelfed_token()
-                if pix_ok:
+            elif not config.PIXELFED_ACCESS_TOKEN:
+                pixelfed_status = "🔴 Token Missing"
+                warnings.append("PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env")
+            else:
+                from pixelfed_uploader import get_pixelfed_status, get_pixelfed_profile_info
+                status = get_pixelfed_status()
+                if status.get("authenticated"):
                     pinfo = get_pixelfed_profile_info()
                     statuses = pinfo.get("statuses_count", 0) if pinfo else "?"
                     pixelfed_status = f"🟢 Active (@{pinfo.get('username', 'user')}, {statuses} posts)"
+                elif status.get("status_code") == 401 or status.get("state") == "unauthenticated":
+                    pixelfed_status = "🔴 401 Unauthorized"
+                    warnings.append("Pixelfed token is invalid or expired (HTTP 401) — check PIXELFED_ACCESS_TOKEN in .env")
                 else:
-                    pixelfed_status = "🔴 Token Invalid"
-                    warnings.append("Pixelfed token is invalid — check PIXELFED_ACCESS_TOKEN in .env")
-            else:
-                pixelfed_status = "🔴 Token Missing"
-                warnings.append("PIXELFED_ENABLED=true but PIXELFED_ACCESS_TOKEN is missing in .env")
+                    pixelfed_status = f"🔴 {status.get('message', 'Token Invalid')}"
+                    warnings.append(f"Pixelfed verification failed: {status.get('message')}")
     except Exception as _pix_e:
         pixelfed_status = f"🟡 Check failed ({_pix_e})"
 
@@ -272,9 +275,15 @@ def run_full_system_diagnostic() -> dict:
     imgbb_status = "⚪ Disabled"
     try:
         if getattr(config, "IMGBB_ENABLED", False):
-            from imgbb_uploader import verify_imgbb_token
+            from imgbb_uploader import verify_imgbb_token, is_imgbb_maintenance
             ibb_ok = verify_imgbb_token()
-            imgbb_status = "🟢 Active (@muthelyrics)" if ibb_ok else "🔴 Token Error"
+            if ibb_ok:
+                imgbb_status = "🟢 Active (@muthelyrics)"
+            elif is_imgbb_maintenance():
+                imgbb_status = "🟡 Maintenance (ImgBB down for maintenance)"
+            else:
+                imgbb_status = "🔴 Token Error"
+                warnings.append("ImgBB API key is invalid — check IMGBB_API_KEY in .env")
     except Exception as _ibb_e:
         imgbb_status = f"🟡 Check failed ({_ibb_e})"
 
