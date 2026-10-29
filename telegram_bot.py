@@ -1352,7 +1352,8 @@ async def _send_daily_report(chat_id):
             get_today_uploads, get_all_time_stats,
             get_arena_stats, get_bluesky_stats,
             get_raindrop_stats, get_mastodon_stats, get_pixelfed_stats,
-            get_freeimage_stats, get_imghippo_stats,
+            get_freeimage_stats, get_imghippo_stats, get_deviantart_stats,
+            get_imgbb_stats, get_wallhaven_stats,
             get_click_stats
         )
         import config
@@ -1380,6 +1381,9 @@ async def _send_daily_report(chat_id):
         pixelfed_st    = get_pixelfed_stats(today_ist_str)
         freeimage_st   = get_freeimage_stats(today_ist_str)
         imghippo_st    = get_imghippo_stats(today_ist_str)
+        deviantart_st  = get_deviantart_stats(today_ist_str)
+        imgbb_st       = get_imgbb_stats(today_ist_str)
+        wallhaven_st   = get_wallhaven_stats(today_ist_str)
 
         # Click & earnings stats
         try:
@@ -1403,6 +1407,9 @@ async def _send_daily_report(chat_id):
         pixelfed_badge  = "🟢 ON" if PIXELFED_ENABLED else "⚪ OFF"
         freeimage_badge = "🟢 ON" if FREEIMAGE_ENABLED else "⚪ OFF"
         imghippo_badge  = "🟢 ON" if getattr(config, "IMGHIPPO_ENABLED", False) else "⚪ OFF"
+        deviantart_badge = "🟢 ON" if getattr(config, "DEVIANTART_ENABLED", False) else "⚪ OFF"
+        imgbb_badge      = "🟢 ON" if getattr(config, "IMGBB_ENABLED", False) else "⚪ OFF"
+        wallhaven_badge  = "🟢 ON" if getattr(config, "WALLHAVEN_ENABLED", False) else "⚪ OFF" 
 
         summary_section = (
             f"📊 Platform Posting Summary:\n"
@@ -1414,7 +1421,10 @@ async def _send_daily_report(chat_id):
             f"  🐘 Mastodon  : {mastodon_st['today']} today  |  {mastodon_st['total']} all-time  ({masto_badge})\n"
             f"  📷 Pixelfed  : {pixelfed_st['today']} today  |  {pixelfed_st['total']} all-time  ({pixelfed_badge})\n"
             f"  🖼️ Freeimage : {freeimage_st['today']} today  |  {freeimage_st['total']} all-time  ({freeimage_badge})\n"
-            f"  🦛 Imghippo  : {imghippo_st['today']} today  |  {imghippo_st['total']} all-time  ({imghippo_badge})\n\n"
+            f"  🦛 Imghippo  : {imghippo_st['today']} today  |  {imghippo_st['total']} all-time  ({imghippo_badge})\n"
+            f"  🎨 DeviantArt: {deviantart_st['today']} today  |  {deviantart_st['total']} all-time  ({deviantart_badge})\n"
+            f"  🖼️ ImgBB     : {imgbb_st['today']} today  |  {imgbb_st['total']} all-time  ({imgbb_badge})\n"
+            f"  🌌 Wallhaven : {wallhaven_st['today']} today  |  {wallhaven_st['total']} all-time  ({wallhaven_badge})\n\n"
         )
 
         revenue_section = ""
@@ -1455,6 +1465,12 @@ async def _send_daily_report(chat_id):
             crosspost_section += "  • Freeimage: https://freeimage.host/muthelyrics\n"
         if getattr(config, "IMGHIPPO_ENABLED", False):
             crosspost_section += "  • Imghippo: https://www.imghippo.com/dashboard\n"
+        if getattr(config, "DEVIANTART_ENABLED", False):
+            crosspost_section += "  • DeviantArt: https://www.deviantart.com/muthelyrics\n"
+        if getattr(config, "IMGBB_ENABLED", False):
+            crosspost_section += "  • ImgBB: https://muthelyrics.imgbb.com/\n"
+        if getattr(config, "WALLHAVEN_ENABLED", False):
+            crosspost_section += "  • Wallhaven: https://wallhaven.cc/user/animizing\n"
         crosspost_section += "\n👉 Use /crosspost for live platform diagnostics & testing."
 
         msg = header + summary_section + revenue_section + pin_section + crosspost_section
@@ -3993,6 +4009,24 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         from database import get_wallhaven_stats
         wallhaven_st = get_wallhaven_stats(today_str)
 
+        # DeviantArt status
+        deviantart_status = "DISABLED (DEVIANTART_ENABLED=false)"
+        from config import DEVIANTART_ENABLED
+        if DEVIANTART_ENABLED:
+            from deviantart_uploader import verify_deviantart_token
+            deviantart_status = "🟢 ACTIVE (@muthelyrics)" if verify_deviantart_token() else "🔴 AUTH ERROR"
+        from database import get_deviantart_stats
+        deviantart_st = get_deviantart_stats(today_str)
+
+        # ImgBB status
+        imgbb_status = "DISABLED (IMGBB_ENABLED=false)"
+        from config import IMGBB_ENABLED
+        if IMGBB_ENABLED:
+            from imgbb_uploader import verify_imgbb_token
+            imgbb_status = "🟢 ACTIVE (API Key Verified)" if verify_imgbb_token() else "🔴 KEY ERROR"
+        from database import get_imgbb_stats
+        imgbb_st = get_imgbb_stats(today_str)
+
         msg = (
             f"🌐 Multi-Platform Cross-Post Hub\n"
             f"{'═' * 38}\n\n"
@@ -4035,6 +4069,14 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
             f"  • Username: @{WALLHAVEN_USERNAME}\n"
             f"  • Posts: {wallhaven_st['today']} today  |  {wallhaven_st['total']} all-time\n"
             f"  • Link: https://wallhaven.cc/user/{WALLHAVEN_USERNAME}\n\n"
+            f"🎨 DeviantArt:\n"
+            f"  • Status: {deviantart_status}\n"
+            f"  • Posts: {deviantart_st['today']} today  |  {deviantart_st['total']} all-time\n"
+            f"  • Link: https://www.deviantart.com/muthelyrics\n\n"
+            f"🖼️ ImgBB:\n"
+            f"  • Status: {imgbb_status}\n"
+            f"  • Posts: {imgbb_st['today']} today  |  {imgbb_st['total']} all-time\n"
+            f"  • Link: https://muthelyrics.imgbb.com/\n\n"
             f"🚀 Quick Commands:\n"
             f"  /summary — Today's multi-platform report\n"
             f"  /wallhaven — Wallhaven account stats & link\n"

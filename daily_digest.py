@@ -22,7 +22,7 @@ from logger import get_logger
 logger = get_logger(__name__)
 
 # Default 7 platforms to inspect for circuit breaker status
-_PLATFORMS = ["bluesky", "mastodon", "pixelfed", "arena", "raindrop", "freeimage", "imghippo"]
+_PLATFORMS = ["bluesky", "mastodon", "pixelfed", "raindrop", "freeimage", "imghippo", "wallhaven", "deviantart", "imgbb"]
 
 
 def _get_ist_now() -> datetime.datetime:

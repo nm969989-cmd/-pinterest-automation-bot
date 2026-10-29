@@ -165,3 +165,4 @@ def post_to_imgbb(image_path: str,
 
     logger.error(f"[ImgBB] All upload attempts failed. Last error: {last_error}")
     return None
+
