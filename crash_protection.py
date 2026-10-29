@@ -29,14 +29,22 @@ def cleanup_old_files(max_age_hours: int = 6):
     """
     Delete images older than max_age_hours from downloads/ and processed/.
     Render free tier has limited disk — keep it clean.
+    Files still referenced by a queued pin are never deleted.
     """
     cutoff = time.time() - (max_age_hours * 3600)
     removed = 0
+    try:
+        from database import get_queued_image_basenames
+        protected = get_queued_image_basenames()
+    except Exception:
+        protected = set()
     for folder in ["downloads", "processed"]:
         if not os.path.exists(folder):
             continue
         for fname in os.listdir(folder):
             fpath = os.path.join(folder, fname)
+            if fname in protected:
+                continue
             try:
                 if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
                     os.remove(fpath)
@@ -147,7 +155,8 @@ _MEM_RESTART_THRESHOLD   = 475   # MB — controlled self-restart (saves state b
 def _emergency_restart():
     """
     Performs a controlled self-restart to prevent an uncontrolled OOM kill by Render.
-    Saves state to JSONBin first, then exits with code 0 so Render auto-restarts the service.
+    Saves state to JSONBin first, then exits with code 75 (EX_TEMPFAIL) so Render
+    auto-restarts the service and run_local.py does not mistake it for a clean stop.
     A controlled restart is MUCH better than an OOM kill because:
       - State is saved cleanly.
       - Render restarts the service immediately.
@@ -170,7 +179,7 @@ def _emergency_restart():
     except Exception:
         pass
     # Exit entire process from daemon thread — Render will auto-restart the web service.
-    os._exit(0)
+    os._exit(75)
 
 
 def _start_health_monitor():

@@ -3276,6 +3276,52 @@ def notify_admin(message: str, parse_mode: str = "Markdown"):
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
 
 
+def notify_admin_confirmed(message: str, parse_mode: str = "Markdown", timeout: float = 20.0) -> bool:
+    """Like notify_admin() but waits and returns True only if Telegram accepted the message.
+
+    If Markdown parsing is rejected (unescaped `_` or `*` in titles/anime names), the
+    message is re-sent as plain text. Must be called from a worker thread; on the bot's
+    own event-loop thread it degrades to fire-and-forget to avoid deadlocking the loop.
+    """
+    admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    if not _app_ref or not admin_id or not _loop_ref:
+        return False
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None and running is _loop_ref:
+        notify_admin(message, parse_mode=parse_mode)
+        return True
+    if not _check_flood_protection():
+        return False
+
+    def _send(mode):
+        fut = asyncio.run_coroutine_threadsafe(
+            _app_ref.bot.send_message(
+                chat_id=admin_id, text=message, parse_mode=mode,
+                disable_web_page_preview=True,
+            ),
+            _loop_ref,
+        )
+        fut.result(timeout=timeout)
+
+    try:
+        _send(parse_mode)
+        return True
+    except Exception as e:
+        if parse_mode:
+            logger.warning(f"[TG BOT] Formatted send failed ({e}); retrying as plain text.")
+            try:
+                _send(None)
+                return True
+            except Exception as e2:
+                logger.warning(f"[TG BOT] Plain-text retry failed: {e2}")
+        else:
+            logger.warning(f"[TG BOT] Could not notify admin: {e}")
+    return False
+
+
 def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str = "Markdown"):
     """Send a Markdown-formatted notification with an InlineKeyboardMarkup to the admin from any thread."""
     if not _check_flood_protection():
@@ -5042,8 +5088,11 @@ async def cmd_weekly(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         from weekly_report import send_weekly_report, build_weekly_report
         # If admin explicitly called /weekly, send the report directly in this chat or via notify_admin
         report = build_weekly_report()
-        await update.message.reply_text(report, parse_mode="Markdown")
-        send_weekly_report(force=True)
+        try:
+            await update.message.reply_text(report, parse_mode="Markdown")
+        except Exception:
+            # Unescaped Markdown in titles/anime names -> resend as plain text.
+            await update.message.reply_text(report)
     except Exception as e:
         logger.error(f"[TG BOT] cmd_weekly error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Weekly report error: {e}")

@@ -9,6 +9,7 @@ Free tier: 10,000 requests/month (~1,450 used = 85% remaining)
 """
 
 import os
+import re
 import time
 import threading
 import requests
@@ -23,6 +24,23 @@ _BASE_URL = "https://api.jsonbin.io/v3/b"
 _SYNC_INTERVAL = 30 * 60  # sync every 30 minutes
 _last_sync_ts: float = 0.0
 _sync_lock = threading.Lock()
+
+# True when JSONBin is configured but the boot-time load failed (timeout / 5xx).
+# In that state the local DB may be nearly empty, so uploading it would wipe the
+# good cloud copy. save_cloud_state() refuses to PUT until a restore succeeds.
+_cloud_restore_failed: bool = False
+
+_JSONBIN_MAX_BYTES = 100 * 1024
+_SENSITIVE_KEY_RE = re.compile(r"token|secret|api_key|apikey|password|passwd", re.IGNORECASE)
+
+
+def _exclude_secrets() -> bool:
+    """Opt-in: JSONBIN_EXCLUDE_SECRETS=true keeps token/secret metadata out of the cloud copy.
+
+    Off by default because rotating OAuth tokens (e.g. DeviantArt refresh tokens are
+    single-use) rely on this sync to survive Render's ephemeral disk.
+    """
+    return os.getenv("JSONBIN_EXCLUDE_SECRETS", "false").strip().lower() in ("true", "1", "yes")
 
 
 def _headers() -> dict:
@@ -120,6 +138,7 @@ def build_state_payload() -> tuple[dict, int]:
             for r in conn.execute(
                 "SELECT key, value FROM bot_metadata"
             ).fetchall()
+            if not (_exclude_secrets() and _SENSITIVE_KEY_RE.search(str(r[0] or "")))
         ]
         # Tracked links (last 60 links for recent redirect continuity)
         tracked = [
@@ -191,6 +210,25 @@ def build_state_payload() -> tuple[dict, int]:
             {"filename": r[0], "post_url": r[1], "itemid": r[2] or 0, "title": r[3], "image_url": r[4], "posted_at": r[5]}
             for r in conn.execute(
                 "SELECT filename, post_url, itemid, title, image_url, posted_at FROM deviantart_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        imgbb = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM imgbb_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        imagekit = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3],
+             "file_id": r[4] or "", "posted_at": r[5]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, file_id, posted_at FROM imagekit_posts ORDER BY id DESC LIMIT 25"
+            ).fetchall()
+        ]
+        imgpile = [
+            {"filename": r[0], "post_url": r[1], "title": r[2], "image_url": r[3], "posted_at": r[4]}
+            for r in conn.execute(
+                "SELECT filename, post_url, title, image_url, posted_at FROM imgpile_posts ORDER BY id DESC LIMIT 25"
             ).fetchall()
         ]
         # Analytics, Revenue, A/B Testing, Evolved Keywords & Logs (compact slices for Render Free Tier persistence)
@@ -304,6 +342,9 @@ def build_state_payload() -> tuple[dict, int]:
         "imghippo_posts":     imghippo,
         "wallhaven_posts":    wallhaven,
         "deviantart_posts":   deviantart,
+        "imgbb_posts":        imgbb,
+        "imagekit_posts":     imagekit,
+        "imgpile_posts":      imgpile,
         "link_clicks":        link_clicks,
         "bridge_visits":      bridge_visits,
         "ab_tests":           ab_tests,
@@ -326,7 +367,7 @@ def build_state_payload() -> tuple[dict, int]:
         for k in [
             "arena_posts", "bluesky_posts", "raindrop_posts", "mastodon_posts",
             "pixelfed_posts", "freeimage_posts", "imghippo_posts", "wallhaven_posts",
-            "deviantart_posts",
+            "deviantart_posts", "imgbb_posts", "imagekit_posts", "imgpile_posts",
             "link_clicks", "bridge_visits", "stock_uploads", "dead_letter_queue",
             "ghost_revive_log", "backlink_ledger", "viral_surge_alerts",
         ]:
@@ -351,6 +392,26 @@ def build_state_payload() -> tuple[dict, int]:
             raw_json = json.dumps(payload, separators=(',', ':'))
             payload_bytes = len(raw_json.encode('utf-8'))
 
+        # Tier 3: still too big -> drop every analytics/log slice. The dedupe tables,
+        # pin_queue and bot_metadata are never trimmed (they are the vital state).
+        if payload_bytes > 90 * 1024:
+            for k in [
+                "link_clicks", "bridge_visits", "stock_uploads", "ghost_revive_log",
+                "backlink_ledger", "viral_surge_alerts", "dead_letter_queue",
+                "ab_tests", "revenue_log", "evolved_keywords",
+            ]:
+                payload[k] = []
+            payload["uploaded_files"] = payload["uploaded_files"][:15]
+            payload["processed_posts"] = payload["processed_posts"][:50]
+            payload["tracked_links"] = payload["tracked_links"][:15]
+            raw_json = json.dumps(payload, separators=(',', ':'))
+            payload_bytes = len(raw_json.encode('utf-8'))
+            if payload_bytes > _JSONBIN_MAX_BYTES:
+                logger.error(
+                    f"[JSONBin] Payload still {payload_bytes / 1024:.1f}KB after all trimming "
+                    f"(pin_queue/bot_metadata too large) - cloud save will be skipped."
+                )
+
     return payload, payload_bytes
 
 
@@ -362,6 +423,13 @@ def save_cloud_state() -> bool:
     global _last_sync_ts
     if not _is_configured():
         return False
+    if _cloud_restore_failed:
+        logger.warning(
+            "[JSONBin] Skipping cloud save: boot-time restore failed, so the local DB may be "
+            "incomplete and would overwrite the good cloud copy. Will retry restore."
+        )
+        _retry_restore_if_needed()
+        return False
     # Safety guard: Never allow an unmocked pytest run to overwrite live production JSONBin
     if os.environ.get("PYTEST_CURRENT_TEST") and getattr(requests.put, "__module__", "").startswith("requests"):
         logger.debug("[JSONBin] Skipping live network PUT during unmocked pytest run.")
@@ -371,6 +439,10 @@ def save_cloud_state() -> bool:
             import json
             payload, payload_bytes = build_state_payload()
             raw_json = json.dumps(payload, separators=(',', ':'))
+
+            if payload_bytes > _JSONBIN_MAX_BYTES:
+                logger.error("[JSONBin] Payload exceeds the 100KB limit - not uploading.")
+                return False
 
             logger.info(f"[JSONBin] Uploading budgeted payload ({payload_bytes / 1024:.1f}KB / 100KB free limit)")
 
@@ -414,13 +486,23 @@ def restore_db_from_cloud():
     On startup, load JSONBin state into SQLite so the bot
     remembers everything even after a Render restart.
     """
+    global _cloud_restore_failed
     if not _is_configured():
         logger.info("[JSONBin] Not configured — skipping cloud restore.")
         return
 
     state = load_cloud_state()
+    if state is None:
+        # Load failed (timeout / 5xx / auth). Do NOT treat as an empty cloud.
+        _cloud_restore_failed = True
+        logger.error(
+            "[JSONBin] Cloud load failed at startup - cloud saves are paused until a restore "
+            "succeeds, so the existing cloud copy cannot be overwritten with an empty DB."
+        )
+        return
     if not state:
-        logger.info("[JSONBin] No cloud state found — starting fresh.")
+        _cloud_restore_failed = False
+        logger.info("[JSONBin] Cloud bin is empty — starting fresh.")
         return
 
     try:
@@ -601,6 +683,34 @@ def restore_db_from_cloud():
                      for d in deviantart_posts if d.get("filename")]
                 )
 
+            # Restore ImgBB / ImageKit / ImgPile posts (dedupe state; without this a Render
+            # restart makes the dispatcher re-post everything to these platforms)
+            for _tbl, _key in (
+                ("imgbb_posts", "imgbb_posts"),
+                ("imgpile_posts", "imgpile_posts"),
+            ):
+                _rows = state.get(_key, [])
+                if _rows:
+                    conn.executemany(
+                        f"INSERT OR IGNORE INTO {_tbl} "
+                        "(filename, post_url, title, image_url, posted_at) VALUES (?, ?, ?, ?, ?)",
+                        [(x.get("filename", ""), x.get("post_url", ""),
+                          x.get("title", ""), x.get("image_url", ""),
+                          x.get("posted_at") or "2000-01-01 00:00:00")
+                         for x in _rows if x.get("filename")]
+                    )
+            imagekit_posts = state.get("imagekit_posts", [])
+            if imagekit_posts:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO imagekit_posts "
+                    "(filename, post_url, title, image_url, file_id, posted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    [(x.get("filename", ""), x.get("post_url", ""),
+                      x.get("title", ""), x.get("image_url", ""),
+                      x.get("file_id", ""),
+                      x.get("posted_at") or "2000-01-01 00:00:00")
+                     for x in imagekit_posts if x.get("filename")]
+                )
+
             # Restore A/B tests (UNIQUE on test_id, variant)
             ab_tests = state.get("ab_tests", [])
             if ab_tests:
@@ -714,6 +824,8 @@ def restore_db_from_cloud():
                      for v in state["viral_surge_alerts"] if v.get("code")]
                 )
             conn.commit()
+        # Restore finished: local DB now contains the cloud state, so saving is safe again.
+        _cloud_restore_failed = False
 
         # \u2500\u2500 Auto-purge stale Telegram CDN entries restored from cloud snapshot \u2500\u2500\u2500
         # The cloud snapshot may be up to 30 min old. If /fixqueue cleaned the DB
@@ -779,7 +891,22 @@ def restore_db_from_cloud():
             logger.warning(f"[JSONBin] Queue re-date failed (non-critical): {_redate_err}")
 
     except Exception as e:
-        logger.error(f"[JSONBin] Restore error: {e}")
+        _cloud_restore_failed = True
+        logger.error(f"[JSONBin] Restore error (cloud saves paused until a restore succeeds): {e}")
+
+
+_last_restore_retry_ts: float = 0.0
+
+
+def _retry_restore_if_needed(min_interval_sec: int = 300) -> None:
+    """Re-attempt a failed boot restore (rate limited), re-enabling cloud saves on success."""
+    global _last_restore_retry_ts
+    if not _cloud_restore_failed:
+        return
+    if time.time() - _last_restore_retry_ts < min_interval_sec:
+        return
+    _last_restore_retry_ts = time.time()
+    restore_db_from_cloud()
 
 
 

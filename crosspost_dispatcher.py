@@ -56,7 +56,7 @@ def _handle_platform_error(platform: str, err: object):
     err_str = str(err).lower()
     if any(k in err_str for k in ["429", "too many requests", "rate limit", "ratelimit"]):
         trip_breaker(platform, f"HTTP 429 Rate Limit: {str(err)[:80]}", cooldown_hours=6.0)
-    elif any(k in err_str for k in ["403", "forbidden", "suspended", "account terminated", "blocked", "103"]):
+    elif any(k in err_str for k in ["403", "forbidden", "suspended", "account terminated", "blocked", "error code: 103", "error 103", "code 103"]):
         trip_breaker(platform, f"HTTP 403 / Access Blocked: {str(err)[:80]}", cooldown_hours=12.0)
     elif any(k in err_str for k in ["402", "not enough credits", "credit", "quota"]):
         trip_breaker(platform, f"HTTP 402 Quota Exhausted: {str(err)[:80]}", cooldown_hours=24.0)
@@ -571,7 +571,10 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
 
 
     if platform_tasks:
-        with ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost") as executor:
+        # Not a `with` block: its __exit__ waits for every worker, so one hung platform
+        # would block here forever and defeat the 60s collection budget below.
+        executor = ThreadPoolExecutor(max_workers=min(len(platform_tasks), _MAX_CROSSPOST_WORKERS), thread_name_prefix="crosspost")
+        try:
             future_to_platform = {
                 executor.submit(fn): platform
                 for platform, fn in platform_tasks.items()
@@ -599,6 +602,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
                     "[Crosspost] Platform workers exceeded 60s collection budget; "
                     f"returning partial results. Unfinished: {unfinished or ['unknown']}"
                 )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     elapsed = time.monotonic() - t_start
     logger.info(f"[Crosspost] All platform posts completed in {elapsed:.1f}s (parallel)")

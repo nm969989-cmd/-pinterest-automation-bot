@@ -2119,12 +2119,28 @@ def get_queue_counts() -> dict:
     return {"new": new_count, "backlog": backlog_count, "total": new_count + backlog_count}
 
 
+def get_queued_image_basenames() -> set:
+    """Basenames of image files still referenced by queued pins (must not be cleaned up)."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT image_path FROM pin_queue WHERE image_path IS NOT NULL AND image_path != ''"
+            ).fetchall()
+    except Exception:
+        return set()
+    return {os.path.basename(str(r[0]).replace("\\", "/")) for r in rows}
+
+
 def count_posts_today(today_str: str) -> int:
     """Count how many pins were actually uploaded to Pinterest today (IST).
-    Uses IST-adjusted date so midnight-5:30 AM UTC posts count for the correct IST day."""
+    Uses IST-adjusted date so midnight-5:30 AM UTC posts count for the correct IST day.
+
+    One post can own two rows (processed filename + original filename, both kept
+    for dedup), so rows are collapsed by title + minute to count each post once."""
     with _get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM uploaded_files "
+            "SELECT COUNT(DISTINCT COALESCE(title, '') || '|' || strftime('%Y-%m-%d %H:%M', uploaded_at)) "
+            "FROM uploaded_files "
             "WHERE date(uploaded_at, '+5 hours', '+30 minutes') = ?",
             (today_str,)
         ).fetchone()[0]
@@ -2138,7 +2154,8 @@ def count_posts_on_utc_date(utc_date_str: str) -> int:
     """
     with _get_conn() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM uploaded_files "
+            "SELECT COUNT(DISTINCT COALESCE(title, '') || '|' || strftime('%Y-%m-%d %H:%M', uploaded_at)) "
+            "FROM uploaded_files "
             "WHERE date(uploaded_at) = ?",
             (utc_date_str,)
         ).fetchone()[0]

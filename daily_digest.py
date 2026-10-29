@@ -17,6 +17,7 @@ Deduplication:
 """
 
 import datetime
+import time
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -230,6 +231,10 @@ def build_daily_digest_message(date_str: str = None) -> str:
     return "\n".join(lines)
 
 
+_last_failed_attempt_ts: float = 0.0
+_RETRY_BACKOFF_SEC = 600  # after a failed delivery, wait 10 min before the scheduler retries
+
+
 def send_daily_digest(force: bool = False) -> bool:
     """
     Sends the formatted daily performance digest to the admin chat.
@@ -245,11 +250,18 @@ def send_daily_digest(force: bool = False) -> bool:
     if not force and last_sent == today_str:
         logger.info(f"[DailyDigest] Digest for {today_str} was already sent. Skipping.")
         return False
+    global _last_failed_attempt_ts
+    if not force and time.time() - _last_failed_attempt_ts < _RETRY_BACKOFF_SEC:
+        return False
 
     try:
         report = build_daily_digest_message(date_str=today_str)
-        from telegram_bot import notify_admin
-        notify_admin(report, parse_mode="Markdown")
+        from telegram_bot import notify_admin_confirmed
+        if not notify_admin_confirmed(report, parse_mode="Markdown"):
+            # Not delivered: leave the 'sent' flag unset so the next scheduler tick retries.
+            logger.warning(f"[DailyDigest] Digest for {today_str} was not delivered; will retry.")
+            _last_failed_attempt_ts = time.time()
+            return False
         set_metadata("last_daily_digest_date", today_str)
         logger.info(f"[DailyDigest] Successfully delivered daily performance digest for {today_str}.")
         return True

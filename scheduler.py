@@ -297,6 +297,7 @@ class PinScheduler:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._slots_fired_store: set = set()
         self.is_running = False
         self.thread = None
         # In-memory fallback for tasks not yet persisted to DB
@@ -501,6 +502,66 @@ class PinScheduler:
             logger.warning(f"[Scheduler] Notification failed (non-critical): {e}")
 
 
+    def _spawn_periodic_jobs(self, today_ist: str, radar_due: bool):
+        """Run housekeeping jobs on a side thread; skip if the previous run is still going."""
+        t = getattr(self, "_periodic_thread", None)
+        if t is not None and t.is_alive():
+            return
+        self._periodic_thread = threading.Thread(
+            target=self._run_periodic_jobs, args=(today_ist, radar_due),
+            name="PeriodicJobsThread", daemon=True,
+        )
+        self._periodic_thread.start()
+
+    @staticmethod
+    def _run_periodic_jobs(today_ist: str, radar_due: bool):
+        def _safe(label, fn):
+            try:
+                fn()
+            except Exception as err:
+                logger.debug(f"[Scheduler] {label} error (non-critical): {err}")
+
+        def _digest():
+            from daily_digest import check_and_send_scheduled_digest
+            check_and_send_scheduled_digest()
+
+        def _radar():
+            from viral_radar import check_and_notify_viral_surges
+            check_and_notify_viral_surges()
+
+        def _healer():
+            from link_healer import check_and_run_autonomous_healer_cycle
+            check_and_run_autonomous_healer_cycle()
+
+        def _ab():
+            from ab_tester import check_and_decide_ab_tests
+            check_and_decide_ab_tests()
+
+        def _weekly():
+            from weekly_report import check_and_send_weekly_report
+            check_and_send_weekly_report()
+
+        def _revenue():
+            from revenue_tracker import refresh_revenue_log
+            from database import get_metadata, set_metadata
+            key = f"rev_refresh_{today_ist}"
+            if not get_metadata(key, ""):
+                refresh_revenue_log()
+                set_metadata(key, "done")
+
+        def _reviver():
+            from ghost_pin_reviver import check_and_run_daily_reviver
+            check_and_run_daily_reviver()
+
+        _safe("Daily digest check", _digest)
+        if radar_due:
+            _safe("Viral radar check", _radar)
+        _safe("Autonomous stock healer check", _healer)
+        _safe("A/B check", _ab)
+        _safe("Weekly report check", _weekly)
+        _safe("Revenue refresh", _revenue)
+        _safe("Ghost reviver", _reviver)
+
     def _worker_loop(self):
         """Supervisor: an unexpected exception must not kill the posting thread."""
         while self.is_running:
@@ -535,7 +596,9 @@ class PinScheduler:
             f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
-        _slots_fired_today: set = set()  # Tracks (h, m, today_ist) so no slot can ever fire twice
+        # Tracks (h, m, today_ist) so no slot can ever fire twice. Lives on the instance
+        # so the supervisor restarting this loop after a crash cannot re-fire a slot.
+        _slots_fired_today: set = self._slots_fired_store
         _pending_catchup_count = 0  # How many missed slots to post with safe anti-burst pacing
         _last_pin_post_time: float = 0.0  # Epoch timestamp of last post (for human pacing)
         _next_catchup_delay: float = 15 * 60 + random.randint(-180, 180)  # Safe 12-18 min interval
@@ -681,61 +744,12 @@ class PinScheduler:
                     )
             # ─────────────────────────────────────────────────────────────────
 
-            # ── Daily Performance Digest check (e.g. 21:00 IST) ──────────────
-            try:
-                from daily_digest import check_and_send_scheduled_digest
-                check_and_send_scheduled_digest()
-            except Exception as _digest_err:
-                logger.debug(f"[Scheduler] Daily digest check error (non-critical): {_digest_err}")
-
-            # ── Viral Pin Surge Radar periodic check (max once every 2 hours) ──
-            try:
-                now_ts_radar = time.time()
-                if (now_ts_radar - _last_viral_radar_check) >= 7200.0:  # 2 hours
-                    _last_viral_radar_check = now_ts_radar
-                    from viral_radar import check_and_notify_viral_surges
-                    check_and_notify_viral_surges()
-            except Exception as _radar_err:
-                logger.debug(f"[Scheduler] Viral radar check error (non-critical): {_radar_err}")
-
-            # ── Autonomous Dynamic Link Redirection & Stock Healer (every 6h) ─
-            try:
-                from link_healer import check_and_run_autonomous_healer_cycle
-                check_and_run_autonomous_healer_cycle()
-            except Exception as _healer_err:
-                logger.debug(f"[Scheduler] Autonomous stock healer check error (non-critical): {_healer_err}")
-
-            # ── A/B Test Decision Engine ─────────────────────────────────────
-            try:
-                from ab_tester import check_and_decide_ab_tests
-                check_and_decide_ab_tests()
-            except Exception as _ab_err:
-                logger.debug(f"[Scheduler] A/B check error (non-critical): {_ab_err}")
-
-            # ── Weekly Performance Report ────────────────────────────────────
-            try:
-                from weekly_report import check_and_send_weekly_report
-                check_and_send_weekly_report()
-            except Exception as _wr_err:
-                logger.debug(f"[Scheduler] Weekly report check error (non-critical): {_wr_err}")
-
-            # ── Revenue Log Refresh (once daily) ─────────────────────────────
-            try:
-                from revenue_tracker import refresh_revenue_log
-                from database import get_metadata, set_metadata
-                _rev_key = f"rev_refresh_{today_ist}"
-                if not get_metadata(_rev_key, ""):
-                    refresh_revenue_log()
-                    set_metadata(_rev_key, "done")
-            except Exception as _rev_err:
-                logger.debug(f"[Scheduler] Revenue refresh error (non-critical): {_rev_err}")
-
-            # ── Ghost Pin Reviver (once daily) ───────────────────────────────
-            try:
-                from ghost_pin_reviver import check_and_run_daily_reviver
-                check_and_run_daily_reviver()
-            except Exception as _grv_err:
-                logger.debug(f"[Scheduler] Ghost reviver error (non-critical): {_grv_err}")
+            # Periodic jobs (digest, radar, healer, A/B, weekly report, revenue, reviver) run on a side thread so slow HTTP calls can never delay a posting slot.
+            now_ts_radar = time.time()
+            radar_due = (now_ts_radar - _last_viral_radar_check) >= 7200.0  # 2 hours
+            if radar_due:
+                _last_viral_radar_check = now_ts_radar
+            self._spawn_periodic_jobs(today_ist, radar_due)
 
             # ── Check if it's a posting time slot (with today's jitter applied) ──
             current_slot = None
@@ -761,6 +775,8 @@ class PinScheduler:
                 should_post = True
                 _last_fired_slot = current_slot
                 _slots_fired_today.add(slot_key)
+                # Drop entries from earlier days so the set cannot grow without bound.
+                _slots_fired_today.intersection_update({k for k in _slots_fired_today if k[2] == today_ist})
             elif _pending_catchup_count > 0:
                 # Catch-up post: enforce 12–18 min interval since last post to prevent rapid-fire burst bans
                 if elapsed_since_last_post >= _next_catchup_delay:

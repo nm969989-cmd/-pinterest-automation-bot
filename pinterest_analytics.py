@@ -76,12 +76,15 @@ def _ensure_analytics_table() -> None:
         logger.error(f"[Analytics] Table setup failed: {e}")
 
 
+# NOTE: "pinterest" is deliberately absent. Real users arrive via the Pinterest in-app
+# browser, whose UA contains "Pinterest". Pinterest's own crawler
+# ("Pinterest/0.2 (+http://www.pinterest.com/bot.html)") is still caught by "bot".
 BOT_USER_AGENT_KEYWORDS = (
     "bot", "crawl", "spider", "slurp", "facebookexternalhit",
     "telegrambot", "twitterbot", "whatsapp", "slackbot", "bluesky",
     "applebot", "bingbot", "yandex", "duckduckbot", "python-requests",
     "aiohttp", "httpx", "curl", "wget", "headless", "petalbot",
-    "semrush", "ahrefs", "bytespider", "googlebot", "pinterest",
+    "semrush", "ahrefs", "bytespider", "googlebot",
     "mastodon", "http.rb", "urllib", "discordbot", "meta-externalagent",
     "preview", "fetcher", "scraper", "scanner", "uptimerobot", "render"
 )
@@ -222,9 +225,9 @@ def get_top_pins(days: int = 7, metric: str = "visits", limit: int = 5) -> list[
         with _get_conn() as conn:
             rows = conn.execute("""
                 SELECT bv.code, bv.anime_name, bv.title,
-                       COUNT(bv.id)                                 as visits,
-                       COUNT(CASE WHEN bv.is_pinterest=1 THEN 1 END) as pint_visits,
-                       COUNT(lc.id)                                 as clicks
+                       COUNT(DISTINCT bv.id)                                 as visits,
+                       COUNT(DISTINCT CASE WHEN bv.is_pinterest=1 THEN bv.id END) as pint_visits,
+                       COUNT(DISTINCT lc.id)                                 as clicks
                 FROM bridge_visits bv
                 LEFT JOIN link_clicks lc ON bv.code = lc.code
                     AND lc.clicked_at >= ?

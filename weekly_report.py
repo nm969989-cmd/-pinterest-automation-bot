@@ -11,6 +11,7 @@ New .env keys:
 """
 
 import datetime
+import time
 from logger import get_logger
 import config
 
@@ -151,12 +152,16 @@ def build_weekly_report() -> str:
 
 
 _last_sent_week_key = ""
+_last_failed_attempt_ts: float = 0.0
+_RETRY_BACKOFF_SEC = 600  # after a failed delivery, wait 10 min before the scheduler retries
 
 
 def send_weekly_report(force: bool = False) -> bool:
     """Send the weekly report. Deduplication via bot_metadata."""
-    global _last_sent_week_key
+    global _last_sent_week_key, _last_failed_attempt_ts
     if not getattr(config, "WEEKLY_REPORT_ENABLED", True):
+        return False
+    if not force and time.time() - _last_failed_attempt_ts < _RETRY_BACKOFF_SEC:
         return False
 
     now = _ist_now()
@@ -172,9 +177,12 @@ def send_weekly_report(force: bool = False) -> bool:
 
     try:
         report = build_weekly_report()
-        from telegram_bot import notify_admin
+        from telegram_bot import notify_admin_confirmed
 
-        notify_admin(report, parse_mode="Markdown")
+        if not notify_admin_confirmed(report, parse_mode="Markdown"):
+            logger.warning(f"[WeeklyReport] Report for {week_key} was not delivered; will retry.")
+            _last_failed_attempt_ts = time.time()
+            return False
         set_metadata(week_key, "sent")
         _last_sent_week_key = week_key
         logger.info(f"[WeeklyReport] Weekly report successfully sent for {week_key}")
