@@ -76,11 +76,12 @@ def test_db_queue_functions():
     assert isinstance(detail, list)
 check("Queue functions (get_queue_counts, get_queue_detail)", test_db_queue_functions)
 
-def test_db_pop():
-    from database import pop_next_pin_for_immediate_post
-    pin = pop_next_pin_for_immediate_post()
+def test_db_peek():
+    # Read-only: pop_next_pin_for_immediate_post() would REMOVE a real queued pin.
+    from database import get_next_queued_pin
+    pin = get_next_queued_pin("1970-01-01")
     assert pin is None or isinstance(pin, dict)
-check("pop_next_pin_for_immediate_post() returns dict or None", test_db_pop)
+check("get_next_queued_pin() returns dict or None (read-only)", test_db_peek)
 
 # ── 4. Board Router ────────────────────────────────────────
 print("\n[4] Board Router")

@@ -101,10 +101,17 @@ def record_pin(anime_name, title, description, link, image_path):
 
 # -- Auth helper --------------------------------------------------------------
 def _is_admin(update: "Update") -> bool:
+    """Fail closed: with no admin configured nobody is admin.
+
+    /start no longer writes admin_chat_id, so a stranger cannot become admin.
+    """
     admin_id = _state.get("admin_chat_id") or os.getenv("TELEGRAM_ADMIN_CHAT_ID")
     if not admin_id:
-        return True
-    return str(update.effective_chat.id) == str(admin_id)
+        return False
+    chat = update.effective_chat
+    if chat is None:
+        return False
+    return str(chat.id) == str(admin_id)
 
 
 def get_queue_keyboard() -> "InlineKeyboardMarkup | None":
@@ -337,7 +344,10 @@ def format_crosspost_status_block(results: dict) -> str:
 
 async def cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     chat_id = update.effective_chat.id
-    _state["admin_chat_id"] = chat_id
+    configured = os.getenv("TELEGRAM_ADMIN_CHAT_ID") or _state.get("admin_chat_id")
+    if configured and str(configured) != str(chat_id):
+        logger.warning(f"[TG BOT] Rejected /start from non-admin chat_id={chat_id}")
+        return
     await update.message.reply_text(
         f"Welcome to Animanoizing Bot!\n\n"
         f"Your Chat ID: {chat_id}\n\n"
@@ -345,7 +355,7 @@ async def cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         f"TELEGRAM_ADMIN_CHAT_ID={chat_id}\n\n"
         f"Use /help to see all commands."
     )
-    logger.info(f"[TG BOT] Admin registered: chat_id={chat_id}")
+    logger.info(f"[TG BOT] /start from chat_id={chat_id}")
 
 
 async def cmd_ping(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
@@ -2736,6 +2746,10 @@ async def cmd_testpost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
 async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Handle inline button taps: [Post to Pinterest] or [Discard]."""
     query = update.callback_query
+    if not _is_admin(update):
+        await query.answer()
+        logger.warning("[TG BOT] Ignored callback from non-admin chat")
+        return
     await query.answer()
 
     data = query.data or ""
@@ -4933,19 +4947,26 @@ async def cmd_set_wallhaven_key(update: "Update", context: "ContextTypes.DEFAULT
         await update.message.reply_text("ℹ️ Usage: /set_wallhaven_key <32-character API key>")
         return
 
+    # Remove the message containing the secret from chat history.
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     try:
         from database import set_metadata
         set_metadata("wallhaven_api_key", new_key)
         import config
         config.WALLHAVEN_API_KEY = new_key
         config.WALLHAVEN_ENABLED = True
-        await update.message.reply_text(
-            f"✅ Wallhaven API key updated successfully!\n"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ Wallhaven API key updated successfully!\n"
             f"Key: {new_key[:6]}...{new_key[-4:] if len(new_key) > 10 else ''}\n"
             f"Use /wallhaven to verify connectivity."
         )
     except Exception as e:
-        await update.message.reply_text(f"Failed to update key: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Failed to update key: {e}")
 
 
 async def cmd_dedup_scan(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):

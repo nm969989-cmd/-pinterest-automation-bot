@@ -33,7 +33,7 @@
     62:     if not token and refresh_tok and DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET:
     63:         token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, refresh_tok)
     ```
-    - `DEVIANTART_ACCESS_TOKEN` is loaded from `config.py:99`, which contains a hardcoded fallback string `'9b67b0c368ad153ce4d4551678812f8357237fe34c030a7876'`.
+    - `DEVIANTART_ACCESS_TOKEN` is loaded from `config.py:99`, which contained a hardcoded fallback token (since removed).
     - If `token` is non-empty (which it always is unless `force_refresh=True` is explicitly passed), line 62 `if not token` evaluates to `False`, so `_refresh_token()` is **never called on startup** or on initial calls.
   - **Lines 70-128 (`_refresh_token`)**:
     ```python

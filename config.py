@@ -94,10 +94,10 @@ MASTODON_ACCESS_TOKEN  = os.getenv('MASTODON_ACCESS_TOKEN', '').strip()
 MASTODON_ENABLED       = os.getenv('MASTODON_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(MASTODON_ACCESS_TOKEN)
 
 # DeviantArt Art Community Cross-Post
-DEVIANTART_CLIENT_ID     = os.getenv('DEVIANTART_CLIENT_ID', '77484').strip()
-DEVIANTART_CLIENT_SECRET = os.getenv('DEVIANTART_CLIENT_SECRET', '089b87f80b4640d6fe58a8275ca68e71').strip()
-DEVIANTART_ACCESS_TOKEN  = os.getenv('DEVIANTART_ACCESS_TOKEN', '9b67b0c368ad153ce4d4551678812f8357237fe34c030a7876').strip()
-DEVIANTART_REFRESH_TOKEN = os.getenv('DEVIANTART_REFRESH_TOKEN', '3bcc44eb9d2baef65440d02a261131a3843c9af9').strip()
+DEVIANTART_CLIENT_ID     = os.getenv('DEVIANTART_CLIENT_ID', '').strip()
+DEVIANTART_CLIENT_SECRET = os.getenv('DEVIANTART_CLIENT_SECRET', '').strip()
+DEVIANTART_ACCESS_TOKEN  = os.getenv('DEVIANTART_ACCESS_TOKEN', '').strip()
+DEVIANTART_REFRESH_TOKEN = os.getenv('DEVIANTART_REFRESH_TOKEN', '').strip()
 DEVIANTART_ENABLED       = os.getenv('DEVIANTART_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(DEVIANTART_CLIENT_ID and DEVIANTART_CLIENT_SECRET)
 
 
@@ -107,11 +107,11 @@ PIXELFED_ACCESS_TOKEN  = os.getenv('PIXELFED_ACCESS_TOKEN', '').strip()
 PIXELFED_ENABLED       = os.getenv('PIXELFED_ENABLED', 'false').lower() in ('true', '1', 'yes')
 
 # Freeimage.host Dedicated Image Uploading
-FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '6d207e02198a847aa98d0a2a901485a5').strip()
+FREEIMAGE_API_KEY      = os.getenv('FREEIMAGE_API_KEY', '').strip()
 FREEIMAGE_ENABLED      = os.getenv('FREEIMAGE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(FREEIMAGE_API_KEY)
 
 # ImgBB Dedicated Image Uploading
-IMGBB_API_KEY          = os.getenv('IMGBB_API_KEY', '1506c60298ac253357a0d04c40ea4bd7').strip()
+IMGBB_API_KEY          = os.getenv('IMGBB_API_KEY', '').strip()
 IMGBB_ENABLED          = os.getenv('IMGBB_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGBB_API_KEY)
 
 
@@ -120,13 +120,13 @@ IMGHIPPO_API_KEY       = os.getenv('IMGHIPPO_API_KEY', '').strip()
 IMGHIPPO_ENABLED       = os.getenv('IMGHIPPO_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(IMGHIPPO_API_KEY)
 
 # ImageKit.io Global CDN & Media Storage (Mumbai, India)
-IMAGEKIT_PUBLIC_KEY    = os.getenv('IMAGEKIT_PUBLIC_KEY', 'public_rp+18TLVQhsYO9qQnXiMxcTDi2c=').strip()
-IMAGEKIT_PRIVATE_KEY   = os.getenv('IMAGEKIT_PRIVATE_KEY', 'private_PrpAMecPmUx1IQDvZ0bNzg2s+8I=').strip()
-IMAGEKIT_URL_ENDPOINT  = os.getenv('IMAGEKIT_URL_ENDPOINT', 'https://ik.imagekit.io/zno3dgy8z').strip().rstrip('/')
+IMAGEKIT_PUBLIC_KEY    = os.getenv('IMAGEKIT_PUBLIC_KEY', '').strip()
+IMAGEKIT_PRIVATE_KEY   = os.getenv('IMAGEKIT_PRIVATE_KEY', '').strip()
+IMAGEKIT_URL_ENDPOINT  = os.getenv('IMAGEKIT_URL_ENDPOINT', '').strip().rstrip('/')
 IMAGEKIT_ENABLED       = os.getenv('IMAGEKIT_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMAGEKIT_PRIVATE_KEY)
 
 # ImgPile Free Permanent Image Hosting
-IMGPILE_API_KEY        = os.getenv('IMGPILE_API_KEY', 'LsGYl3Y6qYncpDADKbBV4ZHFdABVse41H4HfVrEi').strip()
+IMGPILE_API_KEY        = os.getenv('IMGPILE_API_KEY', '').strip()
 IMGPILE_ENABLED        = os.getenv('IMGPILE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGPILE_API_KEY)
 
 

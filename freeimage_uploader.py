@@ -32,7 +32,7 @@ _RETRY_DELAYS = [0, 4, 12]
 
 def _get_api_key() -> str:
     from config import FREEIMAGE_API_KEY
-    return (FREEIMAGE_API_KEY or "6d207e02198a847aa98d0a2a901485a5").strip()
+    return (FREEIMAGE_API_KEY or "").strip()
 
 
 def verify_freeimage_token() -> bool:

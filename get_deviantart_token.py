@@ -20,8 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CLIENT_ID     = os.getenv("DEVIANTART_CLIENT_ID", "77484")
-CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "089b87f80b4640d6fe58a8275ca68e71")
+CLIENT_ID     = os.getenv("DEVIANTART_CLIENT_ID", "")
+CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "")
 REDIRECT_URI  = "https://localhost"
 
 

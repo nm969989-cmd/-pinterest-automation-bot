@@ -2,7 +2,7 @@ import urllib.parse
 import random
 import re
 import requests
-from config import AMAZON_AFFILIATE_TAG
+from config import AMAZON_AFFILIATE_TAG, APP_BASE_URL
 from logger import get_logger
 import pa_api  # Official PA-API (used when credentials set)
 
@@ -371,7 +371,6 @@ def wrap_with_tracker(raw_amazon_url: str, anime_name: str = "", title: str = ""
     This logs real-time click metrics to SQLite whenever a Pinterest user clicks.
     Otherwise returns direct Amazon URL.
     """
-    from config import APP_BASE_URL
     if not APP_BASE_URL:
         return raw_amazon_url
     try:

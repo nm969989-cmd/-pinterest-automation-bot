@@ -350,10 +350,10 @@ class PinScheduler:
             )
             if added:
                 org_label = " [ORGANIC 🌿]" if is_organic else ""
-            logger.info(
-                f"[Scheduler] NEW pin queued for {sched_date}{org_label}: '{title}' "
-                f"(queue: {counts['new']+1} new, {counts['backlog']} backlog)"
-            )
+                logger.info(
+                    f"[Scheduler] NEW pin queued for {sched_date}{org_label}: '{title}' "
+                    f"(queue: {counts['new']+1} new, {counts['backlog']} backlog)"
+                )
             return added
 
     def enqueue_backlog_image(self, post_id: str, image_path: str, title: str,
@@ -502,6 +502,19 @@ class PinScheduler:
 
 
     def _worker_loop(self):
+        """Supervisor: an unexpected exception must not kill the posting thread."""
+        while self.is_running:
+            try:
+                self._worker_loop_inner()
+                return  # inner loop only returns once is_running is False
+            except Exception as e:
+                logger.error(
+                    f"[Scheduler] Worker loop crashed, restarting in 15s: {e}",
+                    exc_info=True,
+                )
+                time.sleep(15)
+
+    def _worker_loop_inner(self):
         from database import (get_next_queued_pin, remove_queued_pin,
                                count_posts_today, mark_file_uploaded,
                                is_file_uploaded, is_image_url_uploaded,
@@ -618,7 +631,6 @@ class PinScheduler:
 
                 # ── Trigger organic human browsing & activity simulation ──────
                 try:
-                    import threading
                     from human_simulator import run_organic_simulation
                     threading.Thread(target=run_organic_simulation, name="HumanSimThread", daemon=True).start()
                 except Exception as _sim_e:
@@ -912,7 +924,15 @@ class PinScheduler:
                                         f"Cannot recover pin: '{pin['title']}'. "
                                         f"Dropping after next retry cycle."
                                     )
-                                    increment_retry_count(pin["id"])
+                                    new_count = increment_retry_count(pin["id"])
+                                    if new_count >= 3:
+                                        # Without this the same unrecoverable pin is returned
+                                        # first on every slot and blocks the whole queue.
+                                        move_to_dead_letter(pin, fail_reason="Image file missing and no CDN URL stored")
+                                        remove_queued_pin(pin["id"])
+                                        logger.error(
+                                            f"[Scheduler] Dead-lettered unrecoverable pin: '{pin['title']}'"
+                                        )
                                     image_path = None
 
                             if image_path:

@@ -5,6 +5,9 @@ import threading
 from flask import Flask, jsonify
 from threading import Thread
 import logging
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 # Disable noisy Flask access logs
 logging.getLogger('werkzeug').setLevel(logging.ERROR)

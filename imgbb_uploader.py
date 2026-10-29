@@ -68,9 +68,9 @@ def _check_maintenance_response(res: requests.Response | None) -> bool:
 def _get_api_key() -> str:
     try:
         from config import IMGBB_API_KEY
-        return (IMGBB_API_KEY or os.getenv("IMGBB_API_KEY", "1506c60298ac253357a0d04c40ea4bd7")).strip()
+        return (IMGBB_API_KEY or os.getenv("IMGBB_API_KEY", "")).strip()
     except Exception:
-        return os.getenv("IMGBB_API_KEY", "1506c60298ac253357a0d04c40ea4bd7").strip()
+        return os.getenv("IMGBB_API_KEY", "").strip()
 
 
 def verify_imgbb_token() -> bool:

@@ -37,14 +37,14 @@ def _get_credentials() -> tuple[str, str, str]:
     """Returns (public_key, private_key, url_endpoint)."""
     try:
         from config import IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT
-        pub = (IMAGEKIT_PUBLIC_KEY or os.getenv("IMAGEKIT_PUBLIC_KEY", "public_rp+18TLVQhsYO9qQnXiMxcTDi2c=")).strip()
-        priv = (IMAGEKIT_PRIVATE_KEY or os.getenv("IMAGEKIT_PRIVATE_KEY", "private_PrpAMecPmUx1IQDvZ0bNzg2s+8I=")).strip()
-        endpoint = (IMAGEKIT_URL_ENDPOINT or os.getenv("IMAGEKIT_URL_ENDPOINT", "https://ik.imagekit.io/zno3dgy8z")).strip().rstrip("/")
+        pub = (IMAGEKIT_PUBLIC_KEY or os.getenv("IMAGEKIT_PUBLIC_KEY", "")).strip()
+        priv = (IMAGEKIT_PRIVATE_KEY or os.getenv("IMAGEKIT_PRIVATE_KEY", "")).strip()
+        endpoint = (IMAGEKIT_URL_ENDPOINT or os.getenv("IMAGEKIT_URL_ENDPOINT", "")).strip().rstrip("/")
         return pub, priv, endpoint
     except Exception:
-        pub = os.getenv("IMAGEKIT_PUBLIC_KEY", "public_rp+18TLVQhsYO9qQnXiMxcTDi2c=").strip()
-        priv = os.getenv("IMAGEKIT_PRIVATE_KEY", "private_PrpAMecPmUx1IQDvZ0bNzg2s+8I=").strip()
-        endpoint = os.getenv("IMAGEKIT_URL_ENDPOINT", "https://ik.imagekit.io/zno3dgy8z").strip().rstrip("/")
+        pub = os.getenv("IMAGEKIT_PUBLIC_KEY", "").strip()
+        priv = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip()
+        endpoint = os.getenv("IMAGEKIT_URL_ENDPOINT", "").strip().rstrip("/")
         return pub, priv, endpoint
 
 

@@ -47,9 +47,9 @@ _RETRY_DELAYS = [0, 4, 12]
 def _get_api_key() -> str:
     try:
         from config import IMGPILE_API_KEY
-        return (IMGPILE_API_KEY or os.getenv("IMGPILE_API_KEY", "LsGYl3Y6qYncpDADKbBV4ZHFdABVse41H4HfVrEi")).strip()
+        return (IMGPILE_API_KEY or os.getenv("IMGPILE_API_KEY", "")).strip()
     except Exception:
-        return os.getenv("IMGPILE_API_KEY", "LsGYl3Y6qYncpDADKbBV4ZHFdABVse41H4HfVrEi").strip()
+        return os.getenv("IMGPILE_API_KEY", "").strip()
 
 
 def verify_imgpile_token() -> bool:
