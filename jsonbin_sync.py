@@ -81,22 +81,25 @@ def build_state_payload() -> tuple[dict, int]:
     from database import DB_PATH, _get_conn
 
     with _get_conn() as conn:
-        # Processed posts (last 200 post_ids to keep payload well within 100KB budget)
+        # Processed posts (last 600 post_ids to prevent re-scraping old Telegram posts)
         posts = [
             row[0] for row in conn.execute(
-                "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 200"
+                "SELECT post_id FROM processed_posts ORDER BY processed_at DESC LIMIT 600"
             ).fetchall()
         ]
-        # Uploaded files (last 150 with fingerprints for persistent deduplication and organic trust status)
+        # Uploaded files (last 250 with fingerprints for persistent deduplication and organic trust status)
+        upload_rows = conn.execute(
+            "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash, is_organic "
+            "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 250"
+        ).fetchall()
         uploads = [
-            {"filename": r[0], "title": r[1], "anime_name": r[2],
+            {"filename": r[0],
+             "title": (r[1] or "") if idx < 30 else (r[1] or "")[:25],
+             "anime_name": (r[2] or "") if idx < 30 else (r[2] or "")[:15],
              "image_url": r[3], "uploaded_at": r[4],
              "sha256": r[5] or "", "phash": r[6] or "",
              "is_organic": r[7] or 0}
-            for r in conn.execute(
-                "SELECT filename, title, anime_name, image_url, uploaded_at, sha256, phash, is_organic "
-                "FROM uploaded_files ORDER BY uploaded_at DESC LIMIT 150"
-            ).fetchall()
+            for idx, r in enumerate(upload_rows)
         ]
         # Pin queue (preserve ALL pending queue items - vital state!)
         queue = [
@@ -328,13 +331,19 @@ def build_state_payload() -> tuple[dict, int]:
             "ghost_revive_log", "backlink_ledger", "viral_surge_alerts",
         ]:
             payload[k] = payload[k][:5]
-        payload["uploaded_files"] = payload["uploaded_files"][:30]
+        # Keep up to 150 uploaded_files in Tier 1 (strip non-essential title/anime text past 30)
+        for u_idx, u_item in enumerate(payload["uploaded_files"]):
+            if u_idx >= 30:
+                u_item["title"] = ""
+                u_item["anime_name"] = ""
+        payload["uploaded_files"] = payload["uploaded_files"][:150]
         payload["tracked_links"]  = payload["tracked_links"][:30]
         raw_json = json.dumps(payload, separators=(',', ':'))
         payload_bytes = len(raw_json.encode('utf-8'))
 
         # Tier 2 pruning if still over 90KB
         if payload_bytes > 90 * 1024:
+            payload["uploaded_files"] = payload["uploaded_files"][:30]
             payload["processed_posts"] = payload["processed_posts"][:100]
             payload["evolved_keywords"] = payload["evolved_keywords"][:15]
             payload["ab_tests"] = payload["ab_tests"][:10]
@@ -352,6 +361,10 @@ def save_cloud_state() -> bool:
     """
     global _last_sync_ts
     if not _is_configured():
+        return False
+    # Safety guard: Never allow an unmocked pytest run to overwrite live production JSONBin
+    if os.environ.get("PYTEST_CURRENT_TEST") and getattr(requests.put, "__module__", "").startswith("requests"):
+        logger.debug("[JSONBin] Skipping live network PUT during unmocked pytest run.")
         return False
     with _sync_lock:
         try:
@@ -743,6 +756,28 @@ def restore_db_from_cloud():
             f"{len(uploads)} uploads, {len(queue)} queued, {len(links)} tracked links. "
             f"No duplicates will be re-posted!"
         )
+
+        # ── Post-restore: purge already-posted items & re-date stale entries ──────
+        # Close the Render race-condition window: if a pin was posted but the cloud
+        # snapshot was taken before the 30-min sync, the item reappears in pin_queue
+        # on the next boot. This cleanup removes such zombies before the scheduler runs.
+        try:
+            from database import purge_already_posted_queue_items
+            removed = purge_already_posted_queue_items()
+            if removed:
+                logger.info(f"[JSONBin] Post-restore dedup: purged {removed} already-posted queue item(s).")
+        except Exception as _purge_err:
+            logger.warning(f"[JSONBin] Post-restore dedup failed (non-critical): {_purge_err}")
+
+        # Re-date stale scheduled_date values so they don't fire at every single slot.
+        try:
+            import datetime as _dt
+            from database import update_stale_queue_dates
+            today_ist = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+            update_stale_queue_dates(today_ist)
+        except Exception as _redate_err:
+            logger.warning(f"[JSONBin] Queue re-date failed (non-critical): {_redate_err}")
+
     except Exception as e:
         logger.error(f"[JSONBin] Restore error: {e}")
 

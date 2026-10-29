@@ -78,3 +78,4 @@ if __name__ == "__main__":
     print("Preflight Results:", results)
     print("ARENA_ENABLED:", getattr(config, "ARENA_ENABLED", False))
     print("PIXELFED_ENABLED:", getattr(config, "PIXELFED_ENABLED", False))
+

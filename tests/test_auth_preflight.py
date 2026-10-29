@@ -34,3 +34,4 @@ def test_auth_preflight_keeps_pixelfed_enabled_on_success():
             report = run_auth_preflight()
             assert report.get("pixelfed") == "verified"
             assert config.PIXELFED_ENABLED is True
+

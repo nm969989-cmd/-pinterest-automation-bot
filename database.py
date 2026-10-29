@@ -1270,21 +1270,43 @@ def get_wallhaven_stats(today_str: str = None) -> dict:
 # ── Processed Posts (Telegram) ──────────────────────────────────────────────
 
 def is_post_processed(post_id: str) -> bool:
-    """Returns True if this Telegram post ID was already handled."""
+    """Returns True if this Telegram post ID was already handled (in processed_posts or uploaded_files)."""
+    if not post_id:
+        return False
+    safe_id = post_id.replace("/", "_")
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM processed_posts WHERE post_id = ?", (post_id,)
+            "SELECT 1 FROM processed_posts WHERE post_id = ? OR post_id = ? LIMIT 1",
+            (post_id, safe_id),
         ).fetchone()
-    return row is not None
+        if row is not None:
+            return True
+        # Fallback: check if a file derived from this post_id was already uploaded
+        u_row = conn.execute(
+            "SELECT 1 FROM uploaded_files WHERE filename LIKE ? LIMIT 1",
+            (f"%{safe_id}%",),
+        ).fetchone()
+        return u_row is not None
 
 
 def mark_post_processed(post_id: str):
     """Marks a Telegram post ID as processed so it won't be re-downloaded."""
+    if not post_id:
+        return
     with _get_conn() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO processed_posts (post_id) VALUES (?)", (post_id,)
         )
         conn.commit()
+    try:
+        num = int(str(post_id).replace("_", "/").split("/")[-1])
+        if num > 0:
+            cur_min_raw = get_metadata("oldest_backlog_post_id", "")
+            cur_min = int(cur_min_raw) if cur_min_raw.isdigit() else 0
+            if cur_min == 0 or num < cur_min:
+                set_metadata("oldest_backlog_post_id", str(num))
+    except Exception:
+        pass
 
 
 def get_processed_post_count() -> int:
@@ -1295,18 +1317,37 @@ def get_processed_post_count() -> int:
 get_processed_count = get_processed_post_count
 
 def get_oldest_seen_post_numeric_id() -> int:
-    """Returns the smallest numeric post ID seen, for backlog pagination."""
+    """Returns the smallest numeric post ID seen across processed_posts, uploaded_files, and bot_metadata."""
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT post_id FROM processed_posts"
+        ).fetchall()
+        u_rows = conn.execute(
+            "SELECT filename FROM uploaded_files WHERE filename LIKE 'post_%'"
         ).fetchall()
     # post_id format: "ChannelName/1234" — extract the number
     ids = []
     for (pid,) in rows:
         try:
-            ids.append(int(pid.split("/")[-1]))
+            n = int(str(pid).replace("_", "/").split("/")[-1])
+            if n > 0:
+                ids.append(n)
         except Exception:
             pass
+    for (fn,) in u_rows:
+        try:
+            stem = os.path.splitext(str(fn))[0]
+            n = int(stem.split("_")[-1])
+            if n > 0:
+                ids.append(n)
+        except Exception:
+            pass
+    try:
+        meta_min = get_metadata("oldest_backlog_post_id", "")
+        if meta_min and meta_min.isdigit() and int(meta_min) > 0:
+            ids.append(int(meta_min))
+    except Exception:
+        pass
     return min(ids) if ids else 0
 
 
@@ -1527,6 +1568,71 @@ def is_intentional_repin(post_id: str) -> bool:
         or pid.startswith("revive_")
         or (pid.startswith("ab_") and ("_b_" in pid or pid.endswith("_b")))
     )
+
+
+def update_stale_queue_dates(today_str: str) -> int:
+    """
+    Re-dates all pin_queue items whose scheduled_date is in the past to today_str.
+    This prevents stale entries from being eligible at every slot indefinitely.
+    Should be called once at startup (after restore_db_from_cloud).
+    Returns the number of items re-dated.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE pin_queue SET scheduled_date = ? WHERE scheduled_date < ?",
+            (today_str, today_str)
+        )
+        conn.commit()
+        n = conn.execute("SELECT changes()").fetchone()[0]
+    if n:
+        logger.info(f"[DB] Re-dated {n} stale queue item(s) to {today_str} to prevent repeat posting.")
+    return n
+
+
+def purge_already_posted_queue_items() -> int:
+    """
+    After a cloud restore, scans pin_queue and removes any item that is already
+    present in uploaded_files (by filename, SHA-256, or pHash).
+    Closes the Render-restart race window where a successfully-posted image
+    returns to the queue because the cloud snapshot was taken before the DB sync.
+    Returns the number of items removed.
+    """
+    removed = 0
+    try:
+        with _get_conn() as conn:
+            items = conn.execute(
+                "SELECT id, post_id, image_path, title, sha256, phash, image_url FROM pin_queue"
+            ).fetchall()
+    except Exception as e:
+        logger.warning(f"[DB] purge_already_posted_queue_items: query failed: {e}")
+        return 0
+
+    for item_id, post_id, img_path, title, sha256, phash, img_url in items:
+        # Never remove intentional re-pins (spinoffs, A/B-B, revivals)
+        if is_intentional_repin(post_id):
+            continue
+        is_dup, reason = is_image_duplicate(
+            filepath=img_path,
+            sha256=sha256 or "",
+            phash=phash or "",
+            image_url=img_url or "",
+            filename=os.path.basename(img_path) if img_path else "",
+            exclude_queue_id=item_id,
+        )
+        if is_dup:
+            try:
+                with _get_conn() as conn:
+                    conn.execute("DELETE FROM pin_queue WHERE id = ?", (item_id,))
+                    conn.commit()
+                logger.warning(
+                    f"[DB] Purged already-posted queue item '{title}' (id={item_id}): {reason}"
+                )
+                removed += 1
+            except Exception as del_err:
+                logger.warning(f"[DB] Failed to purge queue item {item_id}: {del_err}")
+    if removed:
+        logger.info(f"[DB] purge_already_posted_queue_items: removed {removed} duplicate(s) from queue.")
+    return removed
 
 
 def clean_duplicate_queue_items(max_distance: int = 4) -> int:

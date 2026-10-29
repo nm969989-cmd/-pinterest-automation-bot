@@ -522,6 +522,7 @@ class PinScheduler:
             f"(base: 09:00, 13:00, 16:00, 18:00, 20:00 +/- up to {_JITTER_MAX_MINUTES}min)"
         )
         _last_fired_slot = None
+        _slots_fired_today: set = set()  # Tracks (h, m, today_ist) so no slot can ever fire twice
         _pending_catchup_count = 0  # How many missed slots to post with safe anti-burst pacing
         _last_pin_post_time: float = 0.0  # Epoch timestamp of last post (for human pacing)
         _next_catchup_delay: float = 15 * 60 + random.randint(-180, 180)  # Safe 12-18 min interval
@@ -537,33 +538,22 @@ class PinScheduler:
 
         # ── Full startup schedule recovery ────────────────────────────────────
         # On every restart (Render deploy, spin-down, crash), we check ALL slots
-        # that were scheduled for today and count how many posts were actually made.
-        # If the bot missed N slots while offline, we queue N catch-up posts with
-        # safe 12–18 min spacing to protect accounts from burst detection.
-        #
-        # Guards:
-        #   - Only fires for slots > 6 min in the past (outside normal fire window)
-        #   - Counts today's actual DB posts vs expected posts by now
-        #   - Never exceeds MAX_POSTS_PER_DAY cap
-        #   - Spaced by 12–18 minutes (anti-burst catch-up pacing)
+        # that were scheduled for today (IST) and count how many posts were actually made.
+        # Note: All 5 daily IST slots (09:00..20:00 IST = 03:30..14:30 UTC) fall on the
+        # SAME calendar date in UTC as in IST. Anchoring slot_utc_dt to today_ist_date
+        # ensures that between 00:00 AM IST and 05:30 AM IST (18:30..23:59 UTC of the
+        # previous UTC date), today's IST slots are correctly seen as in the FUTURE
+        # (0 slots passed) rather than falsely counting yesterday's 5 slots as missed.
         now_startup = datetime.datetime.utcnow()
         today_ist_startup = _today_ist()
+        today_ist_date = datetime.date.fromisoformat(today_ist_startup)
         jittered_startup = _get_jittered_times_utc()
+        today_posted_startup = count_posts_today(today_ist_startup)
 
-        # Use UTC date for slot comparison AND post counting — both sides must use
-        # the same timezone to avoid the cross-midnight IST/UTC mismatch where
-        # IST midnight causes today_ist = new day (0 posts) while all UTC slots
-        # appear "passed" on yesterday UTC, producing a false 5-pin catch-up.
-        today_utc_date = now_startup.date()
-        today_utc_str  = today_utc_date.strftime("%Y-%m-%d")
-        today_posted_startup = count_posts_on_utc_date(today_utc_str)
-
-        # Count how many slots have fully passed today (beyond the 6-min fire window).
-        # Anchored to today's UTC date so slots and post counts are in the same timezone.
         slots_passed_today = 0
         for (h, m) in jittered_startup:
             slot_utc_dt = datetime.datetime(
-                today_utc_date.year, today_utc_date.month, today_utc_date.day, h, m
+                today_ist_date.year, today_ist_date.month, today_ist_date.day, h, m
             )
             secs_past = (now_startup - slot_utc_dt).total_seconds()
             if secs_past > 360:  # slot passed and outside normal 6-min fire window
@@ -635,21 +625,19 @@ class PinScheduler:
                     logger.debug(f"[Scheduler] Human simulation thread spawn error: {_sim_e}")
 
                 today_posted_hb = count_posts_today(today_ist)
-                # Use UTC date for both slot counting and post counting to stay in
-                # the same timezone — avoids cross-midnight IST/UTC false positives.
-                today_utc_date_hb = now.date()
-                today_utc_str_hb  = today_utc_date_hb.strftime("%Y-%m-%d")
-                today_posted_hb   = count_posts_on_utc_date(today_utc_str_hb)
+                # Anchor slot UTC timestamps to today_ist_date so both slot counting
+                # and post counting operate on the same IST day across midnight.
+                today_ist_date_hb = datetime.date.fromisoformat(today_ist)
                 slots_passed_hb = sum(
                     1 for (h, m) in _get_jittered_times_utc()
                     if (now - datetime.datetime(
-                        today_utc_date_hb.year, today_utc_date_hb.month,
-                        today_utc_date_hb.day, h, m
+                        today_ist_date_hb.year, today_ist_date_hb.month,
+                        today_ist_date_hb.day, h, m
                     )).total_seconds() > 360
                 )
                 expected_hb = min(slots_passed_hb, _get_max_posts())
                 missed_hb = max(0, expected_hb - today_posted_hb)
-                recovery_alert_key = f"{today_utc_str_hb}_{expected_hb}"
+                recovery_alert_key = f"{today_ist}_{expected_hb}"
                 if missed_hb > 0 and _pending_catchup_count == 0:
                     logger.warning(
                         f"[Scheduler] LIVE RECOVERY: Schedule drifted — "
@@ -747,7 +735,12 @@ class PinScheduler:
                     current_slot = (h, m)
                     break
 
-            is_regular_slot = bool(current_slot and current_slot != _last_fired_slot)
+            slot_key = (current_slot[0], current_slot[1], today_ist) if current_slot else None
+            is_regular_slot = bool(
+                current_slot
+                and current_slot != _last_fired_slot
+                and slot_key not in _slots_fired_today
+            )
             should_post = False
             now_ts = time.time()
             elapsed_since_last_post = (now_ts - _last_pin_post_time) if _last_pin_post_time > 0 else 999999.0
@@ -755,6 +748,7 @@ class PinScheduler:
             if is_regular_slot:
                 should_post = True
                 _last_fired_slot = current_slot
+                _slots_fired_today.add(slot_key)
             elif _pending_catchup_count > 0:
                 # Catch-up post: enforce 12–18 min interval since last post to prevent rapid-fire burst bans
                 if elapsed_since_last_post >= _next_catchup_delay:
@@ -982,8 +976,10 @@ class PinScheduler:
                                 pin_is_live = (pin_status == "live")
                                 if success:
                                     is_org = pin.get("is_organic", 0)
+                                    actual_fn = os.path.basename(image_path)
+                                    orig_fn = pin["image_path"].split("/")[-1].split("\\")[-1] if pin.get("image_path") else ""
                                     mark_file_uploaded(
-                                        filename=os.path.basename(image_path),
+                                        filename=actual_fn,
                                         title=pin["title"],
                                         anime_name=pin["anime_name"],
                                         image_url=pin.get("image_url", ""),
@@ -991,7 +987,28 @@ class PinScheduler:
                                         phash=pin.get("phash", ""),
                                         is_organic=is_org,
                                     )
+                                    if orig_fn and orig_fn != actual_fn:
+                                        mark_file_uploaded(
+                                            filename=orig_fn,
+                                            title=pin["title"],
+                                            anime_name=pin["anime_name"],
+                                            image_url=pin.get("image_url", ""),
+                                            sha256=pin.get("sha256", ""),
+                                            phash=pin.get("phash", ""),
+                                            is_organic=is_org,
+                                        )
                                     remove_queued_pin(pin["id"])
+                                    # Immediately sync to JSONBin cloud so a Render restart/deploy
+                                    # during or right after crossposting can NEVER re-queue this pin!
+                                    try:
+                                        from jsonbin_sync import save_cloud_state
+                                        threading.Thread(
+                                            target=save_cloud_state,
+                                            daemon=True,
+                                            name="ImmediatePostSyncThread",
+                                        ).start()
+                                    except Exception as _sync_err:
+                                        logger.warning(f"[Scheduler] Immediate post-upload cloud sync error: {_sync_err}")
                                     now_ist = _ist_now().strftime("%I:%M %p")
                                     if is_org:
                                         pin_type = "ORGANIC 🌿"
