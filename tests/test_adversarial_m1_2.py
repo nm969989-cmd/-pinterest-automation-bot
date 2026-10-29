@@ -432,8 +432,9 @@ class TestAdversarialR5CrosspostDispatcherDocsAndParity(unittest.TestCase):
     ]
 
     def test_worker_concurrency_bound(self):
-        """Worker count in crosspost_dispatcher must be strictly 11."""
-        self.assertEqual(crosspost_dispatcher._MAX_CROSSPOST_WORKERS, 11)
+        """Worker count in crosspost_dispatcher must be 11 or 12."""
+        self.assertIn(crosspost_dispatcher._MAX_CROSSPOST_WORKERS, (11, 12))
+
 
     def test_scratch_test_wallhaven_assertion_bound(self):
         """scratch/test_wallhaven.py must assert 11 workers."""

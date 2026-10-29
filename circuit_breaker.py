@@ -204,7 +204,8 @@ def get_all_cooldowns() -> dict:
     active = {}
     known_platforms = [
         "pinterest", "arena", "bluesky", "mastodon",
-        "pixelfed", "raindrop", "freeimage", "imghippo", "wallhaven", "deviantart", "imgbb", "imagekit"
+        "pixelfed", "raindrop", "freeimage", "imghippo", "wallhaven", "deviantart", "imgbb", "imagekit", "imgpile"
+
     ]
     for p in known_platforms:
         # Ignore disabled platforms so stale breakers don't pollute health reports

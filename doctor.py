@@ -297,6 +297,17 @@ def run_full_system_diagnostic() -> dict:
     except Exception as _ik_e:
         imagekit_status = f"🟡 Check failed ({_ik_e})"
 
+    # 21. ImgPile Cross-Post Status
+    imgpile_status = "⚪ Disabled"
+    try:
+        if getattr(config, "IMGPILE_ENABLED", False):
+            from imgpile_uploader import verify_imgpile_token
+            ip_ok = verify_imgpile_token()
+            imgpile_status = "🟢 Active (Bearer Key Connected)" if ip_ok else "🔴 Key/Token Error"
+    except Exception as _ip_e:
+        imgpile_status = f"🟡 Check failed ({_ip_e})"
+
+
     # Watermark Cleaner & Inpainter Status (Zero Stock Rejections — lazy-checked to save 90MB RAM on Render)
     watermark_status = "⚪ Disabled"
     try:
@@ -356,7 +367,9 @@ def run_full_system_diagnostic() -> dict:
         "deviantart_status": deviantart_status,
         "imgbb_status": imgbb_status,
         "imagekit_status": imagekit_status,
+        "imgpile_status": imgpile_status,
         "watermark_status": watermark_status,
+
         "monitored_channels": len(config.TELEGRAM_CHANNELS),
         "all_cooldowns": all_cooldowns,
     }
@@ -411,6 +424,9 @@ def format_health_report(diag: dict, is_scheduled: bool = False) -> str:
         integration_items.append(f"  • ImgBB              : {diag.get('imgbb_status', '🟢 Active')}")
     if getattr(config, "IMAGEKIT_ENABLED", False):
         integration_items.append(f"  • ImageKit.io        : {diag.get('imagekit_status', '🟢 Active')}")
+    if getattr(config, "IMGPILE_ENABLED", False):
+        integration_items.append(f"  • ImgPile            : {diag.get('imgpile_status', '🟢 Active')}")
+
 
     integration_items.append(f"  • Monitored Channels : {diag['monitored_channels']} channel(s)")
     integrations_block = "\n".join(integration_items)

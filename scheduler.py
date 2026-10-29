@@ -443,7 +443,9 @@ class PinScheduler:
                             deviantart_ok=None, deviantart_url: str = "",
                             imgbb_ok=None, imgbb_url: str = "",
                             imagekit_ok=None, imagekit_url: str = "",
+                            imgpile_ok=None, imgpile_url: str = "",
                             pin_live: bool = True,
+
                             image_url: str = ""):
         """
         Send a Telegram notification to admin immediately after a pin is posted.
@@ -489,7 +491,10 @@ class PinScheduler:
                 imgbb_url=imgbb_url,
                 imagekit_ok=imagekit_ok,
                 imagekit_url=imagekit_url,
+                imgpile_ok=imgpile_ok,
+                imgpile_url=imgpile_url,
                 pin_live=pin_live,
+
                 image_url=image_url,
             )
         except Exception as e:
@@ -1049,7 +1054,10 @@ class PinScheduler:
                                             imgbb_url=cp_res.get("imgbb_url", ""),
                                             imagekit_ok=cp_res.get("imagekit_ok"),
                                             imagekit_url=cp_res.get("imagekit_url", ""),
+                                            imgpile_ok=cp_res.get("imgpile_ok"),
+                                            imgpile_url=cp_res.get("imgpile_url", ""),
                                         )
+
                                     except Exception as _notify_err:
                                         # Keep the posting slot (and stock dispatch below)
                                         # alive even when admin notification breaks.

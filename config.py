@@ -125,6 +125,11 @@ IMAGEKIT_PRIVATE_KEY   = os.getenv('IMAGEKIT_PRIVATE_KEY', 'private_PrpAMecPmUx1
 IMAGEKIT_URL_ENDPOINT  = os.getenv('IMAGEKIT_URL_ENDPOINT', 'https://ik.imagekit.io/zno3dgy8z').strip().rstrip('/')
 IMAGEKIT_ENABLED       = os.getenv('IMAGEKIT_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMAGEKIT_PRIVATE_KEY)
 
+# ImgPile Free Permanent Image Hosting
+IMGPILE_API_KEY        = os.getenv('IMGPILE_API_KEY', 'LsGYl3Y6qYncpDADKbBV4ZHFdABVse41H4HfVrEi').strip()
+IMGPILE_ENABLED        = os.getenv('IMGPILE_ENABLED', 'true').lower() in ('true', '1', 'yes') and bool(IMGPILE_API_KEY)
+
+
 # Wallhaven.cc Anime Wallpaper Platform
 WALLHAVEN_API_KEY      = os.getenv('WALLHAVEN_API_KEY', '').strip()
 WALLHAVEN_USERNAME     = os.getenv('WALLHAVEN_USERNAME', 'animizing').strip()
