@@ -172,6 +172,93 @@ def get_upcoming_slot_times(count: int = 5) -> list[str]:
     return slots[:count]
 
 
+def get_slot_diagnostics() -> dict:
+    """
+    Returns comprehensive diagnostic information about today's posting slots,
+    quota status, queue counts, and upcoming times in IST.
+    """
+    from database import get_queue_counts, count_posts_today, _get_conn
+    now_ist = _ist_now()
+    today_str = _today_ist()
+    today_posted = count_posts_today(today_str)
+    max_posts = _get_max_posts()
+    remaining = max(0, max_posts - today_posted)
+
+    # Fetch today's actual uploads to see what posted
+    today_uploads = []
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT title, uploaded_at FROM uploaded_files WHERE uploaded_at LIKE ? ORDER BY uploaded_at ASC",
+                (f"{today_str}%",)
+            ).fetchall()
+            today_uploads = [{"title": r[0] or "", "time": (r[1] or "")} for r in rows]
+    except Exception:
+        pass
+
+    jittered_utc = _get_jittered_times_utc()
+    slots = []
+    next_slot_info = None
+
+    for i, (h, m) in enumerate(jittered_utc):
+        slot_utc = datetime.datetime.utcnow().replace(hour=h, minute=m, second=0, microsecond=0)
+        slot_ist = slot_utc + datetime.timedelta(hours=5, minutes=30)
+        is_past = slot_ist < now_ist
+
+        if is_past:
+            if i < len(today_uploads):
+                post_title = today_uploads[i]["title"][:35]
+                status = f"✅ Posted: {post_title}"
+            elif today_posted >= max_posts:
+                status = "⚠️ Skipped (Daily quota already reached)"
+            else:
+                status = "⚠️ Skipped (Queue empty / Failed)"
+        else:
+            mins_away = max(0, int((slot_ist - now_ist).total_seconds() / 60))
+            h_diff, m_diff = divmod(mins_away, 60)
+            countdown = f"in ~{h_diff}h {m_diff}m" if h_diff > 0 else f"in ~{m_diff}m"
+            if today_posted >= max_posts:
+                status = f"⏳ {countdown} (Will skip: Daily quota reached)"
+            else:
+                status = f"⏳ {countdown}"
+                if next_slot_info is None:
+                    next_slot_info = {
+                        "slot_num": i + 1,
+                        "time_str": slot_ist.strftime("%I:%M %p IST"),
+                        "countdown": countdown,
+                    }
+
+        slots.append({
+            "slot_num": i + 1,
+            "time_ist": slot_ist.strftime("%I:%M %p IST"),
+            "is_past": is_past,
+            "status": status,
+        })
+
+    if next_slot_info is None:
+        first_h, first_m = jittered_utc[0] if jittered_utc else (3, 30)
+        slot_ist_first = (first_h * 60 + first_m + 330) % 1440
+        f_h, f_m = divmod(slot_ist_first, 60)
+        next_slot_info = {
+            "slot_num": 1,
+            "time_str": f"Tomorrow ~{f_h:02d}:{f_m:02d} IST",
+            "countdown": "at reset",
+        }
+
+    q_counts = get_queue_counts()
+
+    return {
+        "date_ist": now_ist.strftime("%d %b %Y"),
+        "today_str": today_str,
+        "posted_today": today_posted,
+        "max_posts": max_posts,
+        "remaining_today": remaining,
+        "next_slot": next_slot_info,
+        "slots": slots,
+        "queue": q_counts,
+    }
+
+
 
 def _assign_scheduled_date(queue_position: int) -> str:
     """
@@ -821,6 +908,16 @@ class PinScheduler:
 
                 if today_posted >= _get_max_posts():
                     logger.info("[Scheduler] Daily limit reached. Skipping slot.")
+                    try:
+                        from telegram_bot import notify_admin
+                        notify_admin(
+                            f"ℹ️ *Posting Slot Skipped*\n"
+                            f"⏰ Slot: `{slot_ist_h:02d}:{slot_ist_m:02d} IST`\n"
+                            f"📊 Reason: Daily limit of {_get_max_posts()} pins reached ({today_posted}/{_get_max_posts()} posted today).\n"
+                            f"⏳ Posting will automatically resume tomorrow morning at ~09:00 AM IST."
+                        )
+                    except Exception as _notify_err:
+                        logger.warning(f"[Scheduler] Failed to send slot skipped alert: {_notify_err}")
                 else:
                     # Try DB queue first (priority: new > backlog)
                     pin = get_next_queued_pin(today_ist)
@@ -1181,6 +1278,25 @@ class PinScheduler:
                             logger.error(f"[Scheduler] In-memory task error: {e}")
                     else:
                         logger.info("[Scheduler] Queue empty at slot time. Nothing to post.")
+                        try:
+                            from telegram_bot import notify_admin
+                            notify_admin(
+                                f"⚠️ *Posting Slot Skipped: Queue Empty*\n"
+                                f"⏰ Slot: `{slot_ist_h:02d}:{slot_ist_m:02d} IST`\n"
+                                f"The pin queue has no pending images. Triggering auto-scrape from Telegram channel to replenish..."
+                            )
+                        except Exception as _notify_err:
+                            logger.warning(f"[Scheduler] Failed to send empty queue alert: {_notify_err}")
+                        try:
+                            from telegram_listener import scrape_all_channels
+                            threading.Thread(
+                                target=scrape_all_channels,
+                                kwargs={"max_backlog": 5},
+                                daemon=True,
+                                name="AutoRefillScraper"
+                            ).start()
+                        except Exception as _scrape_err:
+                            logger.warning(f"[Scheduler] Auto-refill scrape trigger failed: {_scrape_err}")
 
             else:
                 # Reset slot tracker when outside ALL jittered slot windows

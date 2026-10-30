@@ -389,6 +389,24 @@ def scrape_all_channels(max_backlog: int = 10) -> tuple[int, int]:
     return total_new, final_counts["total"]
 
 
+def ensure_queue_stocked(target_count: int = 5) -> int:
+    """
+    Checks if queue depth is below target_count.
+    If so, runs a scrape cycle to ensure at least target_count items are ready.
+    Returns current total queue count.
+    """
+    from database import get_queue_counts
+    counts = get_queue_counts()
+    if counts["total"] < target_count:
+        logger.info(
+            f"[QueueStock] Queue depth is {counts['total']} (< target {target_count}). "
+            f"Triggering channel scrape & backlog refill..."
+        )
+        scrape_all_channels(max_backlog=max(5, target_count))
+        counts = get_queue_counts()
+    return counts["total"]
+
+
 
 def start_listener():
     """Starts the scraping loop. Runs backlog mode when no new posts found."""

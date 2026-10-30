@@ -163,3 +163,4 @@ def heal_state(progress=None) -> dict:
         logger.warning(f"[Healer] cloud sync failed: {e}")
         stats["cloud_synced"] = False
     return stats
+

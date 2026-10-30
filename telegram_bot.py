@@ -2109,20 +2109,11 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         # ── Always show today's 5 actual slot times ────────────────────────
         today_slot_lines = []
         try:
-            jittered_utc = _get_jittered_times_utc()
-            now_utc = datetime.datetime.utcnow()
-            for i, (h, m) in enumerate(jittered_utc):
-                slot_utc = now_utc.replace(hour=h, minute=m, second=0, microsecond=0)
-                slot_ist = slot_utc + datetime.timedelta(hours=5, minutes=30)
-                is_past = slot_ist < now_ist
-                status = "✅ Done" if is_past else "⏳ Upcoming"
-                if not is_past:
-                    mins_away = int((slot_ist - now_ist).total_seconds() / 60)
-                    h_diff, m_diff = divmod(mins_away, 60)
-                    countdown = f"in ~{h_diff}h {m_diff}m" if h_diff > 0 else f"in ~{m_diff}m"
-                    status = f"⏳ {countdown}"
+            from scheduler import get_slot_diagnostics
+            diag = get_slot_diagnostics()
+            for s in diag["slots"]:
                 today_slot_lines.append(
-                    f"  Slot {i+1}: {slot_ist.strftime('%I:%M %p')} IST — {status}"
+                    f"  Slot {s['slot_num']}: {s['time_ist']} — {s['status']}"
                 )
         except Exception:
             today_slot_lines = ["  (Could not calculate slot times)"]
@@ -2182,6 +2173,72 @@ async def cmd_schedule(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         logger.error(f"[TG BOT] /schedule error: {e}", exc_info=True)
         await msg.reply_text(f"❌ Error displaying schedule: {e}")
+
+
+async def cmd_slotstatus(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Instant status check for posting slots, today's quota, queue depth, and syndication platforms."""
+    if not _is_admin(update): return
+    msg = update.effective_message
+    try:
+        from scheduler import get_slot_diagnostics
+        diag = get_slot_diagnostics()
+
+        lines = [
+            f"📊 *Slot & Daily Posting Status*",
+            f"📅 *Date*: `{diag['date_ist']}`",
+            f"📈 *Posts Today*: `{diag['posted_today']} / {diag['max_posts']}` (Remaining: `{diag['remaining_today']}`)",
+            f"📦 *Queue Depth*: `{diag['queue']['total']}` items (`{diag['queue']['new']}` New, `{diag['queue']['backlog']}` Backlog)",
+            f"⏰ *Next Posting Slot*: `{diag['next_slot']['time_str']}` ({diag['next_slot']['countdown']})\n",
+            f"📋 *Today's Slots (IST)*:",
+        ]
+
+        for s in diag["slots"]:
+            lines.append(f"  • *Slot {s['slot_num']}* ({s['time_ist']}): {s['status']}")
+
+        # Syndication summary
+        import config
+        active_platforms = []
+        disabled_platforms = []
+        platform_checks = [
+            ("Pinterest", True),
+            ("Bluesky", getattr(config, "BLUESKY_ENABLED", False)),
+            ("Mastodon", getattr(config, "MASTODON_ENABLED", False)),
+            ("Raindrop", getattr(config, "RAINDROP_ENABLED", False)),
+            ("Wallhaven", getattr(config, "WALLHAVEN_ENABLED", False)),
+            ("ImageKit", getattr(config, "IMAGEKIT_ENABLED", False)),
+            ("ImgPile", getattr(config, "IMGPILE_ENABLED", False)),
+            ("ImgBB", getattr(config, "IMGBB_ENABLED", False)),
+            ("Freeimage", getattr(config, "FREEIMAGE_ENABLED", False)),
+            ("Are.na", getattr(config, "ARENA_ENABLED", False)),
+            ("Pixelfed", getattr(config, "PIXELFED_ENABLED", False)),
+        ]
+        for name, enabled in platform_checks:
+            if enabled:
+                active_platforms.append(name)
+            else:
+                disabled_platforms.append(name)
+
+        lines.append(f"\n🌐 *Syndication Platforms*: `{len(active_platforms)} Active`, `{len(disabled_platforms)} Disabled`")
+        lines.append(f"  ✅ {', '.join(active_platforms)}")
+        if disabled_platforms:
+            lines.append(f"  ⚪ Disabled: {', '.join(disabled_platforms)}")
+
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Post Next Now", callback_data="btn_postnow"),
+                InlineKeyboardButton("🔄 Refill Queue", callback_data="btn_scrape"),
+            ],
+            [
+                InlineKeyboardButton("📋 View Queue", callback_data="btn_queue"),
+                InlineKeyboardButton("🩺 Heal State", callback_data="btn_healstate"),
+            ]
+        ])
+
+        await msg.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"[TG BOT] slotstatus error: {e}", exc_info=True)
+        await msg.reply_text(f"Error fetching slot status: {e}")
 
 
 
@@ -3182,6 +3239,10 @@ async def handle_approval_callback(update: "Update", context: "ContextTypes.DEFA
         await cmd_doctor(update, context)
     elif data == "btn_digest":
         await cmd_digest(update, context)
+    elif data == "btn_slotstatus":
+        await cmd_slotstatus(update, context)
+    elif data == "btn_healstate":
+        await cmd_healstate(update, context)
 
     elif data.startswith("spinoff:"):
         code = data[8:]
@@ -5259,6 +5320,8 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("unbreak",       cmd_resetbreaker),
             ("queue",         cmd_queue),
             ("schedule",      cmd_schedule),
+            ("slotstatus",    cmd_slotstatus),
+            ("slots",         cmd_slotstatus),
             ("clearqueue",    cmd_clearqueue),
             ("fixqueue",      cmd_fixqueue),
             ("healstate",     cmd_healstate),
@@ -5387,6 +5450,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("resetbreaker",  "Clear platform circuit breaker cooldown"),
                 BotCommand("post_now",      "Force-post next queued pin NOW"),
                 BotCommand("schedule",      "Today's posting schedule (Auto: 8 AM)"),
+                BotCommand("slotstatus",    "Today's posting slots & queue status"),
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("fixqueue",      "Re-upload stale CDN URLs to permanent host"),

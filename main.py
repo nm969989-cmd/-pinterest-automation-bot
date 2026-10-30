@@ -272,6 +272,15 @@ def main():
     # 0. Restore persisted state from JSONBin cloud (survives Render restarts!)
     restore_db_from_cloud()
 
+    # 0a. Immediate startup queue dedup (prune cached duplicates)
+    try:
+        from database import purge_already_posted_queue_items, clean_duplicate_queue_items
+        _purged = purge_already_posted_queue_items() + clean_duplicate_queue_items()
+        if _purged > 0:
+            logger.info(f"[Main] Immediate startup dedup pruned {_purged} duplicate queue item(s).")
+    except Exception as _dedup_err:
+        logger.warning(f"[Main] Immediate startup dedup failed (non-critical): {_dedup_err}")
+
     # 0b. Proactively verify and refresh DeviantArt OAuth tokens after state restoration
     try:
         from deviantart_uploader import refresh_deviantart_startup_token
@@ -315,6 +324,42 @@ def main():
 
     # 4. Start JSONBin sync thread (saves state every 30 min)
     start_sync_thread()
+
+    # 4b. Background auto-heal & queue stocking
+    def _run_startup_heal():
+        try:
+            import time
+            import threading
+            from database import get_metadata, set_metadata, get_queue_counts
+            time.sleep(15)  # Wait for Flask & Telegram bot to fully start
+            ran_flag = get_metadata("state_heal_completed_v1")
+            if not ran_flag:
+                logger.info("[Main] Starting initial automated state heal in background...")
+                from state_healer import heal_state
+                stats = heal_state()
+                set_metadata("state_heal_completed_v1", "true")
+                logger.info(f"[Main] Automated state heal complete: {stats}")
+                try:
+                    from telegram_bot import notify_admin
+                    notify_admin(
+                        f"🩺 *Automated State Heal Complete*\n"
+                        f"• History fingerprints added: {stats.get('history_added', 0)}\n"
+                        f"• Queue items fingerprinted: {stats.get('queue_fingerprinted', 0)}\n"
+                        f"• Duplicates pruned: {stats.get('queue_purged', 0)}\n"
+                        f"• Telegram IDs marked: {stats.get('marked_processed', 0)}\n"
+                        f"• Cloud synced: {'✅' if stats.get('cloud_synced') else '❌'}"
+                    )
+                except Exception:
+                    pass
+
+            # Ensure queue has at least 5 items for tomorrow's slots
+            from telegram_listener import ensure_queue_stocked
+            ensure_queue_stocked(target_count=5)
+        except Exception as _heal_err:
+            logger.warning(f"[Main] Background startup heal failed: {_heal_err}")
+
+    import threading
+    threading.Thread(target=_run_startup_heal, daemon=True, name="StartupHealer").start()
 
     # 5. Set callback and start Telegram scraper (blocks forever)
     set_image_callback(handle_new_image)

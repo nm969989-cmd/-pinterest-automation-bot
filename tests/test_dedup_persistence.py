@@ -46,3 +46,4 @@ def test_catchup_window_blocks_night():
         fake = datetime.datetime(2026, 10, 30, hour, 0)
         with patch.object(scheduler, "_ist_now", return_value=fake):
             assert scheduler._in_catchup_window() is expected
+
