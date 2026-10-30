@@ -2270,6 +2270,33 @@ async def cmd_cleardead(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         logger.error(f"[TG BOT] cleardead error: {e}")
 
 
+async def cmd_healstate(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """
+    Self-heal dedup history & queue INSIDE the live bot (so the fix sticks):
+    fingerprints all Raindrop-recorded posts, purges already-posted/duplicate queue
+    items, marks old Telegram IDs processed, then syncs to JSONBin.
+    """
+    if not _is_admin(update): return
+    msg = update.effective_message
+    await msg.reply_text("🩺 Healing state (history fingerprints + queue cleanup)... this takes a few minutes.")
+    try:
+        import asyncio
+        from state_healer import heal_state
+        loop = asyncio.get_running_loop()
+        stats = await loop.run_in_executor(None, heal_state)
+        await msg.reply_text(
+            "✅ Heal complete\n"
+            f"• History fingerprinted: {stats.get('history_added', 0)}\n"
+            f"• Queue items fingerprinted: {stats.get('queue_fingerprinted', 0)}\n"
+            f"• Duplicates purged from queue: {stats.get('queue_purged', 0)}\n"
+            f"• Telegram IDs marked processed: {stats.get('marked_processed', 0)}\n"
+            f"• Cloud synced: {'yes' if stats.get('cloud_synced') else 'NO'}"
+        )
+    except Exception as e:
+        await msg.reply_text(f"Error running healstate: {e}")
+        logger.error(f"[TG BOT] healstate error: {e}", exc_info=True)
+
+
 async def cmd_fixqueue(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """
     Re-upload all stale queue entries that still have expiring Telegram CDN
@@ -5234,6 +5261,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("schedule",      cmd_schedule),
             ("clearqueue",    cmd_clearqueue),
             ("fixqueue",      cmd_fixqueue),
+            ("healstate",     cmd_healstate),
             ("deadqueue",     cmd_deadqueue),
             ("cleardead",     cmd_cleardead),
             ("scrape",        cmd_scrape),
@@ -5362,6 +5390,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("scrape",        "Scrape channels for new pins NOW"),
                 BotCommand("clearqueue",    "Clear all pending pins from queue"),
                 BotCommand("fixqueue",      "Re-upload stale CDN URLs to permanent host"),
+                BotCommand("healstate",     "Heal dedup history + purge duplicate queue"),
                 BotCommand("deadqueue",     "View pins that failed all retries"),
                 BotCommand("cleardead",     "Clear the dead-letter queue"),
                 BotCommand("arena",         "Are.na channel stats & block count"),

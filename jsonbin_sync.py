@@ -415,6 +415,61 @@ def build_state_payload() -> tuple[dict, int]:
     return payload, payload_bytes
 
 
+def _merge_with_cloud(payload: dict) -> dict:
+    """
+    Non-destructive save: never let a stale/shrunken local DB erase history stored in
+    the cloud. uploaded_files and processed_posts are UNIONED with the cloud copy, and
+    queue items whose image is already in uploaded_files are dropped, so a stale
+    shutdown-save can no longer re-queue already-posted images.
+    """
+    import json
+    try:
+        cloud = load_cloud_state() or {}
+    except Exception:
+        cloud = {}
+
+    merged = {u.get("filename"): u for u in cloud.get("uploaded_files", []) if u.get("filename")}
+    for u in payload.get("uploaded_files", []):
+        if u.get("filename"):
+            merged[u["filename"]] = u
+    uploads = sorted(merged.values(), key=lambda u: u.get("uploaded_at") or "", reverse=True)[:250]
+    payload["uploaded_files"] = uploads
+
+    seen, posts = set(), []
+    for p in list(payload.get("processed_posts", [])) + list(cloud.get("processed_posts", [])):
+        if p not in seen:
+            seen.add(p)
+            posts.append(p)
+    payload["processed_posts"] = posts[:600]
+
+    fns = {(u.get("filename") or "").lower() for u in uploads}
+    shas = {u.get("sha256") for u in uploads if u.get("sha256")}
+    urls = {u.get("image_url") for u in uploads if u.get("image_url")}
+    kept = []
+    for q in payload.get("pin_queue", []):
+        base = os.path.basename(q.get("image_path") or "").lower()
+        pid = str(q.get("post_id") or "").lower()
+        repin = pid.startswith(("spinoff_", "revive_", "ab_"))
+        if not repin and (
+            (base and base in fns)
+            or (q.get("sha256") and q["sha256"] in shas)
+            or (q.get("image_url") and q["image_url"] in urls)
+        ):
+            continue
+        kept.append(q)
+    payload["pin_queue"] = kept
+
+    for cap in (250, 150, 100, 60, 30):
+        raw = json.dumps(payload, separators=(',', ':'))
+        if len(raw.encode("utf-8")) <= 90 * 1024:
+            break
+        payload["uploaded_files"] = payload["uploaded_files"][:cap]
+        for i, u in enumerate(payload["uploaded_files"]):
+            if i >= 30:
+                u["title"], u["anime_name"] = "", ""
+    return payload
+
+
 def save_cloud_state() -> bool:
     """
     Save current SQLite state to JSONBin cloud.
@@ -438,7 +493,9 @@ def save_cloud_state() -> bool:
         try:
             import json
             payload, payload_bytes = build_state_payload()
+            payload = _merge_with_cloud(payload)
             raw_json = json.dumps(payload, separators=(',', ':'))
+            payload_bytes = len(raw_json.encode('utf-8'))
 
             if payload_bytes > _JSONBIN_MAX_BYTES:
                 logger.error("[JSONBin] Payload exceeds the 100KB limit - not uploading.")

@@ -127,6 +127,11 @@ def _today_ist() -> str:
     return _ist_now().strftime("%Y-%m-%d")
 
 
+def _in_catchup_window() -> bool:
+    """Recovery/catch-up pins may only post between 09:00 and 21:00 IST (never at night)."""
+    return 9 <= _ist_now().hour < 21
+
+
 def get_upcoming_slot_times(count: int = 5) -> list[str]:
     """
     Returns the next `count` exact scheduled posting slot times in IST.
@@ -777,6 +782,9 @@ class PinScheduler:
                 _slots_fired_today.add(slot_key)
                 # Drop entries from earlier days so the set cannot grow without bound.
                 _slots_fired_today.intersection_update({k for k in _slots_fired_today if k[2] == today_ist})
+            elif _pending_catchup_count > 0 and not _in_catchup_window():
+                # Never post recovery pins at night (00:00-09:00 / after 21:00 IST)
+                pass
             elif _pending_catchup_count > 0:
                 # Catch-up post: enforce 12–18 min interval since last post to prevent rapid-fire burst bans
                 if elapsed_since_last_post >= _next_catchup_delay:
