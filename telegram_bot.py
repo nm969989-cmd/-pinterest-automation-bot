@@ -3364,7 +3364,7 @@ def notify_admin(message: str, parse_mode: str = "Markdown"):
         logger.warning(f"[TG BOT] Could not notify admin: {e}")
 
 
-def notify_admin_confirmed(message: str, parse_mode: str = "Markdown", timeout: float = 20.0) -> bool:
+def notify_admin_confirmed(message: str, parse_mode: str = "Markdown", timeout: float = 20.0, reply_markup=None) -> bool:
     """Like notify_admin() but waits and returns True only if Telegram accepted the message.
 
     If Markdown parsing is rejected (unescaped `_` or `*` in titles/anime names), the
@@ -3389,6 +3389,7 @@ def notify_admin_confirmed(message: str, parse_mode: str = "Markdown", timeout: 
             _app_ref.bot.send_message(
                 chat_id=admin_id, text=message, parse_mode=mode,
                 disable_web_page_preview=True,
+                reply_markup=reply_markup,
             ),
             _loop_ref,
         )
@@ -5173,14 +5174,14 @@ async def cmd_weekly(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     if not _is_admin(update):
         return
     try:
-        from weekly_report import send_weekly_report, build_weekly_report
-        # If admin explicitly called /weekly, send the report directly in this chat or via notify_admin
+        from weekly_report import build_weekly_report, get_amazon_report_markup
         report = build_weekly_report()
+        markup = get_amazon_report_markup()
         try:
-            await update.message.reply_text(report, parse_mode="Markdown")
+            await update.message.reply_text(report, parse_mode="Markdown", reply_markup=markup)
         except Exception:
             # Unescaped Markdown in titles/anime names -> resend as plain text.
-            await update.message.reply_text(report)
+            await update.message.reply_text(report, reply_markup=markup)
     except Exception as e:
         logger.error(f"[TG BOT] cmd_weekly error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Weekly report error: {e}")
