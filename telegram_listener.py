@@ -310,6 +310,14 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
                 api_key=config.GEMINI_API_KEY,
                 openrouter_key=config.OPENROUTER_API_KEY
             )
+            if anime_name == "REJECTED_AD" or not anime_name:
+                logger.warning(f"[Backlog] Content generation rejected ad/marketing post: {title}")
+                try:
+                    os.remove(processed_path)
+                except Exception:
+                    pass
+                mark_post_processed(post_id)
+                continue
             character_name = ""
             if title:
                 if " - " in title:
