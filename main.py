@@ -43,6 +43,24 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
     try:
         logger.info(f"Main handler received new image: {filepath}")
 
+        # Gate 0: Anti-Marketing & Ad Safeguard before processing or hosting
+        from image_processor import is_promotional_caption, is_marketing_or_ad_image
+        is_promo, promo_reason = is_promotional_caption(caption)
+        if is_promo:
+            logger.warning(f"[Main] Rejected promotional post: {promo_reason}")
+            try:
+                if os.path.exists(filepath): os.remove(filepath)
+            except Exception: pass
+            return
+
+        is_ad, ad_reason = is_marketing_or_ad_image(filepath, caption)
+        if is_ad:
+            logger.warning(f"[Main] Rejected marketing/ad image: {ad_reason}")
+            try:
+                if os.path.exists(filepath): os.remove(filepath)
+            except Exception: pass
+            return
+
         # 1. Process Image
         processed_path = process_image(filepath, channel_name)
 
@@ -88,6 +106,14 @@ def handle_new_image(filepath, caption, channel_name, image_url=""):
             api_key=None,  # Gemini removed — OpenRouter only
             openrouter_key=config.OPENROUTER_API_KEY
         )
+
+        if anime_name == "REJECTED_AD" or not anime_name:
+            logger.warning(f"[Main] Content generation rejected post as advertisement/marketing: {title}")
+            try:
+                if os.path.exists(processed_path): os.remove(processed_path)
+                if filepath != processed_path and os.path.exists(filepath): os.remove(filepath)
+            except Exception: pass
+            return
 
         # 3. Extract character name from AI or title for more precise Amazon product match
         character_name = ""

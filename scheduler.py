@@ -923,6 +923,28 @@ class PinScheduler:
                     pin = get_next_queued_pin(today_ist)
 
                     if pin:
+                        # Gate 0: Anti-Marketing & Ad Safeguard before dispatch
+                        from image_processor import is_promotional_caption, is_marketing_or_ad_image
+                        q_title = pin.get("title", "")
+                        q_desc = pin.get("description", "")
+                        is_promo, promo_reason = is_promotional_caption(f"{q_title} {q_desc}")
+                        if is_promo:
+                            logger.warning(f"[Scheduler] DROPPING promotional pin from queue: {q_title} ({promo_reason})")
+                            remove_queued_pin(pin["id"])
+                            continue
+
+                        q_img = pin.get("image_path", "")
+                        if q_img and os.path.exists(q_img):
+                            is_ad, ad_reason = is_marketing_or_ad_image(q_img, f"{q_title} {q_desc}")
+                            if is_ad:
+                                logger.warning(f"[Scheduler] DROPPING marketing/ad image from queue: {q_img} ({ad_reason})")
+                                remove_queued_pin(pin["id"])
+                                try:
+                                    os.remove(q_img)
+                                except Exception:
+                                    pass
+                                continue
+
                         # ── Triple duplicate check (Filename, URL, and Visual pHash/SHA-256) ─
                         from database import is_image_duplicate, is_intentional_repin
                         filename = pin["image_path"].split("/")[-1].split("\\")[-1] if pin["image_path"] else ""

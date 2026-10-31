@@ -44,18 +44,25 @@ def get_last_character_name() -> str:
     return _last_character_name
 
 _VISION_PROMPT = (
-    "You are a Pinterest content expert specialising in anime merchandise marketing.\n"
-    "You are looking at an anime artwork image.\n\n"
+    "You are a Pinterest content and safety expert specialising in anime merchandise marketing.\n"
+    "Your primary duty is to determine whether the image is authentic anime/manga artwork, or an advertisement, marketing graphic, app screenshot, or non-anime content.\n\n"
     "Telegram caption: {caption}\n"
     "Channel: @{channel_name}\n\n"
-    "Analyze the image and identify the anime series, character(s) and mood.\n\n"
-    "Respond ONLY with valid JSON - no markdown:\n"
+    "Analyze the image.\n"
+    "If the image is an advertisement, marketing flyer, channel promotion, app/phone UI screenshot, ad review notice, crypto/financial offer, or NOT authentic anime artwork:\n"
+    "Respond ONLY with valid JSON:\n"
     '{{\n'
+    '  "is_ad_or_marketing": true,\n'
+    '  "rejection_reason": "<brief explanation e.g. Telegram ad flyer / UI screenshot>"\n'
+    '}}\n\n'
+    "ONLY if the image is genuine anime artwork or character illustration, respond with:\n"
+    '{{\n'
+    '  "is_ad_or_marketing": false,\n'
     '  "anime_name": "Attack on Titan",\n'
     '  "character_name": "Levi Ackerman",\n'
     '  "title": "Levi Ackerman - Cleanest Blade in the Corps 🔥 Anime Art",\n'
     '  "description": "High-octane artwork capturing Captain Levi in mid-air maneuver. Perfect for decorating your bedroom or gaming room with premium prints and posters. Grab official figures and wall art on Amazon today!\\n\\n#anime #attackontitan #levi #animeart"\n'
-    "}}\n\n"
+    '}}\n\n'
     "CRITICAL RULES:\n"
     "- Identify the real anime series and character from the image/caption.\n"
     "- anime_name MUST be only the series title (e.g. 'Attack on Titan', 'Demon Slayer', 'Solo Leveling'). NEVER include quotes, dialogue, or full sentences.\n"
@@ -132,10 +139,21 @@ def _parse_ai_response(raw, channel_name, caption=""):
         if not isinstance(data, dict):
             return None
 
+        if data.get("is_ad_or_marketing") is True or "rejection_reason" in data:
+            reason = data.get("rejection_reason") or "Identified as ad/marketing"
+            logger.warning(f"[AI] Image classified as AD/MARKETING by Vision AI: {reason}")
+            return "REJECTED_AD", reason, ""
+
         anime_name = str(data.get("anime_name") or "Anime").strip()
         character  = str(data.get("character_name") or "").strip()
         title      = str(data.get("title") or "").strip()[:100]
         desc_body  = str(data.get("description") or "").strip()[:480]
+
+        from image_processor import is_promotional_caption
+        is_promo, promo_reason = is_promotional_caption(f"{title} {desc_body}")
+        if is_promo:
+            logger.warning(f"[AI] Generated content contains promotional text: {promo_reason}")
+            return "REJECTED_AD", promo_reason, ""
 
         # 1. Reject responses containing prompt template placeholders or angle brackets
         for val in (anime_name, character, title, desc_body):
@@ -365,6 +383,17 @@ def generate_pin_content(
     api_key=None,
     openrouter_key=None
 ):
+    from image_processor import is_promotional_caption, is_marketing_or_ad_image
+    is_promo, promo_reason = is_promotional_caption(caption)
+    if is_promo:
+        logger.warning(f"[ContentGen] Aborting: caption contains promotional content ({promo_reason})")
+        return "REJECTED_AD", promo_reason, ""
+
+    if image_path:
+        is_ad, ad_reason = is_marketing_or_ad_image(image_path, caption)
+        if is_ad:
+            logger.warning(f"[ContentGen] Aborting: image detected as ad/marketing ({ad_reason})")
+            return "REJECTED_AD", ad_reason, ""
     """
     Generates (anime_name, title, description_template) for a Pinterest pin.
 
@@ -396,5 +425,12 @@ def generate_pin_content(
         result = _openrouter_text(caption, channel_name, openrouter_key)
         if result:
             return result
+
+    # Never generate generic fallback for an ad image
+    if image_path:
+        is_ad, ad_reason = is_marketing_or_ad_image(image_path, caption)
+        if is_ad:
+            logger.warning(f"[ContentGen] Aborting fallback: image is ad/marketing ({ad_reason})")
+            return "REJECTED_AD", ad_reason, ""
 
     return _fallback_generate(caption, channel_name)

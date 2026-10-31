@@ -198,3 +198,129 @@ def extract_image_color_tags(filepath: str) -> list[str]:
                 pass
 
 
+# ── Anti-Marketing & Ad Safeguard Engine ─────────────────────────────────────
+
+AD_PROMO_KEYWORDS = [
+    "advertise on", "deal directly with channel", "escrow protected",
+    "people reached", "skip the ad review", "ads budget", "side income",
+    "channel promo", "grow my channel", "grow your channel", "go live in 60 seconds",
+    "subscribers promo", "paid promo", "sponsored post", "crypto trading",
+    "forex trading", "casino bonus", "betting tips", "airdrop claim",
+    "discount code", "click the link below", "dm to buy", "contact @",
+    "buy promo", "ad review queue", "monetize your", "make money online",
+    "passive income", "earn $", "earn €", "earn ₹", "investment opportunity",
+    "referral link", "join my vip", "vip signals", "binary options",
+    "official sponsor", "telegram ads platform", "paid sponsorship",
+    "dm for promo", "promo exchange", "shoutout for shoutout", "s4s"
+]
+
+
+def is_promotional_caption(caption: str) -> tuple[bool, str]:
+    """
+    Checks if a post caption contains marketing, advertising, or spam patterns.
+    Returns (is_promo: bool, reason: str).
+    """
+    if not caption or not isinstance(caption, str):
+        return False, ""
+
+    cap_lower = caption.lower()
+    for kw in AD_PROMO_KEYWORDS:
+        if kw in cap_lower:
+            return True, f"Caption contains promotional phrase '{kw}'"
+
+    # Match URLs with ad/tracking or promo query parameters
+    if any(param in cap_lower for param in ("t.me/+", "bit.ly/", "tinyurl.com/", "ref=", "aff=")):
+        return True, "Caption contains promotional or referral redirect URL"
+
+    return False, ""
+
+
+def is_marketing_or_ad_image(filepath: str, caption: str = "") -> tuple[bool, str]:
+    """
+    Multi-layer computer vision & heuristic safeguard against marketing graphics,
+    advertisement banners, app screenshots, and promotional flyers.
+    
+    Layers:
+      1. Fast Caption Ad Keyword Check (0ms)
+      2. Computer Vision Text Density & Bounding Box Analysis (OpenCV / PIL, ~10ms)
+      3. UI / Flat Card Background Dominance Check
+      4. Decision Boundary Check
+    
+    Returns:
+      (is_ad: bool, reason: str)
+    """
+    if not filepath or not os.path.isfile(filepath):
+        return False, ""
+
+    # Layer 1: Caption keyword heuristic
+    if caption:
+        is_promo, promo_reason = is_promotional_caption(caption)
+        if is_promo:
+            return True, promo_reason
+
+    # Layer 2: Computer Vision Text Density & Background Dominance Analysis
+    try:
+        import cv2
+        import numpy as np
+
+        img = cv2.imread(filepath)
+        if img is None:
+            return False, ""
+
+        h, w = img.shape[:2]
+        total_pixels = h * w
+        if total_pixels == 0:
+            return False, ""
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # A. Text region bounding box clustering
+        grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+        _, bw = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+        kw = max(9, int(w / 50))
+        kh = max(3, int(h / 300))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kw, kh))
+        connected = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        text_boxes = []
+        total_text_area = 0
+        for cnt in contours:
+            x, y, bw_box, bh_box = cv2.boundingRect(cnt)
+            aspect = bw_box / float(bh_box)
+            area = bw_box * bh_box
+            if 0.0002 * total_pixels < area < 0.25 * total_pixels:
+                if aspect > 1.2 or (0.5 <= aspect <= 1.2 and area < 0.01 * total_pixels):
+                    text_boxes.append((x, y, bw_box, bh_box))
+                    total_text_area += area
+
+        text_coverage = total_text_area / float(total_pixels)
+        text_count = len(text_boxes)
+
+        # B. Flat Background / Solid Card Dominance
+        small = cv2.resize(gray, (100, 100))
+        hist = cv2.calcHist([small], [0], None, [32], [0, 256])
+        flat_dominance = float(np.max(hist)) / 10000.0
+
+        # C. Decision Rules
+        # Rule 1: High text coverage (Flyers, text-heavy advertisements)
+        if text_coverage > 0.11:
+            return True, f"High text density ({text_coverage:.1%}) characteristic of marketing banner"
+
+        # Rule 2: Moderate text coverage combined with heavy flat UI/card dominance (App UI screenshot / Ad card)
+        if flat_dominance > 0.45 and text_coverage > 0.035 and text_count >= 5:
+            return True, f"UI/Ad card layout detected (flat background {flat_dominance:.1%}, text coverage {text_coverage:.1%}, {text_count} text blocks)"
+
+        # Rule 3: Extreme flat background with text elements (Infographic / Promo announcement)
+        if flat_dominance > 0.70 and text_count >= 4:
+            return True, f"Flat background banner layout detected ({flat_dominance:.1%} flat color with {text_count} text elements)"
+
+        return False, ""
+
+    except Exception as e:
+        logger.debug(f"[AdSafeguard] CV analysis non-critical error: {e}")
+        return False, ""
+
+
+

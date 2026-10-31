@@ -148,12 +148,32 @@ def check_channel(channel: str) -> int:
 
         caption_div = msg.find("div", class_="tgme_widget_message_text")
         caption = caption_div.get_text(separator="\n", strip=True) if caption_div else ""
+
+        # Pre-download Gate: Check promotional / marketing keywords in caption
+        from image_processor import is_promotional_caption, is_marketing_or_ad_image
+        is_promo, promo_reason = is_promotional_caption(caption)
+        if is_promo:
+            logger.warning(f"[New] Skipping promotional post {post_id}: {promo_reason}")
+            mark_post_processed(post_id)
+            continue
+
         logger.info(f"Found new image in post {post_id}")
 
         safe_post_id = post_id.replace("/", "_")
         filepath = download_image(img_url, f"post_{safe_post_id}")
 
         if filepath:
+            # Gate 0: Anti-Marketing & Ad Safeguard (CV Text Density + Flat UI check)
+            is_ad, ad_reason = is_marketing_or_ad_image(filepath, caption)
+            if is_ad:
+                logger.warning(f"[New] Blocked marketing/ad image in post {post_id}: {ad_reason}")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                mark_post_processed(post_id)
+                continue
+
             # Gate 1: Check visual and exact duplicate before processing
             is_dup, reason = is_image_duplicate(filepath=filepath)
             if is_dup:
@@ -228,9 +248,28 @@ def _backlog_scrape(channel: str, max_posts: int = BACKLOG_MAX_POSTS):
             caption_div = msg.find("div", class_="tgme_widget_message_text")
             caption = caption_div.get_text(separator="\n", strip=True) if caption_div else ""
 
+            # Pre-download Gate: Check promotional / marketing keywords in caption
+            from image_processor import is_promotional_caption, is_marketing_or_ad_image
+            is_promo, promo_reason = is_promotional_caption(caption)
+            if is_promo:
+                logger.warning(f"[Backlog] Skipping promotional post {post_id}: {promo_reason}")
+                mark_post_processed(post_id)
+                continue
+
             safe_post_id = post_id.replace("/", "_")
             filepath = download_image(img_url, f"post_{safe_post_id}")
             if not filepath:
+                mark_post_processed(post_id)
+                continue
+
+            # Gate 0: Anti-Marketing & Ad Safeguard (CV Text Density + Flat UI check)
+            is_ad, ad_reason = is_marketing_or_ad_image(filepath, caption)
+            if is_ad:
+                logger.warning(f"[Backlog] Blocked marketing/ad image in post {post_id}: {ad_reason}")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
                 mark_post_processed(post_id)
                 continue
 
