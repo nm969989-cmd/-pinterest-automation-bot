@@ -49,8 +49,9 @@ def verify_imghippo_token() -> bool:
             timeout=8
         )
         data = res.json()
-        # Message 'Please provide file' confirms the key is authenticated
-        return data.get("message") == "Please provide file"
+        msg = str(data.get("message", "")).lower()
+        # Message 'Please provide at least one file' confirms the key is authenticated
+        return res.status_code == 400 and "please provide" in msg and "file" in msg
     except Exception as e:
         logger.warning(f"[Imghippo] Verification check failed: {e}")
         return False

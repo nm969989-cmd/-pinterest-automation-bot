@@ -125,6 +125,12 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") 
                     except Exception as sync_err:
                         logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
 
+                    try:
+                        from get_deviantart_token import update_env_file
+                        update_env_file(new_acc, new_ref)
+                    except Exception:
+                        pass
+
                     logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
                     return new_acc
             elif r.status_code == 400 or r.status_code == 401:

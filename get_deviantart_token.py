@@ -4,6 +4,11 @@ get_deviantart_token.py — DeviantArt OAuth 2.0 PKCE Token Generator
 Generates fresh DeviantArt Access Token & Refresh Token using
 PKCE authorization with https://localhost redirect.
 
+Persists rotated tokens across:
+  1. Local .env file
+  2. Local SQLite database (bot_metadata)
+  3. JSONBin.io cloud backup (so Render instance restores it on restart)
+
 Usage:
     python get_deviantart_token.py
 """
@@ -20,8 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CLIENT_ID     = os.getenv("DEVIANTART_CLIENT_ID", "")
-CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "")
+CLIENT_ID     = os.getenv("DEVIANTART_CLIENT_ID", "").strip()
+CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "").strip()
 REDIRECT_URI  = "https://localhost"
 
 
@@ -33,10 +38,52 @@ def _generate_pkce():
     return verifier, challenge
 
 
+def update_env_file(access_token: str, refresh_token: str = ""):
+    """Updates DEVIANTART_ACCESS_TOKEN and DEVIANTART_REFRESH_TOKEN in .env."""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        print(f"[WARN] .env not found at {env_path}")
+        return False
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        found_acc = False
+        found_ref = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith("DEVIANTART_ACCESS_TOKEN="):
+                new_lines.append(f"DEVIANTART_ACCESS_TOKEN={access_token}\n")
+                found_acc = True
+            elif refresh_token and line.strip().startswith("DEVIANTART_REFRESH_TOKEN="):
+                new_lines.append(f"DEVIANTART_REFRESH_TOKEN={refresh_token}\n")
+                found_ref = True
+            else:
+                new_lines.append(line)
+
+        if not found_acc:
+            new_lines.append(f"DEVIANTART_ACCESS_TOKEN={access_token}\n")
+        if refresh_token and not found_ref:
+            new_lines.append(f"DEVIANTART_REFRESH_TOKEN={refresh_token}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        print("[OK] Updated .env with new DeviantArt tokens.")
+        return True
+    except Exception as e:
+        print(f"[WARN] Failed to write to .env: {e}")
+        return False
+
+
 def main():
-    print("\n" + "=" * 60)
-    print(" DeviantArt OAuth 2.0 PKCE Token Generator")
-    print("=" * 60)
+    print("\n" + "=" * 65)
+    print("  🎨 DeviantArt OAuth 2.0 PKCE Token Generator")
+    print("=" * 65)
+
+    if not CLIENT_ID or not CLIENT_SECRET:
+        print("[ERROR] DEVIANTART_CLIENT_ID or DEVIANTART_CLIENT_SECRET is missing in .env!")
+        sys.exit(1)
 
     verifier, challenge = _generate_pkce()
     scopes = "stash publish browse"
@@ -50,14 +97,22 @@ def main():
     }
     auth_url = f"https://www.deviantart.com/oauth2/authorize?{urllib.parse.urlencode(auth_params)}"
 
-    print(f"\n1. Opening browser for authorization:\n{auth_url}\n")
-    webbrowser.open(auth_url)
+    print("\nStep 1: Open this authorization URL in your browser:\n")
+    print(auth_url)
+    print("\n(Attempting to open default browser automatically...)")
+    try:
+        webbrowser.open(auth_url)
+    except Exception:
+        pass
 
-    print("2. Click 'Authorize' in your browser.")
-    print("   DeviantArt will redirect to: https://localhost/?code=XXXXX\n")
-    
-    user_input = input("Paste the redirected URL (or code): ").strip()
-    
+    print("\nStep 2: Log into DeviantArt and click 'Authorize'.")
+    print("        DeviantArt will redirect your browser to an address like:")
+    print("        https://localhost/?code=XXXXXXXXXXXXXXXXXXXX\n")
+    print("        (The browser will say 'This site can't be reached' — this is normal!)")
+    print("        Just copy the FULL URL from the browser's address bar.\n")
+
+    user_input = input("Paste the redirected URL (or code) here: ").strip()
+
     code = user_input
     if "code=" in user_input:
         parsed = urllib.parse.urlparse(user_input)
@@ -65,10 +120,10 @@ def main():
         code = query.get("code", [user_input])[0]
 
     if not code:
-        print("[ERROR] No code provided!")
+        print("\n[ERROR] No authorization code provided!")
         sys.exit(1)
 
-    print("\nExchanging code for tokens...")
+    print("\nExchanging authorization code for fresh access & refresh tokens...")
     token_url = "https://www.deviantart.com/oauth2/token"
     data = {
         "grant_type": "authorization_code",
@@ -79,28 +134,65 @@ def main():
         "code_verifier": verifier,
     }
 
-    resp = requests.post(token_url, data=data)
+    try:
+        resp = requests.post(token_url, data=data, timeout=25)
+    except Exception as req_err:
+        print(f"\n[ERROR] Network request failed: {req_err}")
+        sys.exit(1)
+
     if resp.status_code != 200:
-        print(f"[ERROR] Token exchange failed: {resp.status_code} - {resp.text}")
+        print(f"\n[ERROR] Token exchange failed (HTTP {resp.status_code}): {resp.text}")
         sys.exit(1)
 
     t_data = resp.json()
     acc = t_data.get("access_token", "")
     ref = t_data.get("refresh_token", "")
-    print("\nSUCCESS!")
-    print(f"DEVIANTART_ACCESS_TOKEN={acc}")
-    print(f"DEVIANTART_REFRESH_TOKEN={ref}")
 
-    # Persist in sqlite
+    if not acc:
+        print(f"\n[ERROR] No access_token returned in response: {t_data}")
+        sys.exit(1)
+
+    # Verify user profile with newly generated access token
+    username = "unknown"
+    try:
+        who_res = requests.get(
+            "https://www.deviantart.com/api/v1/oauth2/user/whoami",
+            headers={"Authorization": f"Bearer {acc}"},
+            timeout=10,
+        )
+        if who_res.status_code == 200:
+            username = who_res.json().get("username", "unknown")
+            print(f"\n[SUCCESS] Successfully authenticated as @{username} on DeviantArt!")
+        else:
+            print(f"\n[WARN] Token verification returned HTTP {who_res.status_code}")
+    except Exception as e:
+        print(f"\n[WARN] Profile check failed: {e}")
+
+    # 1. Update local .env
+    update_env_file(acc, ref)
+
+    # 2. Persist in SQLite
     try:
         from database import set_metadata
         set_metadata("deviantart_access_token", acc)
-        set_metadata("deviantart_refresh_token", ref)
-        print("[OK] Persisted tokens in local database.")
+        if ref:
+            set_metadata("deviantart_refresh_token", ref)
+        print("[OK] Persisted tokens in local database (bot_metadata).")
     except Exception as e:
         print(f"[WARN] Database persistence failed: {e}")
+
+    # 3. Push immediate backup to JSONBin so Render has the token
+    try:
+        import jsonbin_sync
+        jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
+        print("[OK] Synchronized updated tokens to JSONBin cloud backup.")
+    except Exception as sync_e:
+        print(f"[WARN] Cloud backup sync failed: {sync_e}")
+
+    print("\n" + "=" * 65)
+    print(" 🎉 DeviantArt is now 100% active and authenticated!")
+    print("=" * 65)
 
 
 if __name__ == "__main__":
     main()
-

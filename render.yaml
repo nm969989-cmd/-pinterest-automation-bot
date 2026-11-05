@@ -87,7 +87,7 @@ services:
       - key: IMGHIPPO_API_KEY
         sync: false
       - key: IMGHIPPO_ENABLED
-        value: "false"
+        value: "true"
 
       # Cloudinary CDN Backup
       - key: CLOUDINARY_CLOUD_NAME
