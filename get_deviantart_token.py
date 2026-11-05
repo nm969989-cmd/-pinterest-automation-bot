@@ -78,7 +78,7 @@ def update_env_file(access_token: str, refresh_token: str = ""):
 
 def main():
     print("\n" + "=" * 65)
-    print("  🎨 DeviantArt OAuth 2.0 PKCE Token Generator")
+    print("  [DeviantArt OAuth 2.0 PKCE Token Generator]")
     print("=" * 65)
 
     if not CLIENT_ID or not CLIENT_SECRET:
@@ -190,7 +190,7 @@ def main():
         print(f"[WARN] Cloud backup sync failed: {sync_e}")
 
     print("\n" + "=" * 65)
-    print(" 🎉 DeviantArt is now 100% active and authenticated!")
+    print(" [SUCCESS] DeviantArt is now 100% active and authenticated!")
     print("=" * 65)
 
 

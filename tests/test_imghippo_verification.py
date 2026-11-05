@@ -47,3 +47,4 @@ def test_get_imghippo_info():
         assert info["service"] == "Imghippo"
         assert info["status"] == "Active"
         assert info["api_key_masked"].startswith("012345...")
+

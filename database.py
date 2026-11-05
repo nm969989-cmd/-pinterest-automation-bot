@@ -2425,6 +2425,16 @@ def create_tracked_link(target_url: str, anime_name: str = "", title: str = "", 
     """
     import hashlib, time, random, re
 
+    # Never allow self-referential /r/ or /p/ URLs into tracked_links
+    if "/r/" in target_url or "/p/" in target_url or "onrender.com" in target_url:
+        asin_embedded = re.search(r'dp_([A-Z0-9]{10})', target_url)
+        if asin_embedded:
+            target_url = f"https://www.amazon.com/dp/{asin_embedded.group(1)}?tag=animeasthet-20&linkCode=ogi&th=1&psc=1"
+        else:
+            import urllib.parse
+            q = urllib.parse.quote_plus(f"{anime_name or 'anime'} merchandise poster figure".strip())
+            target_url = f"https://www.amazon.com/s?k={q}&tag=animeasthet-20&sort=review-rank"
+
     asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', target_url)
     if asin_match:
         code = f"dp_{asin_match.group(1)}"
@@ -2446,6 +2456,15 @@ def create_tracked_link(target_url: str, anime_name: str = "", title: str = "", 
 
 def record_tracked_link(code: str, target_url: str, anime_name: str = "", title: str = "", image_url: str = "") -> bool:
     """Store or update a tracked link with a specific pre-assigned code."""
+    import re
+    if "/r/" in target_url or "/p/" in target_url or "onrender.com" in target_url:
+        asin_embedded = re.search(r'dp_([A-Z0-9]{10})', target_url)
+        if asin_embedded:
+            target_url = f"https://www.amazon.com/dp/{asin_embedded.group(1)}?tag=animeasthet-20&linkCode=ogi&th=1&psc=1"
+        else:
+            import urllib.parse
+            q = urllib.parse.quote_plus(f"{anime_name or 'anime'} merchandise poster figure".strip())
+            target_url = f"https://www.amazon.com/s?k={q}&tag=animeasthet-20&sort=review-rank"
     with _get_conn() as conn:
         try:
             conn.execute("""

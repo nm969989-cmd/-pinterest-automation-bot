@@ -15,6 +15,25 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 app   = Flask(__name__)
 _start_time = datetime.datetime.utcnow()
 
+_IP_CLICK_CACHE: dict[tuple[str, str], float] = {}
+
+def _is_ip_rate_limited(ip: str, link_code: str, window_seconds: float = 60.0) -> bool:
+    """Prevents same client IP from spamming click records and alerts within window_seconds."""
+    if not ip:
+        return False
+    now = time.time()
+    key = (ip, link_code)
+    last = _IP_CLICK_CACHE.get(key, 0.0)
+    if (now - last) < window_seconds:
+        return True
+    _IP_CLICK_CACHE[key] = now
+    if len(_IP_CLICK_CACHE) > 5000:
+        cutoff = now - window_seconds
+        to_del = [k for k, ts in _IP_CLICK_CACHE.items() if ts < cutoff]
+        for k in to_del:
+            _IP_CLICK_CACHE.pop(k, None)
+    return False
+
 @app.route('/')
 def home():
     uptime = datetime.datetime.utcnow() - _start_time
@@ -90,6 +109,13 @@ def redirect_link(code):
     user_agent = request.headers.get('User-Agent', '')
     referrer   = request.referrer or ''
     country    = get_visitor_country(request)
+    client_ip  = (
+        request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or request.remote_addr
+        or ""
+    )
+    is_flood = _is_ip_rate_limited(client_ip, code, window_seconds=60.0)
 
     try:
         from database import record_link_click, count_clicks_today, get_tracked_link_data
@@ -122,8 +148,8 @@ def redirect_link(code):
         from pinterest_analytics import is_bot_user_agent
         is_bot = is_bot_user_agent(user_agent)
 
-        if not is_bot:
-            # Record click with merchant and country code for real human visitors
+        if not is_bot and not is_flood:
+            # Record click with merchant and country code for real human visitors (throttled)
             record_link_click(code, user_agent, referrer, merchant=effective_merchant, country=country)
             today_total = count_clicks_today()
 
@@ -181,11 +207,10 @@ def redirect_link(code):
             else:
                 # Amazon US / Global in $ USD
                 dest = target_amazon_url or f"https://www.amazon.com/s?k=anime+merchandise+poster+figure&tag={tag_us}&sort=review-rank"
-                if "/r/" in dest:
+                if "/r/" in dest or "/p/" in dest or code in dest or "onrender.com" in dest:
                     from database import get_tracked_target_url
                     dest = get_tracked_target_url(dest)
-                if "/r/" in dest:
-                    # Final safety: if still contains /r/, construct direct Amazon search URL
+                if "/r/" in dest or "/p/" in dest or code in dest or "onrender.com" in dest:
                     clean_anime = anime_name if anime_name and anime_name.lower() != "anime" else (title[:30] if title else "anime merchandise")
                     import urllib.parse
                     encoded = urllib.parse.quote_plus(f"{clean_anime} merchandise poster figure".strip())

@@ -1,5 +1,5 @@
 import os
-from PIL import Image
+from PIL import Image, ImageFilter, ImageEnhance, ImageOps
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -12,6 +12,68 @@ if not os.path.exists('downloads'):
     os.makedirs('downloads')
 if not os.path.exists('processed'):
     os.makedirs('processed')
+
+
+def create_pinterest_2_3_canvas(img: Image.Image, target_w: int = 1000, target_h: int = 1500) -> Image.Image:
+    """
+    Transforms any image (landscape or square) into an optimal Pinterest 2:3 vertical pin (1000x1500).
+    - If already vertical (ratio <= 0.82), keeps it vertical with clean proportional fit.
+    - If horizontal/landscape (ratio > 0.82), creates an aesthetic frosted-glass blurred background
+      and centers the full uncropped artwork with a sleek, gallery-grade white border.
+    """
+    w, h = img.size
+    aspect = w / float(h)
+    
+    # If already a vertical portrait (e.g. 9:16 phone wallpaper, 2:3 poster), preserve vertical framing
+    if aspect <= 0.82:
+        if w > 2400 or h > 2400:
+            scale = 2400.0 / max(w, h)
+            return img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+        return img
+
+    # For horizontal / square artwork: build 2:3 canvas (1000 x 1500)
+    canvas = Image.new("RGB", (target_w, target_h))
+
+    # 1. Background: Zoom & Crop to fill canvas, then heavy blur & slight dimming
+    bg_ratio = target_w / float(target_h)
+    if aspect > bg_ratio:
+        scale = target_h / float(h)
+        bg_w = int(w * scale)
+        bg_scaled = img.resize((bg_w, target_h), Image.Resampling.BILINEAR)
+        left = (bg_w - target_w) // 2
+        bg_crop = bg_scaled.crop((left, 0, left + target_w, target_h))
+    else:
+        scale = target_w / float(w)
+        bg_h = int(h * scale)
+        bg_scaled = img.resize((target_w, bg_h), Image.Resampling.BILINEAR)
+        top = (bg_h - target_h) // 2
+        bg_crop = bg_scaled.crop((0, top, target_w, top + target_h))
+
+    blurred_bg = bg_crop.filter(ImageFilter.GaussianBlur(radius=28))
+    dimmer = ImageEnhance.Brightness(blurred_bg)
+    blurred_bg = dimmer.enhance(0.70)
+    canvas.paste(blurred_bg, (0, 0))
+
+    # 2. Foreground: Scale original artwork to fit within target_w (with 24px aesthetic margin)
+    fg_max_w = target_w - 48
+    fg_scale = fg_max_w / float(w)
+    fg_w = int(w * fg_scale)
+    fg_h = int(h * fg_scale)
+    
+    if fg_h > target_h - 120:
+        fg_scale = (target_h - 120) / float(h)
+        fg_w = int(w * fg_scale)
+        fg_h = int(h * fg_scale)
+
+    fg_img = img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+    bordered_fg = ImageOps.expand(fg_img, border=2, fill=(255, 255, 255))
+    bw_w, bw_h = bordered_fg.size
+
+    pos_x = (target_w - bw_w) // 2
+    pos_y = (target_h - bw_h) // 2
+
+    canvas.paste(bordered_fg, (pos_x, pos_y))
+    return canvas
 
 def process_image(filepath, channel_name=None):
     """
@@ -49,6 +111,13 @@ def process_image(filepath, channel_name=None):
         else:
             target_to_save = img
             logger.info(f"Preserved exact original dimensions: {img_w}x{img_h} (0% cropped)")
+
+        # Apply Pinterest Smart 2:3 Canvas for horizontal/square artwork
+        try:
+            target_to_save = create_pinterest_2_3_canvas(target_to_save)
+            logger.info(f"Smart 2:3 Canvas applied: final size {target_to_save.size}")
+        except Exception as _canvas_err:
+            logger.warning(f"[SmartCanvas] Non-critical error applying 2:3 canvas: {_canvas_err}")
 
         filename = os.path.basename(filepath)
         processed_path = os.path.join('processed', filename)

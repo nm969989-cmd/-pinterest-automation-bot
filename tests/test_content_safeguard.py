@@ -81,3 +81,4 @@ def test_ai_parse_rejection():
 def test_generate_pin_content_blocks_promo_captions():
     res = generate_pin_content("Advertise on Telegram channels with huge discount!", "Test_Channel")
     assert res[0] == "REJECTED_AD"
+

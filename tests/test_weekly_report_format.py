@@ -53,3 +53,4 @@ def test_weekly_report_timing_trigger():
         triggered = check_and_send_weekly_report()
         assert triggered is False
         mock_send.assert_not_called()
+

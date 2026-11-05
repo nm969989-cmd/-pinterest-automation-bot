@@ -3434,6 +3434,7 @@ def notify_admin_with_keyboard(message: str, reply_markup=None, parse_mode: str 
 
 
 _last_click_alerts: dict[str, float] = {}
+_last_global_click_alert: float = 0.0
 
 def notify_link_clicked(anime_name: str, title: str, today_count: int, source: str = "Pinterest", country: str = ""):
     """
@@ -3454,17 +3455,29 @@ def notify_link_clicked(anime_name: str, title: str, today_count: int, source: s
     # Anti-spam throttling & milestone gating:
     # Always notify on milestone counts (1, 5, 10, 20, 25, 50, 75, 100...)
     # Otherwise, require at least 300 seconds (5 min) cooldown since last alert for this pin
+    global _last_global_click_alert
     pin_key = f"{anime_name}:{title[:30]}"
     now = time.time()
     last_time = _last_click_alerts.get(pin_key, 0)
-    is_milestone = today_count in (1, 5, 10, 20, 25, 50, 75, 100) or (today_count > 0 and today_count % 50 == 0)
 
+    MAJOR_MILESTONES = {1, 5, 10, 20, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000}
+    is_milestone = today_count in MAJOR_MILESTONES
+
+    # 1. Global flood guard: max 1 notification per 60s
+    if (now - _last_global_click_alert) < 60:
+        logger.debug("[TG BOT] Suppressed click alert due to global 60s flood guard.")
+        return
+
+    # 2. Per-pin cooldown: min 300s (5 min) between regular alerts
     if not is_milestone and (now - last_time < 300):
-        # Throttle rapid clicks to avoid buzzing the user's phone
-        logger.debug(f"[TG BOT] Suppressed duplicate click alert for '{pin_key}' (cooldown: {int(now - last_time)}s)")
+        return
+
+    # 3. Milestone spacing: min 120s between milestone alerts for the same pin
+    if is_milestone and (now - last_time < 120):
         return
 
     _last_click_alerts[pin_key] = now
+    _last_global_click_alert = now
 
     # Clean old entries from _last_click_alerts if size grows > 1000
     if len(_last_click_alerts) > 1000:
