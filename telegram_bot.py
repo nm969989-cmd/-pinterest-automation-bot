@@ -4350,6 +4350,47 @@ async def cmd_crosspost(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         await update.message.reply_text(f"Cross-post status error: {e}")
 
 
+def _get_da_callback_url() -> str:
+    """Returns the public Render /da-callback URL for one-tap DeviantArt OAuth."""
+    try:
+        from config import APP_BASE_URL
+        base = (APP_BASE_URL or "").strip().rstrip("/")
+    except Exception:
+        base = ""
+    if not base:
+        base = os.getenv("APP_BASE_URL", "https://pinterest-automation-bot.onrender.com").strip().rstrip("/")
+    return f"{base}/da-callback"
+
+
+def _build_da_auth_reply():
+    """Builds (redirect_uri, InlineKeyboardMarkup) for one-tap DeviantArt OAuth."""
+    from deviantart_uploader import build_deviantart_auth_url
+    redirect_uri = _get_da_callback_url()
+    auth_url, _ = build_deviantart_auth_url(redirect_uri)
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Authorize DeviantArt", url=auth_url)]
+    ])
+    return redirect_uri, markup
+
+
+async def cmd_da_auth(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Generate a one-tap DeviantArt OAuth2 authorization link."""
+    if not _is_admin(update): return
+    try:
+        redirect_uri, markup = _build_da_auth_reply()
+        msg = (
+            "🎨 One-Tap DeviantArt Re-Authorization\n"
+            f"{'═' * 30}\n"
+            "1. Tap Authorize DeviantArt below and approve access.\n"
+            "2. You'll be redirected back to your bot automatically — no local Python needed.\n\n"
+            f"ℹ️ Redirect URI (must be whitelisted in DeviantArt Developers):\n{redirect_uri}"
+        )
+        await update.message.reply_text(msg, reply_markup=markup)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_da_auth error: {e}", exc_info=True)
+        await update.message.reply_text(f"DeviantArt auth error: {e}")
+
+
 async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     """Show DeviantArt gallery and token status."""
     if not _is_admin(update): return
@@ -4378,7 +4419,14 @@ async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
             f"• Total Posts : {total_cnt}\n"
             f"• Gallery URL : https://www.deviantart.com/muthelyrics\n"
         )
-        await update.message.reply_text(msg)
+        markup = None
+        if not valid:
+            try:
+                redirect_uri, markup = _build_da_auth_reply()
+                msg += f"\n🔑 Tap below to re-authorize (Redirect URI: {redirect_uri})"
+            except Exception:
+                pass
+        await update.message.reply_text(msg, reply_markup=markup)
     except Exception as e:
         logger.error(f"[TG BOT] cmd_deviantart error: {e}", exc_info=True)
         await update.message.reply_text(f"DeviantArt error: {e}")
@@ -5404,6 +5452,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("revive",             cmd_revive),
             ("reviver",            cmd_revive),
             ("deviantart",         cmd_deviantart),
+            ("da_auth",            cmd_da_auth),
             ("imgbb",              cmd_imgbb),
             ("imagekit",           cmd_imagekit),
             ("imgpile",            cmd_imgpile),
@@ -5488,6 +5537,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("wallhaven",     "Wallhaven profile & collection stats"),
                 BotCommand("wallhaven_search", "Search 4K anime wallpapers on Wallhaven"),
                 BotCommand("deviantart",    "DeviantArt profile & stash status"),
+                BotCommand("da_auth",       "One-tap DeviantArt OAuth re-authorization"),
                 BotCommand("imgbb",         "ImgBB gallery & API status"),
                 BotCommand("imagekit",      "ImageKit CDN gallery & status"),
                 BotCommand("imgpile",       "ImgPile gallery & API status"),

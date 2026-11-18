@@ -553,6 +553,93 @@ def verify_pin_public_route(pin_id):
         return jsonify({"error": str(e), "pin_id": pin_id}), 500
 
 
+def _notify_telegram_admin_async(text: str):
+    """Sends a quick admin notification via Telegram Bot API in a background thread."""
+    def _send():
+        try:
+            import requests as _req
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+            chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+            if token and chat_id:
+                _req.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": text},
+                    timeout=8,
+                )
+        except Exception as e:
+            logger.debug(f"[KeepAlive] Admin TG notify failed: {e}")
+
+    Thread(target=_send, daemon=True).start()
+
+
+def _render_da_oauth_html(title: str, body: str, ok: bool) -> str:
+    import html
+    color = "#22c55e" if ok else "#ef4444"
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{html.escape(title)}</title></head>"
+        "<body style='font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;"
+        "display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:16px'>"
+        "<div style='max-width:460px;background:#1e293b;border-radius:14px;padding:28px;"
+        f"border:1px solid {color};text-align:center'>"
+        f"<h2 style='margin-top:0;color:{color}'>{html.escape(title)}</h2>"
+        f"<p style='line-height:1.5;color:#cbd5e1'>{html.escape(body)}</p>"
+        "</div></body></html>"
+    )
+
+
+@app.route('/da-callback')
+def deviantart_oauth_callback():
+    """
+    One-tap DeviantArt OAuth2 PKCE callback triggered from /da_auth in Telegram.
+    Exchanges authorization code for tokens, persists them to SQLite + JSONBin,
+    clears any DeviantArt circuit breaker, and notifies Telegram admin.
+    """
+    from flask import request
+    err = request.args.get("error", "").strip()
+    if err:
+        desc = request.args.get("error_description", err).strip()
+        _notify_telegram_admin_async(f"❌ DeviantArt authorization failed: {desc}")
+        return _render_da_oauth_html("DeviantArt Auth Failed", desc, ok=False), 400
+
+    code = request.args.get("code", "").strip()
+    state = request.args.get("state", "").strip()
+    if not code or not state:
+        return _render_da_oauth_html(
+            "Invalid Request",
+            "Missing OAuth code or state. Please run /da_auth in Telegram and try again.",
+            ok=False,
+        ), 400
+
+    from deviantart_uploader import consume_deviantart_oauth_state, exchange_deviantart_code
+    state_data = consume_deviantart_oauth_state(state)
+    if not state_data:
+        return _render_da_oauth_html(
+            "Session Expired",
+            "This authorization link expired or was already used. Run /da_auth in Telegram for a fresh link.",
+            ok=False,
+        ), 400
+
+    ok, info = exchange_deviantart_code(
+        code=code,
+        code_verifier=state_data["verifier"],
+        redirect_uri=state_data["redirect_uri"],
+    )
+    if ok:
+        _notify_telegram_admin_async(
+            f"✅ DeviantArt re-authorized as @{info}!\nTokens saved to DB + JSONBin and circuit breaker cleared."
+        )
+        return _render_da_oauth_html(
+            "DeviantArt Authorized!",
+            f"Connected as @{info}. Tokens are saved and synced. You can close this tab and return to Telegram.",
+            ok=True,
+        ), 200
+
+    _notify_telegram_admin_async(f"❌ DeviantArt token exchange failed: {info}")
+    return _render_da_oauth_html("DeviantArt Token Exchange Failed", info, ok=False), 400
+
+
 def run():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, threaded=True)

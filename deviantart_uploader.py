@@ -17,10 +17,15 @@ Usage:
 
 import os
 import sys
+import json
 import time
+import base64
+import hashlib
+import secrets
 import tempfile
 import threading
 import mimetypes
+import urllib.parse
 from typing import Tuple, List, Optional
 import requests
 from logger import get_logger
@@ -32,6 +37,8 @@ _RETRY_DELAYS = [0, 5, 15]
 
 _cached_access_token = ""
 _token_lock = threading.Lock()
+_pending_oauth_states: dict[str, dict] = {}
+_OAUTH_STATE_TTL_SEC = 900  # 15 minutes
 
 
 def _get_access_token(force_refresh: bool = False) -> str:
@@ -120,32 +127,7 @@ def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "", 
                     new_acc = resp.get("access_token", "")
                     new_ref = resp.get("refresh_token", "")
                     if new_acc:
-                        _cached_access_token = new_acc
-                        try:
-                            from database import set_metadata
-                            set_metadata("deviantart_access_token", new_acc)
-                            if new_ref:
-                                set_metadata("deviantart_refresh_token", new_ref)
-                        except Exception as db_err:
-                            logger.warning(f"[DeviantArt] Failed to persist refreshed tokens in DB: {db_err}")
-
-                        try:
-                            import jsonbin_sync
-                            jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
-                        except Exception as sync_err:
-                            logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
-
-                        if (
-                            not new_acc.startswith("mock_")
-                            and "unittest" not in sys.modules
-                            and "pytest" not in sys.modules
-                        ):
-                            try:
-                                from get_deviantart_token import update_env_file
-                                update_env_file(new_acc, new_ref)
-                            except Exception:
-                                pass
-
+                        _persist_oauth_tokens(new_acc, new_ref)
                         logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
                         return new_acc
                 elif r.status_code == 400 or r.status_code == 401:
@@ -411,5 +393,169 @@ def refresh_deviantart_startup_token() -> bool:
     except Exception as e:
         logger.warning(f"[DeviantArt] Startup token check failed with exception: {e}")
         return False
+
+
+def _persist_oauth_tokens(new_acc: str, new_ref: str = "") -> None:
+    """Persists rotated/new DeviantArt OAuth2 tokens to cache, SQLite, JSONBin, and .env."""
+    global _cached_access_token
+    _cached_access_token = new_acc
+    try:
+        from database import set_metadata
+        set_metadata("deviantart_access_token", new_acc)
+        if new_ref:
+            set_metadata("deviantart_refresh_token", new_ref)
+    except Exception as db_err:
+        logger.warning(f"[DeviantArt] Failed to persist tokens in DB: {db_err}")
+
+    try:
+        from circuit_breaker import clear_breaker
+        clear_breaker("deviantart")
+    except Exception:
+        pass
+
+    try:
+        import jsonbin_sync
+        jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
+    except Exception as sync_err:
+        logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
+
+    if (
+        not new_acc.startswith("mock_")
+        and "unittest" not in sys.modules
+        and "pytest" not in sys.modules
+    ):
+        try:
+            from get_deviantart_token import update_env_file
+            update_env_file(new_acc, new_ref)
+        except Exception:
+            pass
+
+
+def build_deviantart_auth_url(redirect_uri: str) -> Tuple[str, str]:
+    """
+    Generates a PKCE OAuth2 authorization URL and stores the verifier keyed by state
+    (both in-memory and in SQLite bot_metadata) for one-tap Telegram/web re-auth.
+    Returns (auth_url, state).
+    """
+    from config import DEVIANTART_CLIENT_ID
+    client_id = (DEVIANTART_CLIENT_ID or os.getenv("DEVIANTART_CLIENT_ID", "")).strip()
+    if not client_id:
+        raise ValueError("DEVIANTART_CLIENT_ID is not configured.")
+
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+    state = secrets.token_urlsafe(24)
+
+    payload = {
+        "verifier": verifier,
+        "redirect_uri": redirect_uri,
+        "ts": time.time(),
+    }
+    _pending_oauth_states[state] = payload
+    try:
+        from database import set_metadata
+        set_metadata(f"da_oauth_state_{state}", json.dumps(payload))
+    except Exception as e:
+        logger.debug(f"[DeviantArt] Could not persist OAuth state to DB: {e}")
+
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": "stash publish browse",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    auth_url = f"https://www.deviantart.com/oauth2/authorize?{urllib.parse.urlencode(params)}"
+    return auth_url, state
+
+
+def consume_deviantart_oauth_state(state: str) -> Optional[dict]:
+    """
+    Validates and consumes a one-time OAuth2 PKCE state token.
+    Returns {"verifier": ..., "redirect_uri": ...} or None if invalid/expired.
+    """
+    if not state:
+        return None
+    data = _pending_oauth_states.pop(state, None)
+    if not data:
+        try:
+            from database import get_metadata, set_metadata
+            raw = get_metadata(f"da_oauth_state_{state}", "")
+            if raw:
+                data = json.loads(raw)
+                set_metadata(f"da_oauth_state_{state}", "")
+        except Exception:
+            data = None
+    else:
+        try:
+            from database import set_metadata
+            set_metadata(f"da_oauth_state_{state}", "")
+        except Exception:
+            pass
+
+    if not data:
+        return None
+    if (time.time() - float(data.get("ts", 0))) > _OAUTH_STATE_TTL_SEC:
+        return None
+    return data
+
+
+def exchange_deviantart_code(code: str, code_verifier: str, redirect_uri: str) -> Tuple[bool, str]:
+    """
+    Exchanges an OAuth2 authorization code + PKCE code_verifier for fresh tokens,
+    persists them, clears the circuit breaker, and verifies the username.
+    Returns (success, username_or_error).
+    """
+    from config import DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET
+    client_id = (DEVIANTART_CLIENT_ID or os.getenv("DEVIANTART_CLIENT_ID", "")).strip()
+    client_secret = (DEVIANTART_CLIENT_SECRET or os.getenv("DEVIANTART_CLIENT_SECRET", "")).strip()
+    if not client_id or not client_secret:
+        return False, "DEVIANTART_CLIENT_ID or DEVIANTART_CLIENT_SECRET missing."
+
+    try:
+        resp = requests.post(
+            "https://www.deviantart.com/oauth2/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "code": code,
+                "code_verifier": code_verifier,
+            },
+            timeout=25,
+        )
+    except Exception as e:
+        return False, f"Token request failed: {e}"
+
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+
+    t_data = resp.json()
+    acc = t_data.get("access_token", "")
+    ref = t_data.get("refresh_token", "")
+    if not acc:
+        return False, "No access_token returned by DeviantArt."
+
+    _persist_oauth_tokens(acc, ref)
+
+    username = "muthelyrics"
+    try:
+        who = requests.get(
+            "https://www.deviantart.com/api/v1/oauth2/user/whoami",
+            headers={"Authorization": f"Bearer {acc}"},
+            timeout=10,
+        )
+        if who.status_code == 200:
+            username = who.json().get("username", username)
+    except Exception:
+        pass
+
+    logger.info(f"[DeviantArt] OAuth2 authorization completed for @{username}")
+    return True, username
+
 
 
