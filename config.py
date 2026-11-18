@@ -139,6 +139,12 @@ WALLHAVEN_ENABLED      = os.getenv('WALLHAVEN_ENABLED', 'true').lower() in ('tru
 NOSTR_PRIVATE_KEY      = os.getenv('NOSTR_PRIVATE_KEY', '').strip()
 NOSTR_RELAYS           = os.getenv('NOSTR_RELAYS', 'wss://relay.damus.io,wss://nos.lol,wss://nostr.mom,wss://relay.snort.social').strip()
 NOSTR_ENABLED          = os.getenv('NOSTR_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(NOSTR_PRIVATE_KEY)
+
+# Diigo Social Bookmarking Cross-Posting
+DIIGO_USERNAME         = os.getenv('DIIGO_USERNAME', 'muthelyrics').strip()
+DIIGO_PASSWORD         = os.getenv('DIIGO_PASSWORD', '').strip()
+DIIGO_API_KEY          = os.getenv('DIIGO_API_KEY', '').strip()
+DIIGO_ENABLED          = os.getenv('DIIGO_ENABLED', 'false').lower() in ('true', '1', 'yes') and bool(DIIGO_USERNAME and DIIGO_PASSWORD and DIIGO_API_KEY)
 # Scheduler Config
 POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 60))
 _raw_max = int(os.getenv('MAX_POSTS_PER_DAY', 5))

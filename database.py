@@ -444,6 +444,22 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_nostr_filename
             ON nostr_posts (filename)
         """)
+
+        # ── Diigo Cross-Post Tracking ───────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS diigo_posts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename    TEXT UNIQUE,
+                post_url    TEXT,
+                title       TEXT,
+                image_url   TEXT,
+                posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_diigo_filename
+            ON diigo_posts (filename)
+        """)
         # ── ImgBB Cross-Post Tracking ────────────────────────────────────────
         conn.execute("""
             CREATE TABLE IF NOT EXISTS imgbb_posts (
@@ -964,6 +980,54 @@ def get_nostr_stats(today_str: str = None) -> dict:
         recent = conn.execute("""
             SELECT filename, title, post_url, posted_at
             FROM nostr_posts
+            ORDER BY id DESC LIMIT 5
+        """).fetchall()
+    return {
+        "today": today_count,
+        "total": total_count,
+        "recent": [
+            {"filename": r[0], "title": r[1], "post_url": r[2], "posted_at": r[3]}
+            for r in recent
+        ],
+    }
+
+
+def is_diigo_posted(filename: str) -> bool:
+    """Returns True if this image was already bookmarked on Diigo."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM diigo_posts WHERE filename = ?", (filename,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_diigo_posted(filename: str, post_url: str = "", title: str = "", image_url: str = "") -> None:
+    """Records a successful Diigo bookmark."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO diigo_posts (filename, post_url, title, image_url)
+            VALUES (?, ?, ?, ?)
+            """,
+            (filename, post_url, title, image_url),
+        )
+        conn.commit()
+
+
+def get_diigo_stats(today_str: str = None) -> dict:
+    """Returns today's and all-time Diigo bookmarking statistics."""
+    if not today_str:
+        import datetime as _dt
+        today_str = (_dt.datetime.utcnow() + _dt.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
+    with _get_conn() as conn:
+        today_count = conn.execute("""
+            SELECT COUNT(*) FROM diigo_posts
+            WHERE date(posted_at, '+5 hours', '+30 minutes') = ?
+        """, (today_str,)).fetchone()[0]
+        total_count = conn.execute("SELECT COUNT(*) FROM diigo_posts").fetchone()[0]
+        recent = conn.execute("""
+            SELECT filename, title, post_url, posted_at
+            FROM diigo_posts
             ORDER BY id DESC LIMIT 5
         """).fetchall()
     return {

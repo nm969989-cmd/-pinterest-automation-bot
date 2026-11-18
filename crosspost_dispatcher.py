@@ -369,6 +369,42 @@ def _post_nostr(filename, title, description, link, public_img_url, is_stealth, 
         return False, ""
 
 
+def _post_diigo(filename, title, description, link, public_img_url, is_stealth, config, pin_url="", anime_name=""):
+    """Post bookmark to Diigo — returns (ok, url)."""
+    if not getattr(config, "DIIGO_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("diigo", results):
+        return results.get("diigo_ok"), results.get("diigo_url", "")
+    try:
+        from diigo_uploader import post_to_diigo
+        from database import mark_diigo_posted, is_diigo_posted
+        profile_url = f"https://www.diigo.com/user/{getattr(config, 'DIIGO_USERNAME', 'muthelyrics')}"
+        if not is_diigo_posted(filename):
+            target_url = link or pin_url or public_img_url
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                diigo_desc = format_waterfall_caption("general", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                diigo_desc = description or title
+            tags = [t for t in [anime_name, "anime", "wallpaper", "4k", "aesthetic"] if t]
+            ok, diigo_url = post_to_diigo(
+                url=target_url,
+                title=title,
+                description=diigo_desc,
+                tags=tags,
+            )
+            if ok:
+                mark_diigo_posted(filename, post_url=diigo_url, title=title, image_url=public_img_url)
+                return True, diigo_url or profile_url
+            return False, profile_url
+        return True, profile_url
+    except Exception as e:
+        logger.warning(f"[Crosspost] Diigo error: {e}")
+        _handle_platform_error("diigo", e)
+        return False, ""
+
+
 
 def _post_imgbb(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
     """Post to ImgBB — returns (ok, url)."""
@@ -567,6 +603,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "imagekit_ok": None,  "imagekit_url": "",
         "imgpile_ok": None,   "imgpile_url": "",
         "nostr_ok": None,     "nostr_url": "",
+        "diigo_ok": None,     "diigo_url": "",
     }
 
 
@@ -604,6 +641,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         platform_tasks["imgpile"] = lambda: _post_imgpile(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
     if getattr(config, "NOSTR_ENABLED", False):
         platform_tasks["nostr"] = lambda: _post_nostr(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
+    if getattr(config, "DIIGO_ENABLED", False):
+        platform_tasks["diigo"] = lambda: _post_diigo(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
 
 
     if platform_tasks:

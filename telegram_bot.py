@@ -166,6 +166,7 @@ def get_post_confirmation_keyboard(
     imagekit_url: str = "",
     imgpile_url: str = "",
     nostr_url: str = "",
+    diigo_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
 
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
@@ -280,6 +281,12 @@ def get_post_confirmation_keyboard(
         if getattr(config, "NOSTR_ENABLED", False) and _is_valid_http_url(nostr_url):
             platform_btns.append(InlineKeyboardButton("🟣 View on Nostr", url=nostr_url))
 
+        if getattr(config, "DIIGO_ENABLED", False):
+            d_user = getattr(config, "DIIGO_USERNAME", "muthelyrics")
+            d_link = diigo_url if _is_valid_http_url(diigo_url) else f"https://www.diigo.com/user/{d_user}"
+            if _is_valid_http_url(d_link):
+                platform_btns.append(InlineKeyboardButton("🔖 Diigo Library", url=d_link))
+
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -319,6 +326,7 @@ def format_crosspost_status_block(results: dict) -> str:
         ("imagekit",   "IMAGEKIT_ENABLED",   "🖼️ ImageKit"),
         ("imgpile",    "IMGPILE_ENABLED",    "🗄️ ImgPile"),
         ("nostr",      "NOSTR_ENABLED",      "🟣 Nostr"),
+        ("diigo",      "DIIGO_ENABLED",      "🔖 Diigo"),
     ]
 
 
@@ -2711,6 +2719,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 imagekit_url=cp_res.get("imagekit_url", ""),
                 imgpile_url=cp_res.get("imgpile_url", ""),
                 nostr_url=cp_res.get("nostr_url", ""),
+                diigo_url=cp_res.get("diigo_url", ""),
             )
 
             sent_photo = False
@@ -3724,6 +3733,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              imagekit_ok=None, imagekit_url: str = "",
                              imgpile_ok=None, imgpile_url: str = "",
                              nostr_ok=None, nostr_url: str = "",
+                             diigo_ok=None, diigo_url: str = "",
                              pin_live: bool = True,
 
                              image_url: str = ""):
@@ -3771,6 +3781,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         "imagekit_ok": imagekit_ok,
         "imgpile_ok": imgpile_ok,
         "nostr_ok": nostr_ok,
+        "diigo_ok": diigo_ok,
     }
 
     cross_lines = format_crosspost_status_block(results_map)
@@ -3818,6 +3829,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         imagekit_url=imagekit_url,
         imgpile_url=imgpile_url,
         nostr_url=nostr_url,
+        diigo_url=diigo_url,
     )
 
 
@@ -4469,6 +4481,36 @@ async def cmd_nostr(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
     except Exception as e:
         logger.error(f"[TG BOT] cmd_nostr error: {e}", exc_info=True)
         await update.message.reply_text(f"Nostr error: {e}")
+
+
+async def cmd_diigo(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Diigo library status and bookmark stats."""
+    if not _is_admin(update): return
+    try:
+        from config import DIIGO_ENABLED, DIIGO_USERNAME
+        from diigo_uploader import verify_diigo_credentials
+        from database import get_diigo_stats
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        enabled_str = "🟢 ENABLED" if DIIGO_ENABLED else "🔴 DISABLED"
+        ok, info = verify_diigo_credentials()
+        auth_str = f"🟢 Auth OK (@{info})" if ok else f"🔴 {info}"
+        stats = get_diigo_stats(today_str)
+
+        msg = (
+            f"🔖 Diigo Status: {enabled_str}\n"
+            f"{'═' * 30}\n"
+            f"• Auth Status : {auth_str}\n"
+            f"• Today Posts : {stats.get('today', 0)}\n"
+            f"• Total Posts : {stats.get('total', 0)}\n"
+            f"• Library URL : https://www.diigo.com/user/{DIIGO_USERNAME}\n"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_diigo error: {e}", exc_info=True)
+        await update.message.reply_text(f"Diigo error: {e}")
 
 
 
@@ -5493,6 +5535,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("deviantart",         cmd_deviantart),
             ("da_auth",            cmd_da_auth),
             ("nostr",              cmd_nostr),
+            ("diigo",              cmd_diigo),
             ("imgbb",              cmd_imgbb),
             ("imagekit",           cmd_imagekit),
             ("imgpile",            cmd_imgpile),
@@ -5579,6 +5622,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("deviantart",    "DeviantArt profile & stash status"),
                 BotCommand("da_auth",       "One-tap DeviantArt OAuth re-authorization"),
                 BotCommand("nostr",         "Nostr npub, relays & post stats"),
+                BotCommand("diigo",         "Diigo library & bookmark stats"),
                 BotCommand("imgbb",         "ImgBB gallery & API status"),
                 BotCommand("imagekit",      "ImageKit CDN gallery & status"),
                 BotCommand("imgpile",       "ImgPile gallery & API status"),
