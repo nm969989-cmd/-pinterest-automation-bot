@@ -165,6 +165,7 @@ def get_post_confirmation_keyboard(
     imgbb_url: str = "",
     imagekit_url: str = "",
     imgpile_url: str = "",
+    nostr_url: str = "",
 ) -> "InlineKeyboardMarkup | None":
 
     """Returns interactive direct link buttons for a posted pin across all active platforms."""
@@ -276,6 +277,9 @@ def get_post_confirmation_keyboard(
             if _is_valid_http_url(ip_link):
                 platform_btns.append(InlineKeyboardButton(btn_txt, url=ip_link))
 
+        if getattr(config, "NOSTR_ENABLED", False) and _is_valid_http_url(nostr_url):
+            platform_btns.append(InlineKeyboardButton("🟣 View on Nostr", url=nostr_url))
+
 
         # Append platforms in pairs of 2
         for i in range(0, len(platform_btns), 2):
@@ -314,6 +318,7 @@ def format_crosspost_status_block(results: dict) -> str:
         ("imgbb",      "IMGBB_ENABLED",      "🖼️ ImgBB"),
         ("imagekit",   "IMAGEKIT_ENABLED",   "🖼️ ImageKit"),
         ("imgpile",    "IMGPILE_ENABLED",    "🗄️ ImgPile"),
+        ("nostr",      "NOSTR_ENABLED",      "🟣 Nostr"),
     ]
 
 
@@ -2705,6 +2710,7 @@ async def cmd_postnow(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
                 imgbb_url=cp_res.get("imgbb_url", ""),
                 imagekit_url=cp_res.get("imagekit_url", ""),
                 imgpile_url=cp_res.get("imgpile_url", ""),
+                nostr_url=cp_res.get("nostr_url", ""),
             )
 
             sent_photo = False
@@ -3717,6 +3723,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
                              imgbb_ok=None, imgbb_url: str = "",
                              imagekit_ok=None, imagekit_url: str = "",
                              imgpile_ok=None, imgpile_url: str = "",
+                             nostr_ok=None, nostr_url: str = "",
                              pin_live: bool = True,
 
                              image_url: str = ""):
@@ -3763,6 +3770,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         "imgbb_ok": imgbb_ok,
         "imagekit_ok": imagekit_ok,
         "imgpile_ok": imgpile_ok,
+        "nostr_ok": nostr_ok,
     }
 
     cross_lines = format_crosspost_status_block(results_map)
@@ -3809,6 +3817,7 @@ def notify_admin_pin_posted(title: str, anime_name: str, link: str,
         imgbb_url=imgbb_url,
         imagekit_url=imagekit_url,
         imgpile_url=imgpile_url,
+        nostr_url=nostr_url,
     )
 
 
@@ -4430,6 +4439,36 @@ async def cmd_deviantart(update: "Update", context: "ContextTypes.DEFAULT_TYPE")
     except Exception as e:
         logger.error(f"[TG BOT] cmd_deviantart error: {e}", exc_info=True)
         await update.message.reply_text(f"DeviantArt error: {e}")
+
+
+async def cmd_nostr(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+    """Show Nostr npub, relay configuration, and post stats."""
+    if not _is_admin(update): return
+    try:
+        from config import NOSTR_ENABLED, NOSTR_RELAYS
+        from nostr_uploader import verify_nostr_key
+        from database import get_nostr_stats
+
+        now_ist = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        enabled_str = "🟢 ENABLED" if NOSTR_ENABLED else "🔴 DISABLED"
+        ok, info = verify_nostr_key()
+        auth_str = f"🟢 Key Valid ({info[:18]}…)" if ok else f"🔴 {info}"
+        stats = get_nostr_stats(today_str)
+
+        msg = (
+            f"🟣 Nostr Status: {enabled_str}\n"
+            f"{'═' * 30}\n"
+            f"• Key Status  : {auth_str}\n"
+            f"• Today Posts : {stats.get('today', 0)}\n"
+            f"• Total Posts : {stats.get('total', 0)}\n"
+            f"• Relays      : {NOSTR_RELAYS}\n"
+        )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"[TG BOT] cmd_nostr error: {e}", exc_info=True)
+        await update.message.reply_text(f"Nostr error: {e}")
 
 
 
@@ -5453,6 +5492,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
             ("reviver",            cmd_revive),
             ("deviantart",         cmd_deviantart),
             ("da_auth",            cmd_da_auth),
+            ("nostr",              cmd_nostr),
             ("imgbb",              cmd_imgbb),
             ("imagekit",           cmd_imagekit),
             ("imgpile",            cmd_imgpile),
@@ -5538,6 +5578,7 @@ def start_bot(token: str, admin_chat_id: str = None, channels: list = None,
                 BotCommand("wallhaven_search", "Search 4K anime wallpapers on Wallhaven"),
                 BotCommand("deviantart",    "DeviantArt profile & stash status"),
                 BotCommand("da_auth",       "One-tap DeviantArt OAuth re-authorization"),
+                BotCommand("nostr",         "Nostr npub, relays & post stats"),
                 BotCommand("imgbb",         "ImgBB gallery & API status"),
                 BotCommand("imagekit",      "ImageKit CDN gallery & status"),
                 BotCommand("imgpile",       "ImgPile gallery & API status"),

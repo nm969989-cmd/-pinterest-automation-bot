@@ -336,6 +336,39 @@ def _post_deviantart(filename, title, description, link, public_img_url, image_p
         return False, ""
 
 
+def _post_nostr(filename, title, description, link, public_img_url, is_stealth, config, pin_url="", anime_name=""):
+    """Post to Nostr relays — returns (ok, url)."""
+    if not getattr(config, "NOSTR_ENABLED", False):
+        return None, ""
+    results = {}
+    if not _check_breaker("nostr", results):
+        return results.get("nostr_ok"), results.get("nostr_url", "")
+    try:
+        from nostr_uploader import post_to_nostr
+        from database import mark_nostr_posted, is_nostr_posted
+        if not is_nostr_posted(filename):
+            try:
+                from backlink_waterfall import format_waterfall_caption
+                nostr_desc = format_waterfall_caption("general", title, description, bridge_url=link, pin_url=pin_url, anime_name=anime_name, is_stealth=is_stealth)
+            except Exception:
+                nostr_desc = description or title
+            ok, note_url = post_to_nostr(
+                image_url=public_img_url,
+                title=title,
+                description=nostr_desc,
+                link=link,
+            )
+            if ok:
+                mark_nostr_posted(filename, post_url=note_url, title=title, image_url=public_img_url)
+                return True, note_url
+            return False, ""
+        return True, ""
+    except Exception as e:
+        logger.warning(f"[Crosspost] Nostr error: {e}")
+        _handle_platform_error("nostr", e)
+        return False, ""
+
+
 
 def _post_imgbb(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=""):
     """Post to ImgBB — returns (ok, url)."""
@@ -533,6 +566,7 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         "imgbb_ok": None,     "imgbb_url": "",
         "imagekit_ok": None,  "imagekit_url": "",
         "imgpile_ok": None,   "imgpile_url": "",
+        "nostr_ok": None,     "nostr_url": "",
     }
 
 
@@ -568,6 +602,8 @@ def dispatch_all_crossposts(pin: dict, image_path: str, pin_url: str = "") -> di
         platform_tasks["imagekit"] = lambda: _post_imagekit(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
     if getattr(config, "IMGPILE_ENABLED", False):
         platform_tasks["imgpile"] = lambda: _post_imgpile(filename, title, anime_name, link, public_img_url, original_image_url, image_path, config, pin_url=resolved_pin_url)
+    if getattr(config, "NOSTR_ENABLED", False):
+        platform_tasks["nostr"] = lambda: _post_nostr(filename, title, description, link, public_img_url, is_stealth, config, pin_url=resolved_pin_url, anime_name=anime_name)
 
 
     if platform_tasks:
