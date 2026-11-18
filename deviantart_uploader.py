@@ -16,8 +16,11 @@ Usage:
 """
 
 import os
+import sys
 import time
 import tempfile
+import threading
+import mimetypes
 from typing import Tuple, List, Optional
 import requests
 from logger import get_logger
@@ -28,6 +31,7 @@ _MAX_RETRIES  = 3
 _RETRY_DELAYS = [0, 5, 15]
 
 _cached_access_token = ""
+_token_lock = threading.Lock()
 
 
 def _get_access_token(force_refresh: bool = False) -> str:
@@ -67,78 +71,89 @@ def _get_access_token(force_refresh: bool = False) -> str:
     return token
 
 
-def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "") -> str:
+def _refresh_token(client_id: str, client_secret: str, refresh_token: str = "", stale_token: str = "") -> str:
     """
     Refreshes the OAuth2 token, saves rotated tokens to bot_metadata, and returns new access_token.
+    Thread-safe: serializes rotating refresh_token requests so concurrent threads don't invalidate
+    single-use DeviantArt refresh tokens.
     """
     global _cached_access_token
 
-    from config import DEVIANTART_REFRESH_TOKEN as ENV_REFRESH
+    with _token_lock:
+        if stale_token and _cached_access_token and _cached_access_token != stale_token:
+            return _cached_access_token
 
-    db_token = ""
-    try:
-        from database import get_metadata
-        db_token = get_metadata("deviantart_refresh_token", "").strip()
-    except Exception:
-        pass
-    env_token = (ENV_REFRESH or os.getenv("DEVIANTART_REFRESH_TOKEN", "")).strip()
+        from config import DEVIANTART_REFRESH_TOKEN as ENV_REFRESH
 
-    candidates = []
-    primary = (refresh_token or db_token or env_token).strip()
-    if primary:
-        candidates.append(primary)
-    for tok in (db_token, env_token):
-        if tok and tok not in candidates:
-            candidates.append(tok)
-
-    if not candidates:
-        logger.error("[DeviantArt] Cannot refresh token: No refresh_token found.")
-        return ""
-
-    url = "https://www.deviantart.com/oauth2/token"
-    for cand in candidates:
-        data = {
-            "grant_type": "refresh_token",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": cand,
-        }
+        db_token = ""
         try:
-            r = requests.post(url, data=data, timeout=20)
-            if r.status_code == 200:
-                resp = r.json()
-                new_acc = resp.get("access_token", "")
-                new_ref = resp.get("refresh_token", "")
-                if new_acc:
-                    _cached_access_token = new_acc
-                    try:
-                        from database import set_metadata
-                        set_metadata("deviantart_access_token", new_acc)
-                        if new_ref:
-                            set_metadata("deviantart_refresh_token", new_ref)
-                    except Exception as db_err:
-                        logger.warning(f"[DeviantArt] Failed to persist refreshed tokens in DB: {db_err}")
+            from database import get_metadata
+            db_token = get_metadata("deviantart_refresh_token", "").strip()
+        except Exception:
+            pass
+        env_token = (ENV_REFRESH or os.getenv("DEVIANTART_REFRESH_TOKEN", "")).strip()
 
-                    try:
-                        import jsonbin_sync
-                        jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
-                    except Exception as sync_err:
-                        logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
+        candidates = []
+        primary = (refresh_token or db_token or env_token).strip()
+        if primary:
+            candidates.append(primary)
+        for tok in (db_token, env_token):
+            if tok and tok not in candidates:
+                candidates.append(tok)
 
-                    try:
-                        from get_deviantart_token import update_env_file
-                        update_env_file(new_acc, new_ref)
-                    except Exception:
-                        pass
+        if not candidates:
+            logger.error("[DeviantArt] Cannot refresh token: No refresh_token found.")
+            return ""
 
-                    logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
-                    return new_acc
-            elif r.status_code == 400 or r.status_code == 401:
-                logger.warning(f"[DeviantArt] Refresh token rejected (HTTP {r.status_code}): {r.text[:120]}")
-        except Exception as e:
-            logger.warning(f"[DeviantArt] Token refresh request error: {e}")
+        url = "https://www.deviantart.com/oauth2/token"
+        for cand in candidates:
+            data = {
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": cand,
+            }
+            try:
+                r = requests.post(url, data=data, timeout=20)
+                if r.status_code == 200:
+                    resp = r.json()
+                    new_acc = resp.get("access_token", "")
+                    new_ref = resp.get("refresh_token", "")
+                    if new_acc:
+                        _cached_access_token = new_acc
+                        try:
+                            from database import set_metadata
+                            set_metadata("deviantart_access_token", new_acc)
+                            if new_ref:
+                                set_metadata("deviantart_refresh_token", new_ref)
+                        except Exception as db_err:
+                            logger.warning(f"[DeviantArt] Failed to persist refreshed tokens in DB: {db_err}")
 
-    return ""
+                        try:
+                            import jsonbin_sync
+                            jsonbin_sync.trigger_cloud_sync_now(min_interval_sec=0)
+                        except Exception as sync_err:
+                            logger.warning(f"[DeviantArt] Failed to trigger cloud sync: {sync_err}")
+
+                        if (
+                            not new_acc.startswith("mock_")
+                            and "unittest" not in sys.modules
+                            and "pytest" not in sys.modules
+                        ):
+                            try:
+                                from get_deviantart_token import update_env_file
+                                update_env_file(new_acc, new_ref)
+                            except Exception:
+                                pass
+
+                        logger.info("[DeviantArt] Successfully refreshed OAuth2 access token.")
+                        return new_acc
+                elif r.status_code == 400 or r.status_code == 401:
+                    logger.warning(f"[DeviantArt] Refresh token rejected (HTTP {r.status_code}): {r.text[:120]}")
+            except Exception as e:
+                logger.warning(f"[DeviantArt] Token refresh request error: {e}")
+
+        return ""
 
 
 def post_to_deviantart(
@@ -173,7 +188,12 @@ def post_to_deviantart(
 
     access_token = _get_access_token()
     if not access_token:
-        logger.error("[DeviantArt] No valid access token available.")
+        logger.error("[DeviantArt] No valid access token available — re-authorize via get_deviantart_token.py.")
+        try:
+            from circuit_breaker import trip_breaker
+            trip_breaker("deviantart", "HTTP 401 No valid OAuth token — re-run get_deviantart_token.py", cooldown_hours=24.0)
+        except Exception:
+            pass
         return False, ""
 
     # Prepare local image file
@@ -219,6 +239,8 @@ def post_to_deviantart(
     deviation_url = ""
     success = False
 
+    mime_type = mimetypes.guess_type(upload_file)[0] or "image/png"
+
     try:
         for attempt in range(1, _MAX_RETRIES + 1):
             delay = _RETRY_DELAYS[attempt - 1]
@@ -234,7 +256,7 @@ def post_to_deviantart(
 
             try:
                 with open(upload_file, "rb") as img_f:
-                    files = {"item": (os.path.basename(upload_file), img_f, "image/png")}
+                    files = {"item": (os.path.basename(upload_file), img_f, mime_type)}
                     r = requests.post(stash_url, headers=headers, data=stash_data, files=files, timeout=45)
             except Exception as e:
                 logger.warning(f"[DeviantArt] Sta.sh network error (attempt {attempt}): {e}")
@@ -242,12 +264,20 @@ def post_to_deviantart(
 
             if r.status_code == 401:
                 logger.info("[DeviantArt] Access token expired on Sta.sh upload. Refreshing token...")
-                access_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET)
-                if access_token:
-                    headers["Authorization"] = f"Bearer {access_token}"
-                    with open(upload_file, "rb") as img_f:
-                        files = {"item": (os.path.basename(upload_file), img_f, "image/png")}
-                        r = requests.post(stash_url, headers=headers, data=stash_data, files=files, timeout=45)
+                new_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, stale_token=access_token)
+                if not new_token:
+                    logger.error("[DeviantArt] OAuth refresh token expired/invalid — re-authorize via get_deviantart_token.py.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("deviantart", "HTTP 401 OAuth token expired — re-run get_deviantart_token.py", cooldown_hours=24.0)
+                    except Exception:
+                        pass
+                    break
+                access_token = new_token
+                headers["Authorization"] = f"Bearer {access_token}"
+                with open(upload_file, "rb") as img_f:
+                    files = {"item": (os.path.basename(upload_file), img_f, mime_type)}
+                    r = requests.post(stash_url, headers=headers, data=stash_data, files=files, timeout=45)
 
             if r.status_code != 200:
                 if r.status_code == 429:
@@ -275,10 +305,18 @@ def post_to_deviantart(
             pr = requests.post(publish_url, headers=headers, data=publish_data, timeout=30)
             if pr.status_code == 401:
                 logger.info("[DeviantArt] 401 Unauthorized on publish. Refreshing token...")
-                access_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET)
-                if access_token:
-                    headers["Authorization"] = f"Bearer {access_token}"
-                    pr = requests.post(publish_url, headers=headers, data=publish_data, timeout=30)
+                new_token = _refresh_token(DEVIANTART_CLIENT_ID, DEVIANTART_CLIENT_SECRET, stale_token=access_token)
+                if not new_token:
+                    logger.error("[DeviantArt] OAuth refresh token expired/invalid on publish — re-authorize via get_deviantart_token.py.")
+                    try:
+                        from circuit_breaker import trip_breaker
+                        trip_breaker("deviantart", "HTTP 401 OAuth token expired — re-run get_deviantart_token.py", cooldown_hours=24.0)
+                    except Exception:
+                        pass
+                    break
+                access_token = new_token
+                headers["Authorization"] = f"Bearer {access_token}"
+                pr = requests.post(publish_url, headers=headers, data=publish_data, timeout=30)
 
             if pr.status_code == 200:
                 p_json = pr.json()
